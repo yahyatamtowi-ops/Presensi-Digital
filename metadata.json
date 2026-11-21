@@ -1,0 +1,10 @@
+{
+  "name": "PresensiQR — Sistem Presensi Siswa",
+  "description": "Aplikasi presensi siswa berbasis scan QR Code Kartu Tanda Siswa dengan sinkronisasi Google Sheets via Google Apps Script.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
