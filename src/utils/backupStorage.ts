@@ -402,7 +402,7 @@ export function exportFullExcelArchive(payload: AppBackupPayload): {
   const wb = XLSX.utils.book_new();
 
   const studentRows = payload.data.students.map((s) => ({
-    NIS: s.nis,
+    NISN: s.nis,
     'Nama Siswa': s.nama,
     Kelas: s.kelas,
     Gender: s.gender,
@@ -412,14 +412,14 @@ export function exportFullExcelArchive(payload: AppBackupPayload): {
   const wsSiswa = XLSX.utils.json_to_sheet(
     studentRows.length > 0
       ? studentRows
-      : [{ NIS: '', 'Nama Siswa': '', Kelas: '', Gender: '', 'No WA Ortu': '', 'Tahun Ajaran': '' }]
+      : [{ NISN: '', 'Nama Siswa': '', Kelas: '', Gender: '', 'No WA Ortu': '', 'Tahun Ajaran': '' }]
   );
   XLSX.utils.book_append_sheet(wb, wsSiswa, 'Siswa');
 
   const recordRows = payload.data.records.map((r) => ({
     ID: r.id,
     Tanggal: r.tanggal,
-    NIS: r.nis,
+    NISN: r.nis,
     'Nama Siswa': r.nama,
     Kelas: r.kelas,
     'Jam Masuk': r.jam_masuk,
@@ -435,7 +435,7 @@ export function exportFullExcelArchive(payload: AppBackupPayload): {
           {
             ID: '',
             Tanggal: '',
-            NIS: '',
+            NISN: '',
             'Nama Siswa': '',
             Kelas: '',
             'Jam Masuk': '',
@@ -488,7 +488,7 @@ export function exportFullExcelArchive(payload: AppBackupPayload): {
     Kelas: r.kelas,
     'Mata Pelajaran': r.mata_pelajaran,
     Guru: r.teacher_name,
-    NIS: r.nis,
+    NISN: r.nis,
     'Nama Siswa': r.nama,
     'Jam Masuk': r.jam_masuk,
     Status: r.status,

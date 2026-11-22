@@ -19,6 +19,7 @@ import {
   BarChart3,
   ArrowUp,
   BookOpen,
+  BookOpenCheck,
   CalendarDays,
   CalendarRange,
   Volume2,
@@ -67,11 +68,19 @@ const NAV_ITEMS: Array<{
   shortLabel: string;
   Icon: typeof LayoutDashboard;
   masterOnly?: boolean;
+  teacherOnly?: boolean;
 }> = [
   { id: 'scan', label: 'Scan QR', shortLabel: 'Scan', Icon: QrCode },
   { id: 'dashboard', label: 'Dashboard', shortLabel: 'Beranda', Icon: LayoutDashboard },
   { id: 'siswa', label: 'Data Siswa', shortLabel: 'Siswa', Icon: Users },
   { id: 'rekap', label: 'Rekap & Export', shortLabel: 'Rekap', Icon: ClipboardList },
+  {
+    id: 'daftar_pelajaran',
+    label: 'Daftar Pelajaran',
+    shortLabel: 'Pelajaran',
+    Icon: BookOpenCheck,
+    teacherOnly: true,
+  },
   { id: 'mapel', label: 'Presensi Mapel', shortLabel: 'Mapel', Icon: BookOpen },
   {
     id: 'jadwal',
@@ -98,7 +107,7 @@ const TAB_TITLES: Record<TabId, { title: string; subtitle: string }> = {
   },
   scan: {
     title: 'Pemindai Kartu Siswa',
-    subtitle: 'Scan QR Code kamera atau masukkan NIS siswa secara manual',
+    subtitle: 'Scan QR Code kamera, input NISN manual, atau cari nama siswa per kelas',
   },
   siswa: {
     title: 'Data Siswa & E-Card',
@@ -107,6 +116,10 @@ const TAB_TITLES: Record<TabId, { title: string; subtitle: string }> = {
   rekap: {
     title: 'Rekap, Export & Notifikasi Ortu',
     subtitle: 'Filter kehadiran harian, cek siswa tidak hadir, export Excel, dan kirim ke orang tua',
+  },
+  daftar_pelajaran: {
+    title: 'Daftar Pelajaran',
+    subtitle: 'Jadwal mengajar mata pelajaran Anda sesuai hari/tanggal atau filter hari',
   },
   mapel: {
     title: 'Presensi Kehadiran Mata Pelajaran',
@@ -268,11 +281,14 @@ export function LayoutShell({
 
   useEffect(() => {
     function handleFullscreenChange() {
-      setIsFullscreen(Boolean(document.fullscreenElement));
+      const doc = document as Document & { webkitFullscreenElement?: Element | null };
+      setIsFullscreen(Boolean(document.fullscreenElement || doc.webkitFullscreenElement));
     }
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
     };
   }, []);
 
@@ -293,12 +309,24 @@ export function LayoutShell({
 
   async function handleToggleFullscreen() {
     try {
-      if (!document.fullscreenElement) {
-        if (document.documentElement.requestFullscreen) {
-          await document.documentElement.requestFullscreen();
+      const doc = document as Document & {
+        webkitFullscreenElement?: Element | null;
+        webkitExitFullscreen?: () => Promise<void> | void;
+      };
+      const el = document.documentElement as HTMLElement & {
+        webkitRequestFullscreen?: () => Promise<void> | void;
+      };
+      const activeFs = document.fullscreenElement || doc.webkitFullscreenElement;
+      if (!activeFs) {
+        if (el.requestFullscreen) {
+          await el.requestFullscreen();
+        } else if (el.webkitRequestFullscreen) {
+          await el.webkitRequestFullscreen();
         }
       } else if (document.exitFullscreen) {
         await document.exitFullscreen();
+      } else if (doc.webkitExitFullscreen) {
+        await doc.webkitExitFullscreen();
       }
     } catch {
       // Ignore fullscreen browser policy restrictions
@@ -306,6 +334,7 @@ export function LayoutShell({
   }
 
   const currentRole = session?.role ?? null;
+  const showMenuBar = Boolean(session);
   const isKepalaSekolah = currentRole === 'kepala_sekolah';
   const baseHeaderInfo = TAB_TITLES[activeTab];
   const headerInfo =
@@ -321,6 +350,9 @@ export function LayoutShell({
           }
         : baseHeaderInfo;
   const visibleNavItems = NAV_ITEMS.filter((item) => {
+    if (item.teacherOnly) {
+      return currentRole === 'guru' || currentRole === 'wali_kelas';
+    }
     if (isKepalaSekolah) {
       return canAccessTab('kepala_sekolah', item.id);
     }
@@ -333,11 +365,12 @@ export function LayoutShell({
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex">
-      {/* Desktop Sidebar */}
-      <aside
-        aria-label="Navigasi utama"
-        className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-white border-r border-slate-200/90 z-30"
-      >
+      {/* Desktop Sidebar (hidden on initial unauthenticated Scan QR view for wider canvas) */}
+      {showMenuBar && (
+        <aside
+          aria-label="Navigasi utama"
+          className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-white border-r border-slate-200/90 z-30"
+        >
         <div className="h-16 px-5 flex items-center gap-3 border-b border-slate-200/80">
           <div className="h-9 w-9 rounded-xl bg-white border border-slate-200 flex items-center justify-center shrink-0 overflow-hidden p-0.5">
             <img
@@ -446,14 +479,19 @@ export function LayoutShell({
           </div>
         </div>
       </aside>
+      )}
 
       {/* Main Content Area */}
-      <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
+      <div className={`flex-1 flex flex-col min-w-0 ${showMenuBar ? 'lg:pl-64' : ''}`}>
         {/* Sticky Top Bar + Mobile/Tablet Top Navigation */}
         <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-200/80">
           <header className="h-12 sm:h-14 lg:h-16 px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2 sm:gap-3">
             <div className="min-w-0 flex items-center gap-2.5 sm:gap-3">
-              <div className="lg:hidden h-7 w-7 sm:h-8 sm:w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center shrink-0 overflow-hidden p-0.5">
+              <div
+                className={`${
+                  showMenuBar ? 'lg:hidden' : ''
+                } h-7 w-7 sm:h-8 sm:w-8 lg:h-9 lg:w-9 rounded-lg sm:rounded-xl bg-white border border-slate-200 flex items-center justify-center shrink-0 overflow-hidden p-0.5`}
+              >
                 <img
                   src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
                   alt={`Logo ${settings.nama_sekolah}`}
@@ -462,10 +500,12 @@ export function LayoutShell({
               </div>
               <div className="min-w-0">
                 <h1 className="text-sm sm:text-lg font-semibold text-slate-900 truncate">
-                  {headerInfo.title}
+                  {showMenuBar ? headerInfo.title : DEFAULT_APP_NAME}
                 </h1>
                 <p className="hidden md:block text-xs text-slate-500 truncate">
-                  {headerInfo.subtitle}
+                  {showMenuBar
+                    ? headerInfo.subtitle
+                    : `${settings.nama_sekolah} · TA ${settings.tahun_ajaran} · Semester ${formatSemesterLabel(settings.semester)}`}
                 </p>
               </div>
             </div>
@@ -521,13 +561,14 @@ export function LayoutShell({
                 </button>
               )}
 
-              {/* Top-right Fullscreen Button */}
+              {/* Top-right Fullscreen Button (always visible on HP, Tablet, and Desktop) */}
               <button
                 type="button"
+                data-testid="btn-fullscreen"
                 onClick={handleToggleFullscreen}
                 aria-label={isFullscreen ? 'Keluar dari layar penuh' : 'Aktifkan layar penuh'}
                 title={isFullscreen ? 'Keluar Layar Penuh' : 'Layar Penuh'}
-                className="hidden sm:inline-flex items-center justify-center p-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                className="inline-flex items-center justify-center p-1.5 sm:p-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
               >
                 {isFullscreen ? (
                   <Minimize2 className="h-4 w-4" aria-hidden="true" />
@@ -536,8 +577,8 @@ export function LayoutShell({
                 )}
               </button>
 
-              {/* Mobile / Tablet Login & Logout Action (integrated cleanly into top bar) */}
-              <div className="lg:hidden shrink-0">
+              {/* Header Login / Logout Action (Login shown on all viewports when sidebar is hidden; Logout shown on Mobile/Tablet) */}
+              <div className={`${showMenuBar ? 'lg:hidden' : ''} shrink-0`}>
                 {session ? (
                   <button
                     type="button"
@@ -552,9 +593,10 @@ export function LayoutShell({
                 ) : (
                   <button
                     type="button"
+                    data-testid="header-login-btn"
                     onClick={onOpenLogin}
                     aria-label="Login ke aplikasi"
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap"
+                    className="inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap"
                   >
                     <LogIn className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                     <span>Login</span>
@@ -564,39 +606,41 @@ export function LayoutShell({
             </div>
           </header>
 
-          {/* Mobile & Tablet Top Navigation Bar (positioned at top for effortless bottom-to-top scrolling) */}
-          <nav
-            aria-label="Navigasi seluler"
-            data-testid="mobile-top-nav"
-            className="lg:hidden border-t border-slate-100 bg-white/95 px-2.5 sm:px-5 py-1.5 flex items-center gap-1 overflow-x-auto"
-          >
-            {visibleNavItems.map(({ id, label, shortLabel, Icon }) => {
-              const isActive = activeTab === id;
-              const allowed = canAccessTab(currentRole, id);
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => onSelectTab(id)}
-                  aria-current={isActive ? 'page' : undefined}
-                  className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 min-h-[34px] rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
-                    isActive
-                      ? 'text-indigo-700 bg-indigo-50 border border-indigo-200/80'
-                      : allowed
-                        ? 'text-slate-600 border border-transparent hover:bg-slate-50 hover:text-slate-900'
-                        : 'text-slate-400 border border-transparent hover:bg-slate-50'
-                  }`}
-                >
-                  <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span className="sm:hidden">{shortLabel}</span>
-                  <span className="hidden sm:inline">{label}</span>
-                  {!allowed && (
-                    <Lock className="h-3 w-3 text-slate-400 shrink-0" aria-hidden="true" />
-                  )}
-                </button>
-              );
-            })}
-          </nav>
+          {/* Mobile & Tablet Top Navigation Bar (shown only after login; hidden on initial Scan QR view) */}
+          {showMenuBar && (
+            <nav
+              aria-label="Navigasi seluler"
+              data-testid="mobile-top-nav"
+              className="lg:hidden border-t border-slate-100 bg-white/95 px-2.5 sm:px-5 py-1.5 flex items-center gap-1 overflow-x-auto"
+            >
+              {visibleNavItems.map(({ id, label, shortLabel, Icon }) => {
+                const isActive = activeTab === id;
+                const allowed = canAccessTab(currentRole, id);
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => onSelectTab(id)}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 min-h-[34px] rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                      isActive
+                        ? 'text-indigo-700 bg-indigo-50 border border-indigo-200/80'
+                        : allowed
+                          ? 'text-slate-600 border border-transparent hover:bg-slate-50 hover:text-slate-900'
+                          : 'text-slate-400 border border-transparent hover:bg-slate-50'
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span className="sm:hidden">{shortLabel}</span>
+                    <span className="hidden sm:inline">{label}</span>
+                    {!allowed && (
+                      <Lock className="h-3 w-3 text-slate-400 shrink-0" aria-hidden="true" />
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
+          )}
         </div>
 
         {/* Page Viewport */}

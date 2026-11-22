@@ -27,7 +27,7 @@ export function getRecapPdfColumns(
       // Total = 10 + 25 + 62 + 26 + 21 + 21 + 22 = 187mm
       return [
         { header: 'No', width: 10, align: 'center' },
-        { header: 'NIS', width: 25 },
+        { header: 'NISN', width: 25 },
         { header: 'Nama Siswa', width: 62 },
         { header: 'Kelas', width: 26 },
         { header: 'Masuk', width: 21, align: 'center' },
@@ -38,7 +38,7 @@ export function getRecapPdfColumns(
     // Total = 11 + 28 + 72 + 28 + 24 + 24 = 187mm
     return [
       { header: 'No', width: 11, align: 'center' },
-      { header: 'NIS', width: 28 },
+      { header: 'NISN', width: 28 },
       { header: 'Nama Siswa', width: 72 },
       { header: 'Kelas', width: 28 },
       { header: 'Jam Masuk', width: 24, align: 'center' },
@@ -50,7 +50,7 @@ export function getRecapPdfColumns(
   // Total = 9 + 22 + 52 + 21 + 12 + 12 + 11 + 11 + 11 + 12 + 14 = 187mm
   return [
     { header: 'No', width: 9, align: 'center' },
-    { header: 'NIS', width: 22 },
+    { header: 'NISN', width: 22 },
     { header: 'Nama Siswa', width: 52 },
     { header: 'Kelas', width: 21 },
     { header: 'Hadir', width: 12, align: 'center' },

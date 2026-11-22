@@ -33,7 +33,7 @@ export function buildParentAttendanceMessage(params: {
     '',
     'Yth. Bapak/Ibu Orang Tua/Wali dari:',
     `• Nama: *${params.namaSiswa}*`,
-    `• NIS: ${params.nis}`,
+    `• NISN: ${params.nis}`,
     `• Kelas: ${params.kelas}`,
     `• Tanggal: ${formattedDate}`,
     `• Status: *${params.status}*`,

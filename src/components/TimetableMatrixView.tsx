@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
   AlertTriangle,
+  CalendarDays,
   CalendarRange,
   Clock,
   Coffee,
@@ -47,8 +48,10 @@ interface TimetableMatrixViewProps {
   onSaveTimetable: (
     config: TimetableConfig,
     syncedSchedules: TeacherSchedule[],
-    activeClasses: string[]
+    activeClasses: string[],
+    options?: { silent?: boolean }
   ) => void;
+  onNavigateToScheduleManagement?: () => void;
 }
 
 const ACADEMIC_YEAR_PRESETS = [
@@ -68,6 +71,7 @@ export function TimetableMatrixView({
   schedules,
   timetableConfigs,
   onSaveTimetable,
+  onNavigateToScheduleManagement,
 }: TimetableMatrixViewProps) {
   const [selectedYear, setSelectedYear] = useState<string>(settings.tahun_ajaran);
   const [selectedSemester, setSelectedSemester] = useState<SemesterKind>(() =>
@@ -76,6 +80,7 @@ export function TimetableMatrixView({
   const [filterDay, setFilterDay] = useState<DayOfWeek | 'ALL'>('ALL');
   const [newClassName, setNewClassName] = useState('');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const lastSelfSyncedStampRef = useRef<string | null>(null);
 
   const configKey = useMemo(
     () => getTimetableConfigKey(selectedYear, selectedSemester),
@@ -111,14 +116,23 @@ export function TimetableMatrixView({
     buildDraftForKey(selectedYear, selectedSemester, timetableConfigs, schedules)
   );
 
-  // Reload draft whenever Tahun Ajaran or Semester changes (or stored config updates when clean)
+  const storedConfigStamp = timetableConfigs[configKey]?.updated_at ?? '';
+
+  // Reload draft whenever Tahun Ajaran / Semester changes OR when Mapel & Jadwal / Guru / Cloud updates schedules externally
   useEffect(() => {
+    if (
+      storedConfigStamp &&
+      lastSelfSyncedStampRef.current &&
+      storedConfigStamp === lastSelfSyncedStampRef.current
+    ) {
+      return;
+    }
     setDraft(
       buildDraftForKey(selectedYear, selectedSemester, timetableConfigs, schedules)
     );
     setHasUnsavedChanges(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configKey]);
+  }, [configKey, storedConfigStamp]);
 
   // All academic year choices
   const yearOptions = useMemo(() => {
@@ -229,61 +243,88 @@ export function TimetableMatrixView({
     return count;
   }, [draft.cells, draft.jumlah_jp, schoolDays, activeClasses]);
 
-  // === Draft Updaters ===
+  // === Draft Updaters (with instant automatic sync to Mapel & Jadwal + Menu Mapel Guru) ===
+  function persistAndSyncDraft(
+    nextDraft: TimetableConfig,
+    classesOverride?: string[],
+    silent = true
+  ) {
+    const targetClasses = Array.from(
+      new Set([...(classesOverride ?? activeClasses), ...(nextDraft.custom_classes || [])])
+    ).sort((a, b) => a.localeCompare(b));
+    const stamp = new Date().toISOString();
+    const normalizedConfig: TimetableConfig = {
+      ...nextDraft,
+      tahun_ajaran: selectedYear,
+      semester: selectedSemester,
+      custom_classes: targetClasses,
+      updated_at: stamp,
+    };
+    lastSelfSyncedStampRef.current = stamp;
+    const syncedSchedules = buildTeacherSchedulesFromTimetable(
+      normalizedConfig,
+      targetClasses
+    );
+    onSaveTimetable(normalizedConfig, syncedSchedules, targetClasses, { silent });
+    setHasUnsavedChanges(false);
+  }
+
   function updateDraft(patch: Partial<TimetableConfig>) {
-    setDraft((prev) => ({ ...prev, ...patch }));
-    setHasUnsavedChanges(true);
+    const nextDraft: TimetableConfig = { ...draft, ...patch };
+    setDraft(nextDraft);
+    persistAndSyncDraft(nextDraft, undefined, true);
   }
 
   function handleBreakChange(
     breakId: string,
     patch: Partial<TimetableBreak>
   ) {
-    setDraft((prev) => ({
-      ...prev,
-      istirahat: prev.istirahat.map((b) =>
+    const nextDraft: TimetableConfig = {
+      ...draft,
+      istirahat: draft.istirahat.map((b) =>
         b.id === breakId ? { ...b, ...patch } : b
       ),
-    }));
-    setHasUnsavedChanges(true);
+    };
+    setDraft(nextDraft);
+    persistAndSyncDraft(nextDraft, undefined, true);
   }
 
   function handleAddBreak() {
-    setDraft((prev) => {
-      const nextNum = prev.istirahat.length + 1;
-      const last = prev.istirahat[prev.istirahat.length - 1];
-      const defaultStart = last?.jam_selesai === '09:45'
-        ? '12:00'
-        : last?.jam_selesai === '12:30'
-          ? '14:00'
-          : '10:00';
-      const defaultEnd = defaultStart === '12:00'
-        ? '12:30'
-        : defaultStart === '14:00'
-          ? '14:15'
-          : '10:15';
-      return {
-        ...prev,
-        istirahat: [
-          ...prev.istirahat,
-          {
-            id: `brk_${Date.now()}_${nextNum}`,
-            label: `Istirahat ${nextNum}`,
-            jam_mulai: defaultStart,
-            jam_selesai: defaultEnd,
-          },
-        ],
-      };
-    });
-    setHasUnsavedChanges(true);
+    const nextNum = draft.istirahat.length + 1;
+    const last = draft.istirahat[draft.istirahat.length - 1];
+    const defaultStart = last?.jam_selesai === '09:45'
+      ? '12:00'
+      : last?.jam_selesai === '12:30'
+        ? '14:00'
+        : '10:00';
+    const defaultEnd = defaultStart === '12:00'
+      ? '12:30'
+      : defaultStart === '14:00'
+        ? '14:15'
+        : '10:15';
+    const nextDraft: TimetableConfig = {
+      ...draft,
+      istirahat: [
+        ...draft.istirahat,
+        {
+          id: `brk_${Date.now()}_${nextNum}`,
+          label: `Istirahat ${nextNum}`,
+          jam_mulai: defaultStart,
+          jam_selesai: defaultEnd,
+        },
+      ],
+    };
+    setDraft(nextDraft);
+    persistAndSyncDraft(nextDraft, undefined, true);
   }
 
   function handleRemoveBreak(breakId: string) {
-    setDraft((prev) => ({
-      ...prev,
-      istirahat: prev.istirahat.filter((b) => b.id !== breakId),
-    }));
-    setHasUnsavedChanges(true);
+    const nextDraft: TimetableConfig = {
+      ...draft,
+      istirahat: draft.istirahat.filter((b) => b.id !== breakId),
+    };
+    setDraft(nextDraft);
+    persistAndSyncDraft(nextDraft, undefined, true);
   }
 
   function handleAddCustomClass(e: React.FormEvent) {
@@ -294,12 +335,14 @@ export function TimetableMatrixView({
       setNewClassName('');
       return;
     }
-    setDraft((prev) => ({
-      ...prev,
-      custom_classes: [...(prev.custom_classes || []), cleaned],
-    }));
+    const nextClasses = [...activeClasses, cleaned];
+    const nextDraft: TimetableConfig = {
+      ...draft,
+      custom_classes: [...(draft.custom_classes || []), cleaned],
+    };
+    setDraft(nextDraft);
     setNewClassName('');
-    setHasUnsavedChanges(true);
+    persistAndSyncDraft(nextDraft, nextClasses, true);
   }
 
   function handleCellSubjectChange(
@@ -309,21 +352,20 @@ export function TimetableMatrixView({
     mataPelajaran: string
   ) {
     const key = makeTimetableCellKey(hari, jamKe, kelas);
-    setDraft((prev) => {
-      const nextCells = { ...prev.cells };
-      if (!mataPelajaran.trim()) {
-        delete nextCells[key];
-      } else {
-        const existing = prev.cells[key];
-        nextCells[key] = {
-          mata_pelajaran: mataPelajaran.trim(),
-          teacher_user_id: existing?.teacher_user_id || teachingAccounts[0]?.id,
-          teacher_name: existing?.teacher_name || teachingAccounts[0]?.nama,
-        };
-      }
-      return { ...prev, cells: nextCells };
-    });
-    setHasUnsavedChanges(true);
+    const nextCells = { ...draft.cells };
+    if (!mataPelajaran.trim()) {
+      delete nextCells[key];
+    } else {
+      const existing = draft.cells[key];
+      nextCells[key] = {
+        mata_pelajaran: mataPelajaran.trim(),
+        teacher_user_id: existing?.teacher_user_id || teachingAccounts[0]?.id,
+        teacher_name: existing?.teacher_name || teachingAccounts[0]?.nama,
+      };
+    }
+    const nextDraft: TimetableConfig = { ...draft, cells: nextCells };
+    setDraft(nextDraft);
+    persistAndSyncDraft(nextDraft, undefined, true);
   }
 
   function handleCellTeacherChange(
@@ -333,57 +375,42 @@ export function TimetableMatrixView({
     teacherId: string
   ) {
     const key = makeTimetableCellKey(hari, jamKe, kelas);
+    const existing = draft.cells[key];
+    if (!existing) return;
     const teacher = teachingAccounts.find((t) => t.id === teacherId);
-    setDraft((prev) => {
-      const existing = prev.cells[key];
-      if (!existing) return prev;
-      return {
-        ...prev,
-        cells: {
-          ...prev.cells,
-          [key]: {
-            ...existing,
-            teacher_user_id: teacher?.id || undefined,
-            teacher_name: teacher?.nama || undefined,
-          },
+    const nextDraft: TimetableConfig = {
+      ...draft,
+      cells: {
+        ...draft.cells,
+        [key]: {
+          ...existing,
+          teacher_user_id: teacher?.id || undefined,
+          teacher_name: teacher?.nama || undefined,
         },
-      };
-    });
-    setHasUnsavedChanges(true);
+      },
+    };
+    setDraft(nextDraft);
+    persistAndSyncDraft(nextDraft, undefined, true);
   }
 
   function handleClearCell(hari: DayOfWeek, jamKe: number, kelas: string) {
     const key = makeTimetableCellKey(hari, jamKe, kelas);
-    setDraft((prev) => {
-      if (!prev.cells[key]) return prev;
-      const nextCells = { ...prev.cells };
-      delete nextCells[key];
-      return { ...prev, cells: nextCells };
-    });
-    setHasUnsavedChanges(true);
+    if (!draft.cells[key]) return;
+    const nextCells = { ...draft.cells };
+    delete nextCells[key];
+    const nextDraft: TimetableConfig = { ...draft, cells: nextCells };
+    setDraft(nextDraft);
+    persistAndSyncDraft(nextDraft, undefined, true);
   }
 
   function handleLoadFromTeacherSchedules() {
-    setDraft((prev) => hydrateTimetableCellsFromSchedules(prev, schedules, false));
-    setHasUnsavedChanges(true);
+    const nextDraft = hydrateTimetableCellsFromSchedules(draft, schedules, true);
+    setDraft(nextDraft);
+    persistAndSyncDraft(nextDraft, undefined, false);
   }
 
   function handleSaveAndSync() {
-    const normalizedConfig: TimetableConfig = {
-      ...draft,
-      tahun_ajaran: selectedYear,
-      semester: selectedSemester,
-      custom_classes: Array.from(
-        new Set([...(draft.custom_classes || []), ...activeClasses])
-      ),
-      updated_at: new Date().toISOString(),
-    };
-    const syncedSchedules = buildTeacherSchedulesFromTimetable(
-      normalizedConfig,
-      activeClasses
-    );
-    onSaveTimetable(normalizedConfig, syncedSchedules, activeClasses);
-    setHasUnsavedChanges(false);
+    persistAndSyncDraft(draft, undefined, false);
   }
 
   function handleExportExcel() {
@@ -453,10 +480,22 @@ export function TimetableMatrixView({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {onNavigateToScheduleManagement && (
+              <button
+                type="button"
+                data-testid="btn-open-mapel-jadwal"
+                onClick={onNavigateToScheduleManagement}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors whitespace-nowrap"
+              >
+                <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Lihat di Mapel &amp; Jadwal</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleLoadFromTeacherSchedules}
-              title="Isi sel kosong dari daftar Jadwal Pelajaran Guru yang sudah ada"
+              title="Sinkron ulang tabel dari daftar Jadwal Pelajaran Guru di menu Mapel & Jadwal"
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap"
             >
               <RefreshCw className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
@@ -482,7 +521,7 @@ export function TimetableMatrixView({
               <span>
                 {hasUnsavedChanges
                   ? 'Simpan & Sinkronkan Jadwal'
-                  : 'Sinkronkan ke Jadwal Guru'}
+                  : 'Simpan & Sinkronkan'}
               </span>
             </button>
           </div>

@@ -17,6 +17,8 @@ import type {
   SchoolSettings,
   SemesterKind,
   TeacherSchedule,
+  TimetableConfig,
+  TimetableTimeSlot,
   UserAccount,
 } from '../types';
 import {
@@ -24,6 +26,12 @@ import {
   normalizeSemester,
   SCHOOL_DAYS,
 } from '../utils/subjectAttendance';
+import {
+  createDefaultTimetableConfig,
+  findSlotRangeLabelForSchedule,
+  generateDailyTimeSlots,
+  getSchoolDaysForCount,
+} from '../utils/timetableLogic';
 
 interface ScheduleManagementViewProps {
   settings: SchoolSettings;
@@ -65,6 +73,7 @@ interface ScheduleManagementViewProps {
     }
   ) => { ok: boolean; error?: string };
   onDeleteSchedule: (id: string) => void;
+  activeTimetableConfig?: TimetableConfig;
   onNavigateToTimetable?: () => void;
 }
 
@@ -112,6 +121,7 @@ export function ScheduleManagementView({
   onAddSchedule,
   onUpdateSchedule,
   onDeleteSchedule,
+  activeTimetableConfig,
   onNavigateToTimetable,
 }: ScheduleManagementViewProps) {
   const [activeSubMenu, setActiveSubMenu] = useState<ScheduleSubMenuId>('mapel');
@@ -136,12 +146,39 @@ export function ScheduleManagementView({
   const [schTeacherId, setSchTeacherId] = useState('');
   const [schKelas, setSchKelas] = useState('');
   const [schMapel, setSchMapel] = useState('');
-  const [schJamMulai, setSchJamMulai] = useState('07:30');
-  const [schJamSelesai, setSchJamSelesai] = useState('09:00');
+  const [schJamMulai, setSchJamMulai] = useState('07:15');
+  const [schJamSelesai, setSchJamSelesai] = useState('08:45');
+  const [schStartJp, setSchStartJp] = useState<string>('');
+  const [schEndJp, setSchEndJp] = useState<string>('');
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [confirmDeleteScheduleId, setConfirmDeleteScheduleId] = useState<string | null>(null);
 
   const activeSemester = normalizeSemester(settings.semester, 'ganjil');
+
+  // Synchronized bell schedule from Pengaturan Jadwal Mata Pelajaran
+  const effectiveTimetable = useMemo<TimetableConfig>(
+    () =>
+      activeTimetableConfig ??
+      createDefaultTimetableConfig(
+        settings.tahun_ajaran,
+        activeSemester,
+        settings.batas_jam_masuk || '07:15'
+      ),
+    [activeTimetableConfig, settings.tahun_ajaran, activeSemester, settings.batas_jam_masuk]
+  );
+
+  const lessonSlots = useMemo(
+    () =>
+      generateDailyTimeSlots(effectiveTimetable).filter(
+        (s): s is Extract<TimetableTimeSlot, { kind: 'lesson' }> => s.kind === 'lesson'
+      ),
+    [effectiveTimetable]
+  );
+
+  const configuredSchoolDays = useMemo(
+    () => getSchoolDaysForCount(effectiveTimetable.jumlah_hari),
+    [effectiveTimetable.jumlah_hari]
+  );
 
   // Eligible teachers (Guru Mata Pelajaran & Wali Kelas)
   const teachingAccounts = useMemo(
@@ -254,9 +291,22 @@ export function ScheduleManagementView({
   }
 
   // === Handlers: Teacher Schedule ===
+  function applySlotRange(startVal: string, endVal: string) {
+    setSchStartJp(startVal);
+    setSchEndJp(endVal);
+    const sNum = Number(startVal);
+    const eNum = Number(endVal || startVal);
+    const startSlot = lessonSlots.find((s) => s.jamKe === sNum);
+    const endSlot = lessonSlots.find((s) => s.jamKe === Math.max(sNum, eNum));
+    if (startSlot) {
+      setSchJamMulai(startSlot.jam_mulai);
+      setSchJamSelesai((endSlot ?? startSlot).jam_selesai);
+    }
+  }
+
   function openAddScheduleModal() {
     setEditingSchedule(null);
-    setSchHari(filterHari !== 'ALL' ? filterHari : 'Senin');
+    setSchHari(filterHari !== 'ALL' ? filterHari : configuredSchoolDays[0] || 'Senin');
     setSchTeacherId(
       filterTeacherId !== 'ALL'
         ? filterTeacherId
@@ -264,8 +314,19 @@ export function ScheduleManagementView({
     );
     setSchKelas(filterKelas !== 'ALL' ? filterKelas : scheduleClasses[0] || '');
     setSchMapel(masterSubjects[0]?.nama || '');
-    setSchJamMulai('07:30');
-    setSchJamSelesai('09:00');
+    const firstSlot = lessonSlots[0];
+    const secondSlot = lessonSlots[1] ?? firstSlot;
+    if (firstSlot) {
+      setSchStartJp(String(firstSlot.jamKe));
+      setSchEndJp(String(secondSlot.jamKe));
+      setSchJamMulai(firstSlot.jam_mulai);
+      setSchJamSelesai(secondSlot.jam_selesai);
+    } else {
+      setSchStartJp('');
+      setSchEndJp('');
+      setSchJamMulai('07:15');
+      setSchJamSelesai('08:45');
+    }
     setScheduleError(null);
     setScheduleModalOpen(true);
   }
@@ -278,6 +339,13 @@ export function ScheduleManagementView({
     setSchMapel(sch.mata_pelajaran);
     setSchJamMulai(sch.jam_mulai);
     setSchJamSelesai(sch.jam_selesai);
+    const matched = findSlotRangeLabelForSchedule(
+      effectiveTimetable,
+      sch.jam_mulai,
+      sch.jam_selesai
+    );
+    setSchStartJp(matched ? String(matched.startJp) : '');
+    setSchEndJp(matched ? String(matched.endJp) : '');
     setScheduleError(null);
     setScheduleModalOpen(true);
   }
@@ -335,7 +403,11 @@ export function ScheduleManagementView({
             <p className="text-xs text-slate-500">
               TA <span className="font-mono font-semibold text-indigo-700">{settings.tahun_ajaran}</span>{' '}
               · Semester <strong className="text-slate-700">{formatSemesterLabel(activeSemester)}</strong>{' '}
-              · {masterSubjects.length} mapel · {activeYearSchedules.length} jadwal aktif
+              · {masterSubjects.length} mapel · {activeYearSchedules.length} jadwal aktif ·{' '}
+              <span data-testid="jadwal-timetable-sync-summary" className="text-indigo-700 font-medium">
+                {effectiveTimetable.jumlah_hari === 6 ? 'Senin–Sabtu' : 'Senin–Jumat'} ·{' '}
+                {effectiveTimetable.durasi_jp_menit} mnt/JP · {effectiveTimetable.istirahat.length} istirahat
+              </span>
             </p>
           </div>
         </div>
@@ -523,7 +595,7 @@ export function ScheduleManagementView({
                       Jadwal Pelajaran Guru ({filteredSchedules.length})
                     </h3>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Tersinkron dua arah secara otomatis: jadwal yang diisi Master Admin tampil pada menu Presensi Mapel masing-masing guru, dan kelas &amp; mapel yang ditambahkan guru dari akunnya otomatis masuk ke tabel ini.
+                      Tersinkron otomatis 3 arah antara <strong>Pengaturan Jadwal</strong> (tabel matriks), <strong>Jadwal Pelajaran Guru</strong>, dan menu <strong>Presensi Mapel</strong> masing-masing guru.
                     </p>
                   </div>
 
@@ -605,7 +677,13 @@ export function ScheduleManagementView({
                         </td>
                       </tr>
                     ) : (
-                      filteredSchedules.map((sch) => (
+                      filteredSchedules.map((sch) => {
+                        const slotBadge = findSlotRangeLabelForSchedule(
+                          effectiveTimetable,
+                          sch.jam_mulai,
+                          sch.jam_selesai
+                        );
+                        return (
                         <tr key={sch.id} className="hover:bg-slate-50/70 transition-colors">
                           <td className="py-3 px-4 whitespace-nowrap">
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg bg-indigo-50 border border-indigo-200/80 text-xs font-semibold text-indigo-700">
@@ -613,10 +691,17 @@ export function ScheduleManagementView({
                             </span>
                           </td>
                           <td className="py-3 px-4 font-mono tabular-nums text-xs text-slate-700 whitespace-nowrap">
-                            <span className="inline-flex items-center gap-1.5">
-                              <Clock className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
-                              {sch.jam_mulai} – {sch.jam_selesai}
-                            </span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="inline-flex items-center gap-1.5">
+                                <Clock className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
+                                {sch.jam_mulai} – {sch.jam_selesai}
+                              </span>
+                              {slotBadge && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200/80 text-[10.5px] font-sans font-semibold text-slate-600">
+                                  {slotBadge.label}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-3 px-4 text-xs font-semibold text-slate-900 whitespace-nowrap">
                             {sch.kelas}
@@ -651,7 +736,8 @@ export function ScheduleManagementView({
                             </div>
                           </td>
                         </tr>
-                      ))
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -889,6 +975,87 @@ export function ScheduleManagementView({
                 </select>
               </div>
 
+              {lessonSlots.length > 0 && (
+                <div className="rounded-xl border border-indigo-200/70 bg-indigo-50/40 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-indigo-900">
+                      Pilih Cepat Jam ke (Sinkron Pengaturan Jadwal · {effectiveTimetable.durasi_jp_menit} mnt/JP)
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label
+                        htmlFor="schedule-slot-start"
+                        className="block text-[11px] font-medium text-slate-600 mb-1"
+                      >
+                        Dari Jam ke
+                      </label>
+                      <select
+                        id="schedule-slot-start"
+                        data-testid="schedule-slot-start"
+                        value={schStartJp}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (!v) {
+                            setSchStartJp('');
+                            setSchEndJp('');
+                            return;
+                          }
+                          const nextEnd =
+                            schEndJp && Number(schEndJp) >= Number(v) ? schEndJp : v;
+                          applySlotRange(v, nextEnd);
+                        }}
+                        className="w-full rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
+                      >
+                        <option value="">Manual</option>
+                        {lessonSlots.map((slot) => (
+                          <option key={slot.jamKe} value={String(slot.jamKe)}>
+                            Jam ke-{slot.jamKe} ({slot.jam_mulai})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="schedule-slot-end"
+                        className="block text-[11px] font-medium text-slate-600 mb-1"
+                      >
+                        Sampai Jam ke
+                      </label>
+                      <select
+                        id="schedule-slot-end"
+                        data-testid="schedule-slot-end"
+                        value={schEndJp}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (!v) {
+                            setSchEndJp('');
+                            return;
+                          }
+                          const nextStart =
+                            schStartJp && Number(schStartJp) <= Number(v)
+                              ? schStartJp
+                              : v;
+                          applySlotRange(nextStart, v);
+                        }}
+                        className="w-full rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none"
+                      >
+                        <option value="">Manual</option>
+                        {lessonSlots.map((slot) => (
+                          <option
+                            key={slot.jamKe}
+                            value={String(slot.jamKe)}
+                            disabled={Boolean(schStartJp && slot.jamKe < Number(schStartJp))}
+                          >
+                            Jam ke-{slot.jamKe} (s.d. {slot.jam_selesai})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label
@@ -902,7 +1069,16 @@ export function ScheduleManagementView({
                     type="time"
                     required
                     value={schJamMulai}
-                    onChange={(e) => setSchJamMulai(e.target.value)}
+                    onChange={(e) => {
+                      setSchJamMulai(e.target.value);
+                      const matched = findSlotRangeLabelForSchedule(
+                        effectiveTimetable,
+                        e.target.value,
+                        schJamSelesai
+                      );
+                      setSchStartJp(matched ? String(matched.startJp) : '');
+                      setSchEndJp(matched ? String(matched.endJp) : '');
+                    }}
                     className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-mono text-slate-900 focus:border-indigo-500 focus:outline-none"
                   />
                 </div>
@@ -918,14 +1094,23 @@ export function ScheduleManagementView({
                     type="time"
                     required
                     value={schJamSelesai}
-                    onChange={(e) => setSchJamSelesai(e.target.value)}
+                    onChange={(e) => {
+                      setSchJamSelesai(e.target.value);
+                      const matched = findSlotRangeLabelForSchedule(
+                        effectiveTimetable,
+                        schJamMulai,
+                        e.target.value
+                      );
+                      setSchStartJp(matched ? String(matched.startJp) : '');
+                      setSchEndJp(matched ? String(matched.endJp) : '');
+                    }}
                     className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-mono text-slate-900 focus:border-indigo-500 focus:outline-none"
                   />
                 </div>
               </div>
 
               <p className="text-[11px] text-slate-500">
-                Jadwal otomatis disimpan untuk TA <strong className="font-mono">{settings.tahun_ajaran}</strong> · Semester <strong>{formatSemesterLabel(activeSemester)}</strong>.
+                Otomatis tersimpan &amp; tersinkron ke <strong>Pengaturan Jadwal</strong> (tabel matriks) dan <strong>Menu Mapel Guru</strong> untuk TA <strong className="font-mono">{settings.tahun_ajaran}</strong> · Semester <strong>{formatSemesterLabel(activeSemester)}</strong>.
               </p>
 
               <div className="pt-2 flex items-center justify-end gap-2.5">

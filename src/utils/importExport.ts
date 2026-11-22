@@ -41,7 +41,7 @@ export function parseStudentSheetRows(
 
   rawRows.forEach((row, index) => {
     const rowNumber = index + 2; // 1-indexed + header row
-    const nis = pickColumnValue(row, ['nis', 'no induk', 'nomor induk', 'id']);
+    const nis = pickColumnValue(row, ['nisn', 'nis', 'no induk', 'nomor induk', 'id']);
     const nama = pickColumnValue(row, ['nama', 'nama siswa', 'nama lengkap', 'name']);
     const kelas = pickColumnValue(row, ['kelas', 'class', 'rombel']);
     const genderRaw = pickColumnValue(row, ['gender', 'l/p', 'jenis kelamin', 'jk']);
@@ -98,14 +98,14 @@ export async function parseStudentsFile(
 export function downloadStudentImportTemplate(): void {
   const sampleRows = [
     {
-      NIS: '2026101',
+      NISN: '2026101',
       Nama: 'Rafi Pratama',
       Kelas: 'X IPA 1',
       Gender: 'L',
       'No WA Ortu': '081234567890',
     },
     {
-      NIS: '2026102',
+      NISN: '2026102',
       Nama: 'Salsaabila Putri',
       Kelas: 'X IPA 2',
       Gender: 'P',

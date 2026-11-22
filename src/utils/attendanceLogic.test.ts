@@ -50,9 +50,11 @@ test('determineAttendanceStatus classifies on-time vs late accurately', () => {
   assert.equal(determineAttendanceStatus('08:05:10', '07:15'), 'Terlambat');
 });
 
-test('extractNisFromQrPayload supports plain NIS, prefixed NIS, and JSON payloads', () => {
+test('extractNisFromQrPayload supports plain NISN, prefixed NISN/NIS, and JSON payloads', () => {
   assert.equal(extractNisFromQrPayload('  2026001  '), '2026001');
+  assert.equal(extractNisFromQrPayload('NISN:2026002'), '2026002');
   assert.equal(extractNisFromQrPayload('NIS:2026002'), '2026002');
+  assert.equal(extractNisFromQrPayload('{"nisn":"2026004"}'), '2026004');
   assert.equal(extractNisFromQrPayload('{"nis":"2026003"}'), '2026003');
   assert.equal(extractNisFromQrPayload('   '), '');
 });

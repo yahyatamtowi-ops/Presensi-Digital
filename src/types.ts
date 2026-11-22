@@ -178,6 +178,7 @@ export type TabId =
   | 'siswa'
   | 'rekap'
   | 'mapel'
+  | 'daftar_pelajaran'
   | 'jadwal'
   | 'pengaturan_jadwal'
   | 'analisis'

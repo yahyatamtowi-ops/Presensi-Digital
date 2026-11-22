@@ -359,7 +359,7 @@ export function DashboardView({
               <QrCode className="h-10 w-10 text-slate-300 mb-3" aria-hidden="true" />
               <p className="text-sm font-medium text-slate-700">Belum ada presensi hari ini</p>
               <p className="text-xs text-slate-500 mt-1 max-w-xs">
-                Mulai pindai kartu QR siswa atau input NIS untuk mencatat kehadiran pertama.
+                Mulai pindai kartu QR siswa atau input NISN untuk mencatat kehadiran pertama.
               </p>
             </div>
           ) : (

@@ -262,7 +262,7 @@ test('Subject PDF and Monthly Analytics PDF columns sum cleanly to F4 portrait c
   assert.equal(sum(subjectCols), RECAP_PDF_F4_CONFIG.contentWidth);
   assert.deepEqual(
     subjectCols.map((c) => c.header),
-    ['No', 'NIS', 'Nama Siswa', 'Jam Masuk', 'Status']
+    ['No', 'NISN', 'Nama Siswa', 'Jam Masuk', 'Status']
   );
   assert.equal(subjectCols.some((c) => c.header === 'Keterangan'), false);
 

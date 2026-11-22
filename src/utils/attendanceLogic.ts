@@ -163,15 +163,18 @@ export function extractNisFromQrPayload(rawPayload: string): string {
   if (!trimmed) return '';
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     try {
-      const parsed = JSON.parse(trimmed) as { nis?: unknown };
-      if (parsed && typeof parsed.nis === 'string') {
+      const parsed = JSON.parse(trimmed) as { nisn?: unknown; nis?: unknown };
+      if (parsed && typeof parsed.nisn === 'string' && parsed.nisn.trim()) {
+        return parsed.nisn.trim();
+      }
+      if (parsed && typeof parsed.nis === 'string' && parsed.nis.trim()) {
         return parsed.nis.trim();
       }
     } catch {
       // Fallback to raw string
     }
   }
-  const prefixed = trimmed.match(/^NIS[:=]\s*(.+)$/i);
+  const prefixed = trimmed.match(/^NISN?[:=]\s*(.+)$/i);
   if (prefixed && prefixed[1]) {
     return prefixed[1].trim();
   }

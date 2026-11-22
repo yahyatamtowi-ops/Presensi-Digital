@@ -43,7 +43,7 @@ export function getSubjectAttendancePdfColumns(): RecapPdfColumnSpec[] {
   // Total = 11 + 30 + 86 + 30 + 30 = 187mm (exact F4 contentWidth, without Keterangan)
   return [
     { header: 'No', width: 11, align: 'center' },
-    { header: 'NIS', width: 30 },
+    { header: 'NISN', width: 30 },
     { header: 'Nama Siswa', width: 86 },
     { header: 'Jam Masuk', width: 30, align: 'center' },
     { header: 'Status', width: 30, align: 'center' },
@@ -54,7 +54,7 @@ export function getMonthlyAnalyticsPdfColumns(): RecapPdfColumnSpec[] {
   // Total = 9 + 21 + 43 + 19 + 11 + 11 + 10 + 10 + 10 + 11 + 13 + 19 = 187mm
   return [
     { header: 'No', width: 9, align: 'center' },
-    { header: 'NIS', width: 21 },
+    { header: 'NISN', width: 21 },
     { header: 'Nama Siswa', width: 43 },
     { header: 'Kelas', width: 19 },
     { header: 'Hadir', width: 11, align: 'center' },
@@ -713,7 +713,7 @@ export function exportMonthlyAnalyticsExcel(params: {
 }): void {
   const sheetRows = params.rows.map((r, idx) => ({
     No: idx + 1,
-    NIS: r.nis,
+    NISN: r.nis,
     'Nama Siswa': r.nama,
     Kelas: r.kelas,
     Hadir: r.hadir,

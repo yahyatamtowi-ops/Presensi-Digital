@@ -143,7 +143,9 @@ import {
   getSchoolDaysForCount,
   getTimetableConfigKey,
   loadTimetableConfigs,
+  renameSubjectInTimetableConfigs,
   saveTimetableConfigs,
+  syncTimetableConfigsFromSchedules,
 } from './utils/timetableLogic';
 import { LayoutShell } from './components/LayoutShell';
 import { OpeningSplash } from './components/OpeningSplash';
@@ -156,6 +158,7 @@ import { RecapView } from './components/RecapView';
 import { SubjectAttendanceView } from './components/SubjectAttendanceView';
 import { ScheduleManagementView } from './components/ScheduleManagementView';
 import { TimetableMatrixView } from './components/TimetableMatrixView';
+import { TeacherLessonListView } from './components/TeacherLessonListView';
 import { AnalyticsView } from './components/AnalyticsView';
 import { SettingsView } from './components/SettingsView';
 
@@ -165,6 +168,7 @@ const TAB_LABELS: Record<TabId, string> = {
   siswa: 'Data Siswa & E-Card',
   rekap: 'Rekap & Export',
   mapel: 'Presensi Mata Pelajaran',
+  daftar_pelajaran: 'Daftar Pelajaran',
   jadwal: 'Mapel & Jadwal Pelajaran',
   pengaturan_jadwal: 'Pengaturan Jadwal Mata Pelajaran',
   analisis: 'Analisis Kehadiran',
@@ -194,7 +198,17 @@ export default function App() {
   );
   const [timetableConfigs, setTimetableConfigs] = useState<
     Record<string, TimetableConfig>
-  >(() => loadTimetableConfigs());
+  >(() => {
+    const loaded = loadTimetableConfigs();
+    if (initialReconciledAcademic.schedules.length === 0) return loaded;
+    const synced = syncTimetableConfigsFromSchedules(
+      loaded,
+      initialReconciledAcademic.schedules,
+      initialCache.settings.batas_jam_masuk || '07:15'
+    );
+    saveTimetableConfigs(synced);
+    return synced;
+  });
   const [subjectRecords, setSubjectRecords] = useState<SubjectAttendanceRecord[]>(() =>
     loadSubjectRecords()
   );
@@ -317,6 +331,15 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  const syncTimetablesWithSchedules = useCallback((nextSchedules: TeacherSchedule[]) => {
+    const fallbackStart = latestDataRef.current.settings.batas_jam_masuk || '07:15';
+    setTimetableConfigs((prev) => {
+      const next = syncTimetableConfigsFromSchedules(prev, nextSchedules, fallbackStart);
+      saveTimetableConfigs(next);
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     return subscribeFirestoreUsage(() => {
       setFirestoreDailyUsage(loadFirestoreDailyUsage());
@@ -428,6 +451,7 @@ export default function App() {
           onTeacherSchedules: (cloudSchedules) => {
             setTeacherSchedules(cloudSchedules);
             saveTeacherSchedules(cloudSchedules);
+            syncTimetablesWithSchedules(cloudSchedules);
           },
           onSubjectAssignments: (cloudAssignments) => {
             setSubjectAssignments(cloudAssignments);
@@ -939,6 +963,7 @@ export default function App() {
             latestFullSnapshotRef.current.teacherSchedules = reconciled.schedules;
             setTeacherSchedules(reconciled.schedules);
             saveTeacherSchedules(reconciled.schedules);
+            syncTimetablesWithSchedules(reconciled.schedules);
             latestFullSnapshotRef.current.subjectAssignments = reconciled.assignments;
             setSubjectAssignments(reconciled.assignments);
             saveSubjectAssignments(reconciled.assignments);
@@ -1765,14 +1790,14 @@ export default function App() {
             ? `${outcome.student.nama} — Pulang Cepat`
             : `${outcome.student.nama} — Pulang`,
           description: earlyReason
-            ? `NIS ${outcome.student.nis} (${outcome.student.kelas}) pulang cepat pukul ${taggedRecord.jam_pulang} · Alasan: ${earlyReason}${offlineSuffix}`
-            : `NIS ${outcome.student.nis} (${outcome.student.kelas}) scan pulang pukul ${taggedRecord.jam_pulang}${offlineSuffix}`,
+            ? `NISN ${outcome.student.nis} (${outcome.student.kelas}) pulang cepat pukul ${taggedRecord.jam_pulang} · Alasan: ${earlyReason}${offlineSuffix}`
+            : `NISN ${outcome.student.nis} (${outcome.student.kelas}) scan pulang pukul ${taggedRecord.jam_pulang}${offlineSuffix}`,
         });
       } else {
         pushToast({
           type: taggedRecord.status === 'Hadir' ? 'success' : 'warning',
           title: `${outcome.student.nama} — ${taggedRecord.status}`,
-          description: `NIS ${outcome.student.nis} (${outcome.student.kelas}) dicatat masuk pukul ${taggedRecord.jam_masuk}${offlineSuffix}`,
+          description: `NISN ${outcome.student.nis} (${outcome.student.kelas}) dicatat masuk pukul ${taggedRecord.jam_masuk}${offlineSuffix}`,
         });
       }
       void syncRecordsMutation('recordPresensi', {
@@ -1816,8 +1841,8 @@ export default function App() {
     } else if (outcome.reason === 'not_found') {
       pushToast({
         type: 'error',
-        title: 'NIS Tidak Terdaftar',
-        description: `Siswa dengan NIS "${outcome.nis}" tidak ditemukan pada Tahun Ajaran ${settings.tahun_ajaran}.`,
+        title: 'NISN Tidak Terdaftar',
+        description: `Siswa dengan NISN "${outcome.nis}" tidak ditemukan pada Tahun Ajaran ${settings.tahun_ajaran}.`,
       });
     } else {
       pushToast({
@@ -1839,7 +1864,7 @@ export default function App() {
     if (duplicate) {
       return {
         ok: false,
-        error: `NIS ${student.nis} sudah terdaftar pada Tahun Ajaran ${settings.tahun_ajaran}.`,
+        error: `NISN ${student.nis} sudah terdaftar pada Tahun Ajaran ${settings.tahun_ajaran}.`,
       };
     }
     const taggedStudent: Student = {
@@ -1893,7 +1918,7 @@ export default function App() {
         s.nis.trim().toLowerCase() !== originalNis.trim().toLowerCase()
     );
     if (conflict) {
-      return { ok: false, error: `NIS ${updated.nis} sudah digunakan siswa lain.` };
+      return { ok: false, error: `NISN ${updated.nis} sudah digunakan siswa lain.` };
     }
 
     const nextStudents = students.map((s) =>
@@ -2394,6 +2419,7 @@ export default function App() {
     setSettings(fresh.settings);
     setTeacherSchedules(demoSchedules);
     saveTeacherSchedules(demoSchedules);
+    syncTimetablesWithSchedules(demoSchedules);
     setSubjectAssignments(demoAssignments);
     saveSubjectAssignments(demoAssignments);
     setSubjectRecords([]);
@@ -2475,6 +2501,7 @@ export default function App() {
     id: string,
     input: { kode: string; nama: string; deskripsi?: string }
   ): { ok: boolean; error?: string } {
+    const previous = masterSubjects.find((s) => s.id === id);
     const res = updateMasterSubject(masterSubjects, id, input);
     if (!res.ok) return res;
     lastLocalAcademicSaveAtRef.current = Date.now();
@@ -2482,6 +2509,56 @@ export default function App() {
     saveMasterSubjects(res.subjects);
     void syncMutation('upsertMasterMapel', { ...res.subject, subject: res.subject });
     runCloudWrite((uid) => upsertMasterSubjectToCloud(uid, res.subject));
+
+    // Cascade renamed subject across schedules, assignments, and Pengaturan Jadwal matrix
+    if (
+      previous &&
+      previous.nama.trim().toLowerCase() !== res.subject.nama.trim().toLowerCase()
+    ) {
+      const oldLower = previous.nama.trim().toLowerCase();
+      const updatedSchedules: TeacherSchedule[] = [];
+      const nextSchedules = teacherSchedules.map((sch) => {
+        if (sch.mata_pelajaran.trim().toLowerCase() !== oldLower) return sch;
+        const updated = { ...sch, mata_pelajaran: res.subject.nama };
+        updatedSchedules.push(updated);
+        return updated;
+      });
+      if (updatedSchedules.length > 0) {
+        setTeacherSchedules(nextSchedules);
+        saveTeacherSchedules(nextSchedules);
+        for (const sch of updatedSchedules) {
+          void syncMutation('upsertJadwalGuru', { ...sch, schedule: sch });
+          runCloudWrite((uid) => upsertTeacherScheduleToCloud(uid, sch));
+        }
+      }
+
+      const updatedAssignments: SubjectAssignment[] = [];
+      const nextAssignments = subjectAssignments.map((asg) => {
+        if (asg.mata_pelajaran.trim().toLowerCase() !== oldLower) return asg;
+        const updated = { ...asg, mata_pelajaran: res.subject.nama };
+        updatedAssignments.push(updated);
+        return updated;
+      });
+      if (updatedAssignments.length > 0) {
+        setSubjectAssignments(nextAssignments);
+        saveSubjectAssignments(nextAssignments);
+        for (const asg of updatedAssignments) {
+          void syncMutation('upsertMapelKelas', { ...asg, assignment: asg });
+          runCloudWrite((uid) => upsertSubjectAssignmentToCloud(uid, asg));
+        }
+      }
+
+      setTimetableConfigs((prev) => {
+        const renamed = renameSubjectInTimetableConfigs(
+          prev,
+          previous.nama,
+          res.subject.nama
+        );
+        saveTimetableConfigs(renamed);
+        return renamed;
+      });
+    }
+
     pushToast({
       type: 'success',
       title: 'Mata Pelajaran Diperbarui',
@@ -2525,6 +2602,7 @@ export default function App() {
     lastLocalAcademicSaveAtRef.current = Date.now();
     setTeacherSchedules(res.schedules);
     saveTeacherSchedules(res.schedules);
+    syncTimetablesWithSchedules(res.schedules);
     void syncMutation('upsertJadwalGuru', { ...res.schedule, schedule: res.schedule });
     runCloudWrite((uid) => upsertTeacherScheduleToCloud(uid, res.schedule));
 
@@ -2576,6 +2654,7 @@ export default function App() {
     lastLocalAcademicSaveAtRef.current = Date.now();
     setTeacherSchedules(res.schedules);
     saveTeacherSchedules(res.schedules);
+    syncTimetablesWithSchedules(res.schedules);
     void syncMutation('upsertJadwalGuru', { ...res.schedule, schedule: res.schedule });
     runCloudWrite((uid) => upsertTeacherScheduleToCloud(uid, res.schedule));
 
@@ -2624,6 +2703,7 @@ export default function App() {
     lastLocalAcademicSaveAtRef.current = Date.now();
     setTeacherSchedules(next);
     saveTeacherSchedules(next);
+    syncTimetablesWithSchedules(next);
     void syncMutation('deleteJadwalGuru', { id });
     runCloudWrite((uid) => deleteTeacherScheduleFromCloud(uid, id));
 
@@ -2663,15 +2743,21 @@ export default function App() {
   function handleSaveTimetable(
     config: TimetableConfig,
     syncedSchedules: TeacherSchedule[],
-    activeClasses: string[]
+    activeClasses: string[],
+    options?: { silent?: boolean }
   ) {
     const key = getTimetableConfigKey(config.tahun_ajaran, config.semester);
-    const nextConfigs = {
-      ...timetableConfigs,
-      [key]: config,
-    };
-    setTimetableConfigs(nextConfigs);
-    saveTimetableConfigs(nextConfigs);
+    setTimetableConfigs((prev) => {
+      const nextConfigs = {
+        ...prev,
+        [key]: config,
+      };
+      saveTimetableConfigs(nextConfigs);
+      return nextConfigs;
+    });
+
+    const currentSchedules = latestFullSnapshotRef.current.teacherSchedules;
+    const currentAssignments = latestFullSnapshotRef.current.subjectAssignments;
 
     const targetYear = resolveItemAcademicYear(config.tahun_ajaran);
     const targetSem = normalizeSemester(config.semester, 'ganjil');
@@ -2689,17 +2775,17 @@ export default function App() {
       classSet.has(item.kelas.trim().toLowerCase()) &&
       Boolean(item.hari && daySet.has(item.hari));
 
-    const preservedSchedules = teacherSchedules.filter(
+    const preservedSchedules = currentSchedules.filter(
       (s) => !isInTimetableScope(s)
     );
-    const removedSchedules = teacherSchedules.filter((s) => isInTimetableScope(s));
+    const removedSchedules = currentSchedules.filter((s) => isInTimetableScope(s));
     const nextSchedules = [...preservedSchedules, ...syncedSchedules];
 
     // Mirror every timetable schedule into SubjectAssignments so teachers see them automatically in Menu Presensi Mapel
-    const preservedAssignments = subjectAssignments.filter(
+    const preservedAssignments = currentAssignments.filter(
       (a) => !(a.source === 'schedule' && isInTimetableScope(a))
     );
-    const removedAssignments = subjectAssignments.filter(
+    const removedAssignments = currentAssignments.filter(
       (a) => a.source === 'schedule' && isInTimetableScope(a)
     );
 
@@ -2716,6 +2802,8 @@ export default function App() {
     }
 
     lastLocalAcademicSaveAtRef.current = Date.now();
+    latestFullSnapshotRef.current.teacherSchedules = nextSchedules;
+    latestFullSnapshotRef.current.subjectAssignments = nextAssignments;
     setTeacherSchedules(nextSchedules);
     saveTeacherSchedules(nextSchedules);
     setSubjectAssignments(nextAssignments);
@@ -2746,11 +2834,13 @@ export default function App() {
       runCloudWrite((uid) => upsertSubjectAssignmentToCloud(uid, asg));
     }
 
-    pushToast({
-      type: 'success',
-      title: 'Jadwal Mata Pelajaran Disimpan & Disinkronkan',
-      description: `${syncedSchedules.length} sesi jadwal TA ${targetYear} Semester ${formatSemesterLabel(targetSem)} tersinkron ke Jadwal Pelajaran Guru dan Menu Mapel masing-masing guru.`,
-    });
+    if (!options?.silent) {
+      pushToast({
+        type: 'success',
+        title: 'Jadwal Mata Pelajaran Disimpan & Disinkronkan',
+        description: `${syncedSchedules.length} sesi jadwal TA ${targetYear} Semester ${formatSemesterLabel(targetSem)} tersinkron ke Jadwal Pelajaran Guru dan Menu Mapel masing-masing guru.`,
+      });
+    }
   }
 
   function handleAddSubjectAssignment(input: {
@@ -2792,6 +2882,7 @@ export default function App() {
       const upsertedSchedule = mirrored.upsertedSchedule;
       setTeacherSchedules(mirrored.schedules);
       saveTeacherSchedules(mirrored.schedules);
+      syncTimetablesWithSchedules(mirrored.schedules);
       void syncMutation('upsertJadwalGuru', {
         ...upsertedSchedule,
         schedule: upsertedSchedule,
@@ -2835,6 +2926,7 @@ export default function App() {
         const nextSchedules = teacherSchedules.filter((s) => !removeIds.has(s.id));
         setTeacherSchedules(nextSchedules);
         saveTeacherSchedules(nextSchedules);
+        syncTimetablesWithSchedules(nextSchedules);
         for (const rem of matchingSchedules) {
           void syncMutation('deleteJadwalGuru', { id: rem.id });
           runCloudWrite((uid) => deleteTeacherScheduleFromCloud(uid, rem.id));
@@ -2903,8 +2995,8 @@ export default function App() {
       } else if (outcome.reason === 'not_found') {
         pushToast({
           type: 'error',
-          title: 'NIS Tidak Terdaftar',
-          description: `Siswa dengan NIS "${outcome.nis}" tidak ditemukan pada Tahun Ajaran ${settings.tahun_ajaran}.`,
+          title: 'NISN Tidak Terdaftar',
+          description: `Siswa dengan NISN "${outcome.nis}" tidak ditemukan pada Tahun Ajaran ${settings.tahun_ajaran}.`,
         });
       }
     }
@@ -3114,6 +3206,7 @@ export default function App() {
     if (Array.isArray(restoredTeacherSchedules)) {
       setTeacherSchedules(restoredTeacherSchedules);
       saveTeacherSchedules(restoredTeacherSchedules);
+      syncTimetablesWithSchedules(restoredTeacherSchedules);
     }
 
     if (restoredAccounts.length > 0) {
@@ -3350,6 +3443,26 @@ export default function App() {
           />
         )}
 
+        {effectiveTab === 'daftar_pelajaran' &&
+          session &&
+          (session.role === 'guru' || session.role === 'wali_kelas') && (
+            <TeacherLessonListView
+              session={session}
+              settings={settings}
+              schedules={teacherSchedules}
+              assignments={subjectAssignments}
+              activeTimetableConfig={
+                timetableConfigs[
+                  getTimetableConfigKey(
+                    settings.tahun_ajaran,
+                    normalizeSemester(settings.semester, 'ganjil')
+                  )
+                ]
+              }
+              onOpenSubjectAttendance={() => setActiveTab('mapel')}
+            />
+          )}
+
         {effectiveTab === 'jadwal' && session?.role === 'master_admin' && (
           <ScheduleManagementView
             settings={settings}
@@ -3357,6 +3470,14 @@ export default function App() {
             availableClasses={availableClasses}
             masterSubjects={masterSubjects}
             schedules={teacherSchedules}
+            activeTimetableConfig={
+              timetableConfigs[
+                getTimetableConfigKey(
+                  settings.tahun_ajaran,
+                  normalizeSemester(settings.semester, 'ganjil')
+                )
+              ]
+            }
             onAddMasterSubject={handleAddMasterSubject}
             onUpdateMasterSubject={handleUpdateMasterSubject}
             onDeleteMasterSubject={handleDeleteMasterSubject}
@@ -3377,6 +3498,7 @@ export default function App() {
             schedules={teacherSchedules}
             timetableConfigs={timetableConfigs}
             onSaveTimetable={handleSaveTimetable}
+            onNavigateToScheduleManagement={() => setActiveTab('jadwal')}
           />
         )}
 

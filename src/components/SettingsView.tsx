@@ -1610,7 +1610,7 @@ export function SettingsView({
                     <p className="text-[10px] font-bold text-slate-900 truncate">
                       Ahmad Fauzi Pratama
                     </p>
-                    <p className="text-[9px] text-slate-500">NIS 2026001 · X IPA 1</p>
+                    <p className="text-[9px] text-slate-500">NISN 2026001 · X IPA 1</p>
                     <p className="text-[9px] text-slate-400 mb-1.5">Siswa Putra</p>
 
                     <div className="pt-1 border-t border-slate-100">
@@ -1653,7 +1653,7 @@ export function SettingsView({
                       <QrCode className="h-14 w-14 text-slate-800" aria-hidden="true" />
                     </div>
                     <span className="text-[8.5px] font-mono text-slate-500 mt-1">
-                      NIS: 2026001
+                      NISN: 2026001
                     </span>
                   </div>
                 </div>

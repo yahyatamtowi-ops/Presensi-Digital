@@ -4,11 +4,14 @@ import {
   buildTeacherSchedulesFromTimetable,
   createDefaultTimetableConfig,
   detectTimetableTeacherConflicts,
+  findSlotRangeLabelForSchedule,
   generateDailyTimeSlots,
   getSchoolDaysForCount,
   hydrateTimetableCellsFromSchedules,
   makeTimetableCellKey,
+  renameSubjectInTimetableConfigs,
   sanitizeTimetableConfigs,
+  syncTimetableConfigsFromSchedules,
 } from './timetableLogic';
 import {
   getDateForDayInSameWeek,
@@ -304,4 +307,103 @@ describe('Bidirectional Sync: Jadwal Pelajaran Guru <-> Menu Mapel Guru', () => 
     assert.equal(res2.addedSchedules.length, 0);
     assert.equal(res2.addedAssignments.length, 0);
   });
+
+  it('auto-syncs TimetableConfigs when schedules are added, edited, or deleted in Mapel & Jadwal', () => {
+    // Existing saved timetable with custom 40-min JP duration & an incomplete draft cell
+    const initial = createDefaultTimetableConfig('2026/2027', 'ganjil', '07:15');
+    initial.durasi_jp_menit = 40;
+    initial.cells[makeTimetableCellKey('Senin', 1, 'X IPA 1')] = {
+      mata_pelajaran: 'Matematika',
+      teacher_user_id: 'usr_guru',
+      teacher_name: 'Siti Aminah, S.Pd',
+    };
+    initial.cells[makeTimetableCellKey('Jumat', 1, 'X IPA 1')] = {
+      mata_pelajaran: 'Seni Budaya', // draft without teacher
+    };
+
+    const configs = { '2026/2027__ganjil': initial };
+
+    // 1. Add a Saturday schedule + edit Monday schedule in Mapel & Jadwal
+    const updatedSchedules: TeacherSchedule[] = [
+      {
+        id: 'sch_mon',
+        hari: 'Senin',
+        teacher_user_id: 'usr_guru',
+        teacher_name: 'Siti Aminah, S.Pd',
+        kelas: 'X IPA 1',
+        mata_pelajaran: 'Fisika', // changed from Matematika -> Fisika
+        jam_mulai: '07:15',
+        jam_selesai: '07:55',
+        tahun_ajaran: '2026/2027',
+        semester: 'ganjil',
+      },
+      {
+        id: 'sch_sat',
+        hari: 'Sabtu',
+        teacher_user_id: 'usr_walikelas',
+        teacher_name: 'Budi Santoso, S.Pd',
+        kelas: 'X IPS 1',
+        mata_pelajaran: 'Ekonomi',
+        jam_mulai: '07:15',
+        jam_selesai: '08:35',
+        tahun_ajaran: '2026/2027',
+        semester: 'ganjil',
+      },
+    ];
+
+    const synced = syncTimetableConfigsFromSchedules(configs, updatedSchedules, '07:15');
+    const cfg = synced['2026/2027__ganjil'];
+    assert.ok(cfg);
+    // Preserved custom duration
+    assert.equal(cfg.durasi_jp_menit, 40);
+    // Auto-expanded to 6 school days because Saturday schedule was added
+    assert.equal(cfg.jumlah_hari, 6);
+    // Monday cell updated to Fisika
+    assert.equal(cfg.cells[makeTimetableCellKey('Senin', 1, 'X IPA 1')]?.mata_pelajaran, 'Fisika');
+    // Saturday 2-JP schedule hydrated & class added
+    assert.ok((cfg.custom_classes ?? []).includes('X IPS 1'));
+    assert.equal(cfg.cells[makeTimetableCellKey('Sabtu', 1, 'X IPS 1')]?.mata_pelajaran, 'Ekonomi');
+    assert.equal(cfg.cells[makeTimetableCellKey('Sabtu', 2, 'X IPS 1')]?.mata_pelajaran, 'Ekonomi');
+    // Unassigned draft cell preserved
+    assert.equal(cfg.cells[makeTimetableCellKey('Jumat', 1, 'X IPA 1')]?.mata_pelajaran, 'Seni Budaya');
+
+    // 2. Delete Monday schedule -> Monday cell cleared automatically
+    const afterDelete = syncTimetableConfigsFromSchedules(synced, [updatedSchedules[1]], '07:15');
+    assert.equal(
+      afterDelete['2026/2027__ganjil']?.cells[makeTimetableCellKey('Senin', 1, 'X IPA 1')],
+      undefined
+    );
+    assert.equal(
+      afterDelete['2026/2027__ganjil']?.cells[makeTimetableCellKey('Sabtu', 1, 'X IPS 1')]
+        ?.mata_pelajaran,
+      'Ekonomi'
+    );
+  });
+
+  it('cascades MasterSubject rename into TimetableConfigs and computes Jam ke range labels', () => {
+    const cfg = createDefaultTimetableConfig('2026/2027', 'ganjil', '07:15');
+    cfg.cells[makeTimetableCellKey('Rabu', 2, 'X IPA 1')] = {
+      mata_pelajaran: 'Informatika',
+      teacher_user_id: 'usr_guru',
+      teacher_name: 'Siti Aminah, S.Pd',
+    };
+
+    const renamed = renameSubjectInTimetableConfigs(
+      { '2026/2027__ganjil': cfg },
+      'Informatika',
+      'Informatika & Koding'
+    );
+    assert.equal(
+      renamed['2026/2027__ganjil']?.cells[makeTimetableCellKey('Rabu', 2, 'X IPA 1')]
+        ?.mata_pelajaran,
+      'Informatika & Koding'
+    );
+
+    const rangeSingle = findSlotRangeLabelForSchedule(cfg, '07:15', '08:00');
+    assert.deepEqual(rangeSingle, { startJp: 1, endJp: 1, label: 'Jam ke-1' });
+
+    const rangeDouble = findSlotRangeLabelForSchedule(cfg, '08:00', '09:30');
+    assert.deepEqual(rangeDouble, { startJp: 2, endJp: 3, label: 'Jam ke-2–3' });
+  });
 });
+

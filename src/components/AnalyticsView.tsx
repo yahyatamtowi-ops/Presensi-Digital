@@ -738,7 +738,7 @@ export function AnalyticsView({
                 type="search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Cari NIS, nama, kelas..."
+                placeholder="Cari NISN, nama, kelas..."
                 aria-label="Cari siswa pada tabel analisis"
                 className="w-44 rounded-xl border border-slate-200 bg-white pl-9 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
               />
@@ -787,7 +787,7 @@ export function AnalyticsView({
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200/80 text-xs font-semibold text-slate-500">
                 <th className="py-3 px-4 w-12 text-center">No</th>
-                <th className="py-3 px-4">NIS</th>
+                <th className="py-3 px-4">NISN</th>
                 <th className="py-3 px-4">Nama Siswa</th>
                 <th className="py-3 px-4">Kelas</th>
                 <th className="py-3 px-3 text-center">Hadir</th>

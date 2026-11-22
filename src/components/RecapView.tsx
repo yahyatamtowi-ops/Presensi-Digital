@@ -310,7 +310,7 @@ export function RecapView({
             const base: Record<string, string | number> = {
               No: index + 1,
               Tanggal: r.tanggal,
-              NIS: r.nis,
+              NISN: r.nis,
               'Nama Siswa': r.nama,
               Kelas: r.kelas,
               'Jam Masuk': r.jam_masuk,
@@ -325,7 +325,7 @@ export function RecapView({
           })
         : filteredPeriodRows.map((r, index) => ({
             No: index + 1,
-            NIS: r.nis,
+            NISN: r.nis,
             'Nama Siswa': r.nama,
             Kelas: r.kelas,
             Hadir: r.hadir,
@@ -570,8 +570,8 @@ export function RecapView({
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              aria-label="Cari nama atau NIS di rekap"
-              placeholder="Cari nama / NIS..."
+              aria-label="Cari nama atau NISN di rekap"
+              placeholder="Cari nama / NISN..."
               className="w-full rounded-xl border border-slate-200 bg-slate-50/50 pl-9 pr-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
           </div>
@@ -711,7 +711,7 @@ export function RecapView({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/70 text-xs font-semibold text-slate-500">
-                  <th className="py-3 px-5">NIS</th>
+                  <th className="py-3 px-5">NISN</th>
                   <th className="py-3 px-4">Nama Siswa</th>
                   <th className="py-3 px-4">Kelas</th>
                   <th className="py-3 px-4">Jam Masuk</th>
@@ -847,7 +847,7 @@ export function RecapView({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/70 text-xs font-semibold text-slate-500">
-                  <th className="py-3 px-5">NIS</th>
+                  <th className="py-3 px-5">NISN</th>
                   <th className="py-3 px-4">Nama Siswa</th>
                   <th className="py-3 px-4">Kelas</th>
                   <th className="py-3 px-4 text-center">Hadir</th>

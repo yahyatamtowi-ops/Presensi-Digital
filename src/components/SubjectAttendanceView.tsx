@@ -491,7 +491,7 @@ export function SubjectAttendanceView({
         Kelas: assignment.kelas,
         'Mata Pelajaran': assignment.mata_pelajaran,
         Guru: assignment.teacher_name,
-        NIS: s.nis,
+        NISN: s.nis,
         'Nama Siswa': s.nama,
         'Jam Masuk': rec?.jam_masuk || '-',
         Status: rec?.status || 'Belum Presensi',
@@ -574,11 +574,11 @@ export function SubjectAttendanceView({
       const msg = err instanceof Error ? err.message : 'Gagal membuka kamera.';
       if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('denied')) {
         setCameraError(
-          'Akses kamera ditolak. Berikan izin kamera pada browser atau gunakan input NIS / Nama di bawah.'
+          'Akses kamera ditolak. Berikan izin kamera pada browser atau gunakan input NISN / Nama di bawah.'
         );
       } else {
         setCameraError(
-          'Perangkat kamera tidak ditemukan atau sedang digunakan. Gunakan input NIS, input Nama, atau tombol Catat Masuk.'
+          'Perangkat kamera tidak ditemukan atau sedang digunakan. Gunakan input NISN, input Nama, atau tombol Catat Masuk.'
         );
       }
       setCameraActive(false);
@@ -964,7 +964,7 @@ export function SubjectAttendanceView({
                         <thead>
                           <tr className="bg-slate-50 border-b border-slate-200/80 text-xs font-semibold text-slate-500">
                             <th className="py-3 px-4 w-12 text-center">No</th>
-                            <th className="py-3 px-4">NIS</th>
+                            <th className="py-3 px-4">NISN</th>
                             <th className="py-3 px-4">Nama Siswa</th>
                             <th className="py-3 px-4">Jam Masuk</th>
                             <th className="py-3 px-4">Status</th>
@@ -1361,7 +1361,7 @@ export function SubjectAttendanceView({
                         Presensi Masuk Siswa — {activeAssignment.mata_pelajaran} ({activeAssignment.kelas})
                       </h4>
                       <p className="text-xs text-slate-500">
-                        Pilih input NIS/barcode, input nama siswa, scan QR kamera, atau klik Catat Masuk di tabel.
+                        Pilih input NISN/barcode, input nama siswa, scan QR kamera, atau klik Catat Masuk di tabel.
                       </p>
                     </div>
                   </div>
@@ -1478,7 +1478,7 @@ export function SubjectAttendanceView({
                       }`}
                     >
                       <Keyboard className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>Input NIS / Scan Barcode</span>
+                      <span>Input NISN / Scan Barcode</span>
                     </button>
                     <button
                       type="button"
@@ -1497,7 +1497,7 @@ export function SubjectAttendanceView({
                     </button>
                   </div>
 
-                  {/* Mode 1: Manual NIS / Barcode Input */}
+                  {/* Mode 1: Manual NISN / Barcode Input */}
                   {inputMode === 'nis' ? (
                     <form onSubmit={handleManualSubmit} className="flex flex-col sm:flex-row gap-2.5">
                       <div className="flex-1">
@@ -1506,14 +1506,14 @@ export function SubjectAttendanceView({
                           className="flex items-center gap-1.5 text-xs font-medium text-slate-700 mb-1.5"
                         >
                           <Keyboard className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
-                          <span>Input NIS / Scan Barcode Kartu Siswa ({activeAssignment.kelas})</span>
+                          <span>Input NISN / Scan Barcode Kartu Siswa ({activeAssignment.kelas})</span>
                         </label>
                         <input
                           id="mapel-manual-nis"
                           type="text"
                           value={manualNis}
                           onChange={(e) => setManualNis(e.target.value)}
-                          placeholder="Masukkan NIS siswa lalu tekan Enter..."
+                          placeholder="Masukkan NISN siswa lalu tekan Enter..."
                           className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                         />
                       </div>
@@ -1629,7 +1629,7 @@ export function SubjectAttendanceView({
                             {lastOutcome.student.nama} — {lastOutcome.record.status}
                           </p>
                           <p className="mt-0.5 font-mono">
-                            NIS {lastOutcome.student.nis} · {lastOutcome.record.mata_pelajaran} · Masuk{' '}
+                            NISN {lastOutcome.student.nis} · {lastOutcome.record.mata_pelajaran} · Masuk{' '}
                             {lastOutcome.record.jam_masuk}
                           </p>
                         </>
@@ -1648,15 +1648,15 @@ export function SubjectAttendanceView({
                             Bukan Siswa Kelas {activeAssignment.kelas}
                           </p>
                           <p className="mt-0.5">
-                            {lastOutcome.student?.nama} (NIS {lastOutcome.nis}) terdaftar di kelas{' '}
+                            {lastOutcome.student?.nama} (NISN {lastOutcome.nis}) terdaftar di kelas{' '}
                             <strong>{lastOutcome.student?.kelas}</strong>, bukan {activeAssignment.kelas}.
                           </p>
                         </>
                       ) : (
                         <>
-                          <p className="font-bold text-sm">NIS Tidak Terdaftar</p>
+                          <p className="font-bold text-sm">NISN Tidak Terdaftar</p>
                           <p className="mt-0.5">
-                            Data siswa dengan NIS &ldquo;{lastOutcome.nis}&rdquo; tidak ditemukan pada tahun ajaran aktif.
+                            Data siswa dengan NISN &ldquo;{lastOutcome.nis}&rdquo; tidak ditemukan pada tahun ajaran aktif.
                           </p>
                         </>
                       )}
@@ -1688,7 +1688,7 @@ export function SubjectAttendanceView({
                         type="search"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Cari nama / NIS..."
+                        placeholder="Cari nama / NISN..."
                         aria-label="Cari siswa dalam kelas"
                         className="w-44 rounded-xl border border-slate-200 bg-white pl-9 pr-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                       />
@@ -1713,7 +1713,7 @@ export function SubjectAttendanceView({
                   <table className="w-full text-left border-collapse text-sm">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200/80 text-xs font-semibold text-slate-500">
-                        <th className="py-3 px-4">NIS</th>
+                        <th className="py-3 px-4">NISN</th>
                         <th className="py-3 px-4">Nama Siswa</th>
                         <th className="py-3 px-4">Jam Masuk</th>
                         <th className="py-3 px-4">Status</th>

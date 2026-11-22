@@ -51,13 +51,15 @@ test('RBAC separates guest, guru (Mapel/Rekap/Analisis), wali_kelas (operational
   assert.equal(canAccessTab(null, 'siswa'), false);
   assert.equal(canAccessTab(null, 'rekap'), false);
   assert.equal(canAccessTab(null, 'mapel'), false);
+  assert.equal(canAccessTab(null, 'daftar_pelajaran'), false);
   assert.equal(canAccessTab(null, 'analisis'), false);
   assert.equal(canAccessTab(null, 'jadwal'), false);
   assert.equal(canAccessTab(null, 'pengaturan'), false);
 
-  // Guru Mata Pelajaran: Scan QR, Presensi Mapel, Rekap & Export, and Analisis
+  // Guru Mata Pelajaran: Scan QR, Presensi Mapel, Daftar Pelajaran, Rekap & Export, and Analisis
   assert.equal(canAccessTab('guru', 'scan'), true);
   assert.equal(canAccessTab('guru', 'mapel'), true);
+  assert.equal(canAccessTab('guru', 'daftar_pelajaran'), true);
   assert.equal(canAccessTab('guru', 'rekap'), true);
   assert.equal(canAccessTab('guru', 'analisis'), true);
   assert.equal(canAccessTab('guru', 'dashboard'), false);
@@ -66,19 +68,21 @@ test('RBAC separates guest, guru (Mapel/Rekap/Analisis), wali_kelas (operational
   assert.equal(canAccessTab('guru', 'pengaturan'), false);
   assert.equal(getDefaultTabForRole('guru'), 'mapel');
 
-  // Wali Kelas: Scan QR, Dashboard, Siswa, Rekap, Presensi Mapel, Analisis (no Jadwal / Pengaturan)
+  // Wali Kelas: Scan QR, Dashboard, Siswa, Rekap, Presensi Mapel, Daftar Pelajaran, Analisis (no Jadwal / Pengaturan)
   assert.equal(canAccessTab('wali_kelas', 'scan'), true);
   assert.equal(canAccessTab('wali_kelas', 'dashboard'), true);
   assert.equal(canAccessTab('wali_kelas', 'siswa'), true);
   assert.equal(canAccessTab('wali_kelas', 'rekap'), true);
   assert.equal(canAccessTab('wali_kelas', 'mapel'), true);
+  assert.equal(canAccessTab('wali_kelas', 'daftar_pelajaran'), true);
   assert.equal(canAccessTab('wali_kelas', 'analisis'), true);
   assert.equal(canAccessTab('wali_kelas', 'jadwal'), false);
   assert.equal(canAccessTab('wali_kelas', 'pengaturan'), false);
   assert.equal(getDefaultTabForRole('wali_kelas'), 'dashboard');
 
-  // Master Admin: everywhere including Mapel & Jadwal
+  // Master Admin: everywhere including Mapel & Jadwal (personal Daftar Pelajaran is for Guru & Wali Kelas)
   assert.equal(canAccessTab('master_admin', 'mapel'), true);
+  assert.equal(canAccessTab('master_admin', 'daftar_pelajaran'), false);
   assert.equal(canAccessTab('master_admin', 'jadwal'), true);
   assert.equal(canAccessTab('master_admin', 'analisis'), true);
   assert.equal(canAccessTab('master_admin', 'pengaturan'), true);
@@ -91,6 +95,7 @@ test('RBAC separates guest, guru (Mapel/Rekap/Analisis), wali_kelas (operational
   assert.equal(canAccessTab('kepala_sekolah', 'analisis'), true);
   assert.equal(canAccessTab('kepala_sekolah', 'scan'), false);
   assert.equal(canAccessTab('kepala_sekolah', 'mapel'), false);
+  assert.equal(canAccessTab('kepala_sekolah', 'daftar_pelajaran'), false);
   assert.equal(canAccessTab('kepala_sekolah', 'jadwal'), false);
   assert.equal(canAccessTab('kepala_sekolah', 'pengaturan'), false);
   assert.equal(getDefaultTabForRole('kepala_sekolah'), 'dashboard');
@@ -277,6 +282,7 @@ test('normalizeIndonesianPhone and buildWhatsAppUrl format parent WhatsApp links
   });
   assert.ok(msg.includes('Ahmad Fauzi'));
   assert.ok(msg.includes('SMA Negeri 1 Nusantara'));
+  assert.ok(msg.includes('NISN: 2026001'));
 
   const url = buildWhatsAppUrl('081234567890', msg);
   assert.ok(url?.startsWith('https://wa.me/6281234567890?text='));

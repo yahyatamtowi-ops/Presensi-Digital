@@ -117,7 +117,7 @@ export function EarlyCheckoutModal({
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-mono tabular-nums text-slate-600">
-              <span>NIS {student.nis}</span>
+              <span>NISN {student.nis}</span>
               {student.jamMasuk && student.jamMasuk !== '-' && (
                 <span>· Masuk {student.jamMasuk}</span>
               )}

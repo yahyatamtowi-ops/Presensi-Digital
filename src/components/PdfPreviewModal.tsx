@@ -153,7 +153,7 @@ export function PdfPreviewModal({
                                 {student.nama}
                               </p>
                               <p className="text-xs text-slate-500">
-                                NIS{' '}
+                                NISN{' '}
                                 <span className="font-mono tabular-nums font-bold text-slate-900">
                                   {student.nis}
                                 </span>
@@ -231,7 +231,7 @@ export function PdfPreviewModal({
                               )}
                             </div>
                             <p className="text-[9px] font-mono tabular-nums text-slate-400 mt-1">
-                              NIS: {student.nis}
+                              NISN: {student.nis}
                             </p>
                           </div>
                         </div>

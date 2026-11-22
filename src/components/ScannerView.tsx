@@ -52,6 +52,29 @@ interface ScannerViewProps {
 
 const SCANNER_ELEMENT_ID = 'presensi-qr-reader';
 
+type ScannerInputTab = 'qr' | 'manual' | 'forgot';
+
+const SCANNER_INPUT_TABS: Array<{
+  id: ScannerInputTab;
+  label: string;
+  shortLabel: string;
+  Icon: typeof QrCode;
+}> = [
+  { id: 'qr', label: 'Pemindai QR', shortLabel: 'Scan QR', Icon: QrCode },
+  {
+    id: 'manual',
+    label: 'Input NISN Manual',
+    shortLabel: 'Input NISN',
+    Icon: Keyboard,
+  },
+  {
+    id: 'forgot',
+    label: 'Lupa Kartu? Input Nama',
+    shortLabel: 'Lupa Kartu',
+    Icon: UserCheck,
+  },
+];
+
 export function ScannerView({
   students,
   records,
@@ -63,6 +86,7 @@ export function ScannerView({
   onSyncPendingNow,
   onScanSubmit,
 }: ScannerViewProps) {
+  const [activeInputTab, setActiveInputTab] = useState<ScannerInputTab>('qr');
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -220,11 +244,11 @@ export function ScannerView({
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('denied')) {
         setCameraError(
-          'Akses kamera ditolak. Berikan izin kamera pada browser atau gunakan input NIS manual di samping.'
+          'Akses kamera ditolak. Berikan izin kamera pada browser atau pilih sub menu Input NISN Manual.'
         );
       } else {
         setCameraError(
-          'Perangkat kamera tidak ditemukan atau sedang digunakan aplikasi lain. Gunakan input NIS manual untuk mencatat presensi.'
+          'Perangkat kamera tidak ditemukan atau sedang digunakan aplikasi lain. Pilih sub menu Input NISN Manual untuk mencatat presensi.'
         );
       }
       setCameraActive(false);
@@ -239,6 +263,14 @@ export function ScannerView({
     if (cameraActive) {
       await startCamera(nextMode);
     }
+  }
+
+  function handleSelectInputTab(nextTab: ScannerInputTab) {
+    if (nextTab === activeInputTab) return;
+    if (activeInputTab === 'qr' && (cameraActive || cameraStarting)) {
+      void stopCamera();
+    }
+    setActiveInputTab(nextTab);
   }
 
   useEffect(() => {
@@ -442,277 +474,326 @@ export function ScannerView({
         </section>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Camera QR Scanner */}
-        <section className="lg:col-span-7 bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-5">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="min-w-0">
-              <h2 className="text-base font-semibold text-slate-900">
-                Pemindai QR Kamera
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                {isDualMode ? (
-                  <>
-                    Jadwal Masuk{' '}
-                    <span className="font-mono tabular-nums font-medium text-slate-700">
-                      {settings.batas_jam_masuk}
-                    </span>{' '}
-                    · Pulang{' '}
-                    <span className="font-mono tabular-nums font-medium text-slate-700">
-                      {settings.jam_pulang_standar}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    Mode Masuk Saja · Batas{' '}
-                    <span className="font-mono tabular-nums font-medium text-slate-700">
-                      {settings.batas_jam_masuk}
-                    </span>
-                  </>
-                )}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
+      {/* Sub Menu Bar: Pemindai QR | Input NISN Manual | Lupa Kartu? Input Nama */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-1.5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+        <div
+          role="tablist"
+          aria-label="Pilih metode presensi siswa"
+          data-testid="scanner-mode-tabs"
+          className="grid grid-cols-3 gap-1.5"
+        >
+          {SCANNER_INPUT_TABS.map(({ id, label, shortLabel, Icon }) => {
+            const isActive = activeInputTab === id;
+            return (
               <button
+                key={id}
                 type="button"
-                onClick={handleSwitchCamera}
-                aria-label="Ganti kamera depan atau belakang"
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap"
+                role="tab"
+                data-testid={`scanner-tab-${id}`}
+                aria-selected={isActive}
+                onClick={() => handleSelectInputTab(id)}
+                className={`inline-flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                  isActive
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`}
               >
-                <SwitchCamera className="h-4 w-4 text-slate-500" aria-hidden="true" />
-                <span>{facingMode === 'environment' ? 'Belakang' : 'Depan'}</span>
+                <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className="sm:hidden truncate">{shortLabel}</span>
+                <span className="hidden sm:inline truncate">{label}</span>
               </button>
+            );
+          })}
+        </div>
+      </div>
 
-              {cameraActive ? (
-                <button
-                  type="button"
-                  onClick={stopCamera}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 transition-colors whitespace-nowrap"
-                >
-                  <CameraOff className="h-4 w-4" aria-hidden="true" />
-                  <span>Hentikan Kamera</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => startCamera(facingMode)}
-                  disabled={cameraStarting}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-60 transition-colors whitespace-nowrap"
-                >
-                  <Camera className="h-4 w-4" aria-hidden="true" />
-                  <span>{cameraStarting ? 'Membuka Kamera...' : 'Mulai Kamera'}</span>
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Camera Viewport */}
-          <div className="relative rounded-2xl bg-slate-950 overflow-hidden min-h-[280px] sm:min-h-[340px] flex items-center justify-center border border-slate-200">
-            <div id={SCANNER_ELEMENT_ID} className="w-full" />
-
-            {!cameraActive && !cameraStarting && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 bg-slate-900 text-slate-200">
-                <div className="h-14 w-14 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center mb-3">
-                  <QrCode className="h-7 w-7 text-indigo-400" aria-hidden="true" />
-                </div>
-                <p className="text-sm font-semibold text-white">
-                  Kamera Pemindai Belum Aktif
-                </p>
-                <p className="text-xs text-slate-400 mt-1 max-w-sm">
-                  Klik tombol &ldquo;Mulai Kamera&rdquo; untuk memindai kartu QR siswa secara langsung, atau masukkan NIS pada panel di samping.
-                </p>
-              </div>
-            )}
-          </div>
-
-          {cameraError && (
-            <div
-              role="alert"
-              className="flex items-start gap-3 p-4 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-xs"
+      {/* Main 2-Column Workspace: Active Input Panel (Left) + Log Presensi Hari Ini (Right) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Active Method Panel + Scan Result Feedback */}
+        <div className="lg:col-span-7 space-y-5">
+          {activeInputTab === 'qr' && (
+            <section
+              role="tabpanel"
+              data-testid="scanner-panel-qr"
+              className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-5"
             >
-              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" aria-hidden="true" />
-              <p>{cameraError}</p>
-            </div>
-          )}
-        </section>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-base font-semibold text-slate-900">
+                    Pemindai QR Kamera
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {isDualMode ? (
+                      <>
+                        Jadwal Masuk{' '}
+                        <span className="font-mono tabular-nums font-medium text-slate-700">
+                          {settings.batas_jam_masuk}
+                        </span>{' '}
+                        · Pulang{' '}
+                        <span className="font-mono tabular-nums font-medium text-slate-700">
+                          {settings.jam_pulang_standar}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        Mode Masuk Saja · Batas{' '}
+                        <span className="font-mono tabular-nums font-medium text-slate-700">
+                          {settings.batas_jam_masuk}
+                        </span>
+                      </>
+                    )}
+                  </p>
+                </div>
 
-        {/* Right Column: Manual NIS Backup & Scan Feedback */}
-        <div className="lg:col-span-5 space-y-6">
-          {/* Manual Input Card */}
-          <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-            <div className="flex items-center gap-2.5">
-              <div className="h-8 w-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-                <Keyboard className="h-4 w-4" aria-hidden="true" />
-              </div>
-              <div>
-                <h2 className="text-base font-semibold text-slate-900">
-                  Input NIS Manual
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Cadangan jika kamera tidak tersedia atau QR kartu rusak
-                </p>
-              </div>
-            </div>
-
-            <form onSubmit={handleManualSubmit} className="space-y-3">
-              <div>
-                <label
-                  htmlFor="manual-nis-input"
-                  className="block text-xs font-medium text-slate-700 mb-1.5"
-                >
-                  Nomor Induk Siswa (NIS)
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    id="manual-nis-input"
-                    type="text"
-                    value={manualNis}
-                    onChange={(e) => setManualNis(e.target.value)}
-                    placeholder="Contoh: 2026005"
-                    className="flex-1 min-w-0 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                  />
+                <div className="flex items-center gap-2 shrink-0">
                   <button
-                    type="submit"
-                    className="px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                    type="button"
+                    onClick={handleSwitchCamera}
+                    aria-label="Ganti kamera depan atau belakang"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap"
                   >
-                    {effectiveScanAction === 'pulang' ? 'Catat Pulang' : 'Catat Presensi'}
+                    <SwitchCamera className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                    <span>{facingMode === 'environment' ? 'Belakang' : 'Depan'}</span>
                   </button>
+
+                  {cameraActive ? (
+                    <button
+                      type="button"
+                      onClick={stopCamera}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 transition-colors whitespace-nowrap"
+                    >
+                      <CameraOff className="h-4 w-4" aria-hidden="true" />
+                      <span>Hentikan Kamera</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => startCamera(facingMode)}
+                      disabled={cameraStarting}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-60 transition-colors whitespace-nowrap"
+                    >
+                      <Camera className="h-4 w-4" aria-hidden="true" />
+                      <span>{cameraStarting ? 'Membuka Kamera...' : 'Mulai Kamera'}</span>
+                    </button>
+                  )}
                 </div>
               </div>
-            </form>
-          </section>
 
-          {/* Forgot Card: Input Nama Berdasarkan Kelas */}
-          <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-            <div className="flex items-center gap-2.5">
-              <div className="h-8 w-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-                <UserCheck className="h-4 w-4" aria-hidden="true" />
-              </div>
-              <div>
-                <h2 className="text-base font-semibold text-slate-900">
-                  Lupa Kartu? Input Nama per Kelas
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Pilih kelas lalu pilih nama siswa yang lupa membawa kartu tanda siswa
-                </p>
-              </div>
-            </div>
+              {/* Camera Viewport */}
+              <div className="relative rounded-2xl bg-slate-950 overflow-hidden min-h-[280px] sm:min-h-[340px] flex items-center justify-center border border-slate-200">
+                <div id={SCANNER_ELEMENT_ID} className="w-full" />
 
-            {uniqueClasses.length === 0 ? (
-              <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200/70 rounded-xl px-3.5 py-3">
-                Belum ada data siswa pada Tahun Ajaran {settings.tahun_ajaran}. Tambahkan atau import siswa terlebih dahulu di menu Data Siswa.
-              </p>
-            ) : (
-              <form onSubmit={handleForgotCardSubmit} className="space-y-3">
+                {!cameraActive && !cameraStarting && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 bg-slate-900 text-slate-200">
+                    <div className="h-14 w-14 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center mb-3">
+                      <QrCode className="h-7 w-7 text-indigo-400" aria-hidden="true" />
+                    </div>
+                    <p className="text-sm font-semibold text-white">
+                      Kamera Pemindai Belum Aktif
+                    </p>
+                    <p className="text-xs text-slate-400 mt-1 max-w-sm">
+                      Klik tombol &ldquo;Mulai Kamera&rdquo; untuk memindai kartu QR siswa secara langsung, atau pilih sub menu Input NISN Manual / Lupa Kartu di atas.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {cameraError && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-3 p-4 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-xs"
+                >
+                  <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" aria-hidden="true" />
+                  <p>{cameraError}</p>
+                </div>
+              )}
+            </section>
+          )}
+
+          {activeInputTab === 'manual' && (
+            <section
+              role="tabpanel"
+              data-testid="scanner-panel-manual"
+              className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-5"
+            >
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                  <Keyboard className="h-5 w-5" aria-hidden="true" />
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold text-slate-900">
+                    Input NISN Manual
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    Cadangan jika kamera tidak tersedia, menggunakan barcode scanner USB, atau QR kartu rusak
+                  </p>
+                </div>
+              </div>
+
+              <form onSubmit={handleManualSubmit} className="space-y-4">
                 <div>
                   <label
-                    htmlFor="forgot-card-class"
+                    htmlFor="manual-nis-input"
                     className="block text-xs font-medium text-slate-700 mb-1.5"
                   >
-                    1. Pilih Kelas
+                    Nomor Induk Siswa Nasional (NISN)
                   </label>
-                  <select
-                    id="forgot-card-class"
-                    value={selectedClass}
-                    onChange={(e) => {
-                      setSelectedClass(e.target.value);
-                      setSelectedStudentNis('');
-                      setStudentNameQuery('');
-                    }}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                  >
-                    <option value="">-- Pilih Kelas --</option>
-                    {uniqueClasses.map((kelas) => {
-                      const count = students.filter((s) => s.kelas.trim() === kelas).length;
-                      return (
-                        <option key={kelas} value={kelas}>
-                          {kelas} ({count} siswa)
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-
-                {selectedClass && (
-                  <>
-                    <div>
-                      <label
-                        htmlFor="forgot-card-search"
-                        className="block text-xs font-medium text-slate-700 mb-1.5"
-                      >
-                        Cari Nama di {selectedClass} (Opsional)
-                      </label>
-                      <div className="relative">
-                        <Search
-                          className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                          aria-hidden="true"
-                        />
-                        <input
-                          id="forgot-card-search"
-                          type="text"
-                          value={studentNameQuery}
-                          onChange={(e) => setStudentNameQuery(e.target.value)}
-                          placeholder="Ketik sebagian nama siswa..."
-                          className="w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3.5 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label
-                        htmlFor="forgot-card-student"
-                        className="block text-xs font-medium text-slate-700 mb-1.5"
-                      >
-                        2. Pilih Nama Siswa
-                      </label>
-                      <select
-                        id="forgot-card-student"
-                        value={selectedStudentNis}
-                        onChange={(e) => setSelectedStudentNis(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                      >
-                        <option value="">
-                          {studentsInSelectedClass.length === 0
-                            ? 'Tidak ada siswa cocok dengan pencarian'
-                            : `-- Pilih Nama Siswa (${studentsInSelectedClass.length}) --`}
-                        </option>
-                        {studentsInSelectedClass.map((s) => {
-                          const rec = hasScannedOnDate(records, s.nis, today);
-                          const statusHint = !rec
-                            ? 'Belum Presensi'
-                            : rec.jam_pulang && rec.jam_pulang !== '-'
-                              ? `${rec.status} & Pulang (${rec.jam_pulang})`
-                              : isDualMode &&
-                                  (rec.status === 'Hadir' || rec.status === 'Terlambat')
-                                ? `${rec.status} — Belum Pulang`
-                                : rec.status;
-                          return (
-                            <option key={s.nis} value={s.nis}>
-                              {s.nama} ({s.nis}) — {statusHint}
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
-
+                  <div className="flex flex-col sm:flex-row gap-2.5">
+                    <input
+                      id="manual-nis-input"
+                      type="text"
+                      value={manualNis}
+                      onChange={(e) => setManualNis(e.target.value)}
+                      placeholder="Masukkan NISN siswa (Contoh: 2026005)"
+                      className="flex-1 min-w-0 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    />
                     <button
                       type="submit"
-                      disabled={!selectedStudentNis}
-                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                      className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                     >
-                      <UserCheck className="h-4 w-4" aria-hidden="true" />
-                      <span>
-                        {effectiveScanAction === 'pulang'
-                          ? 'Catat Presensi Pulang Siswa'
-                          : 'Catat Presensi Siswa (Tanpa Kartu)'}
-                      </span>
+                      {effectiveScanAction === 'pulang' ? 'Catat Pulang' : 'Catat Presensi'}
                     </button>
-                  </>
-                )}
+                  </div>
+                </div>
               </form>
-            )}
-          </section>
+            </section>
+          )}
+
+          {activeInputTab === 'forgot' && (
+            <section
+              role="tabpanel"
+              data-testid="scanner-panel-forgot"
+              className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-5"
+            >
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                  <UserCheck className="h-5 w-5" aria-hidden="true" />
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold text-slate-900">
+                    Lupa Kartu? Input Nama per Kelas
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    Pilih kelas lalu pilih nama siswa yang lupa membawa kartu tanda siswa
+                  </p>
+                </div>
+              </div>
+
+              {uniqueClasses.length === 0 ? (
+                <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200/70 rounded-xl px-4 py-3.5">
+                  Belum ada data siswa pada Tahun Ajaran {settings.tahun_ajaran}. Tambahkan atau import siswa terlebih dahulu di menu Data Siswa.
+                </p>
+              ) : (
+                <form onSubmit={handleForgotCardSubmit} className="space-y-4">
+                  <div>
+                    <label
+                      htmlFor="forgot-card-class"
+                      className="block text-xs font-medium text-slate-700 mb-1.5"
+                    >
+                      1. Pilih Kelas
+                    </label>
+                    <select
+                      id="forgot-card-class"
+                      value={selectedClass}
+                      onChange={(e) => {
+                        setSelectedClass(e.target.value);
+                        setSelectedStudentNis('');
+                        setStudentNameQuery('');
+                      }}
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    >
+                      <option value="">-- Pilih Kelas --</option>
+                      {uniqueClasses.map((kelas) => {
+                        const count = students.filter((s) => s.kelas.trim() === kelas).length;
+                        return (
+                          <option key={kelas} value={kelas}>
+                            {kelas} ({count} siswa)
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                  {selectedClass && (
+                    <>
+                      <div>
+                        <label
+                          htmlFor="forgot-card-search"
+                          className="block text-xs font-medium text-slate-700 mb-1.5"
+                        >
+                          Cari Nama atau NISN di {selectedClass} (Opsional)
+                        </label>
+                        <div className="relative">
+                          <Search
+                            className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                            aria-hidden="true"
+                          />
+                          <input
+                            id="forgot-card-search"
+                            type="text"
+                            value={studentNameQuery}
+                            onChange={(e) => setStudentNameQuery(e.target.value)}
+                            placeholder="Ketik sebagian nama atau NISN siswa..."
+                            className="w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3.5 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="forgot-card-student"
+                          className="block text-xs font-medium text-slate-700 mb-1.5"
+                        >
+                          2. Pilih Nama Siswa
+                        </label>
+                        <select
+                          id="forgot-card-student"
+                          value={selectedStudentNis}
+                          onChange={(e) => setSelectedStudentNis(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                        >
+                          <option value="">
+                            {studentsInSelectedClass.length === 0
+                              ? 'Tidak ada siswa cocok dengan pencarian'
+                              : `-- Pilih Nama Siswa (${studentsInSelectedClass.length}) --`}
+                          </option>
+                          {studentsInSelectedClass.map((s) => {
+                            const rec = hasScannedOnDate(records, s.nis, today);
+                            const statusHint = !rec
+                              ? 'Belum Presensi'
+                              : rec.jam_pulang && rec.jam_pulang !== '-'
+                                ? `${rec.status} & Pulang (${rec.jam_pulang})`
+                                : isDualMode &&
+                                    (rec.status === 'Hadir' || rec.status === 'Terlambat')
+                                  ? `${rec.status} — Belum Pulang`
+                                  : rec.status;
+                            return (
+                              <option key={s.nis} value={s.nis}>
+                                {s.nama} ({s.nis}) — {statusHint}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={!selectedStudentNis}
+                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                      >
+                        <UserCheck className="h-4 w-4" aria-hidden="true" />
+                        <span>
+                          {effectiveScanAction === 'pulang'
+                            ? 'Catat Presensi Pulang Siswa'
+                            : 'Catat Presensi Siswa (Tanpa Kartu)'}
+                        </span>
+                      </button>
+                    </>
+                  )}
+                </form>
+              )}
+            </section>
+          )}
 
           {/* Latest Scan Result Feedback */}
           {lastOutcome && (
@@ -765,7 +846,7 @@ export function ScannerView({
                       {lastOutcome.student.nama}
                     </p>
                     <p className="text-xs text-slate-600 mt-0.5 font-mono tabular-nums">
-                      NIS {lastOutcome.student.nis} · {lastOutcome.student.kelas} ·{' '}
+                      NISN {lastOutcome.student.nis} · {lastOutcome.student.kelas} ·{' '}
                       {lastOutcome.scanType === 'pulang'
                         ? `Pulang ${lastOutcome.record.jam_pulang}`
                         : `Masuk ${lastOutcome.record.jam_masuk}`}
@@ -829,7 +910,7 @@ export function ScannerView({
                         </div>
                       ) : (
                         <p>
-                          {lastOutcome.student?.nama} (NIS{' '}
+                          {lastOutcome.student?.nama} (NISN{' '}
                           <span className="font-mono tabular-nums">{lastOutcome.nis}</span>) sudah tercatat{' '}
                           <span className="font-semibold">{lastOutcome.existingRecord?.status}</span> hari ini
                           {lastOutcome.existingRecord?.jam_masuk &&
@@ -860,7 +941,7 @@ export function ScannerView({
                         ? 'QR Code kosong atau tidak terbaca.'
                         : lastOutcome.reason === 'not_checked_in'
                           ? `${lastOutcome.student?.nama} belum melakukan scan masuk hari ini.`
-                          : `NIS "${lastOutcome.nis}" belum terdaftar di menu Data Siswa.`}
+                          : `NISN "${lastOutcome.nis}" belum terdaftar di menu Data Siswa.`}
                     </p>
                   </div>
                 </div>
@@ -868,71 +949,71 @@ export function ScannerView({
             </section>
           )}
         </div>
-      </div>
 
-      {/* Today's Scan Log */}
-      <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-        <div className="flex items-center justify-between gap-4 mb-4">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">
-              Log Presensi Hari Ini
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5 font-mono tabular-nums">
-              {todayRecords.length} siswa tercatat pada {today}
+        {/* Right Column: Today's Live Scan Log */}
+        <section className="lg:col-span-5 bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">
+                Log Presensi Hari Ini
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5 font-mono tabular-nums">
+                {todayRecords.length} siswa tercatat pada {today}
+              </p>
+            </div>
+          </div>
+
+          {todayRecords.length === 0 ? (
+            <p className="text-sm text-slate-500 py-8 text-center">
+              Belum ada catatan presensi pada hari ini.
             </p>
-          </div>
-        </div>
-
-        {todayRecords.length === 0 ? (
-          <p className="text-sm text-slate-500 py-6 text-center">
-            Belum ada catatan presensi pada hari ini.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
-                  <th className="py-2.5 pr-4">Jam Masuk</th>
-                  {showCheckoutColumn && <th className="py-2.5 px-4">Jam Pulang</th>}
-                  <th className="py-2.5 px-4">NIS</th>
-                  <th className="py-2.5 px-4">Nama Siswa</th>
-                  <th className="py-2.5 px-4">Kelas</th>
-                  <th className="py-2.5 pl-4 text-right">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-sm">
-                {todayRecords.map((rec) => (
-                  <tr key={rec.id} className="hover:bg-slate-50/70 transition-colors">
-                    <td className="py-2.5 pr-4 font-mono tabular-nums text-xs text-slate-600 whitespace-nowrap">
-                      {rec.jam_masuk}
-                    </td>
-                    {showCheckoutColumn && (
-                      <td className="py-2.5 px-4 text-xs text-slate-600">
-                        <div className="font-mono tabular-nums whitespace-nowrap">
-                          {rec.jam_pulang || '-'}
-                        </div>
-                        {rec.alasan_pulang_cepat && (
-                          <div className="text-[11px] text-amber-700 font-medium mt-0.5 max-w-[220px] truncate" title={rec.alasan_pulang_cepat}>
-                            Pulang cepat: {rec.alasan_pulang_cepat}
-                          </div>
-                        )}
-                      </td>
-                    )}
-                    <td className="py-2.5 px-4 font-mono tabular-nums text-xs font-medium text-slate-800 whitespace-nowrap">
-                      {rec.nis}
-                    </td>
-                    <td className="py-2.5 px-4 font-medium text-slate-900">{rec.nama}</td>
-                    <td className="py-2.5 px-4 text-slate-600 whitespace-nowrap">{rec.kelas}</td>
-                    <td className="py-2.5 pl-4 text-right">
-                      <StatusBadge status={rec.status} />
-                    </td>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500">
+                    <th className="py-2.5 pr-3">Masuk</th>
+                    {showCheckoutColumn && <th className="py-2.5 px-3">Pulang</th>}
+                    <th className="py-2.5 px-3">NISN</th>
+                    <th className="py-2.5 px-3">Nama Siswa</th>
+                    <th className="py-2.5 px-3">Kelas</th>
+                    <th className="py-2.5 pl-3 text-right">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-sm">
+                  {todayRecords.map((rec) => (
+                    <tr key={rec.id} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-2.5 pr-3 font-mono tabular-nums text-xs text-slate-600 whitespace-nowrap">
+                        {rec.jam_masuk}
+                      </td>
+                      {showCheckoutColumn && (
+                        <td className="py-2.5 px-3 text-xs text-slate-600">
+                          <div className="font-mono tabular-nums whitespace-nowrap">
+                            {rec.jam_pulang || '-'}
+                          </div>
+                          {rec.alasan_pulang_cepat && (
+                            <div className="text-[11px] text-amber-700 font-medium mt-0.5 max-w-[160px] truncate" title={rec.alasan_pulang_cepat}>
+                              Pulang cepat: {rec.alasan_pulang_cepat}
+                            </div>
+                          )}
+                        </td>
+                      )}
+                      <td className="py-2.5 px-3 font-mono tabular-nums text-xs font-medium text-slate-800 whitespace-nowrap">
+                        {rec.nis}
+                      </td>
+                      <td className="py-2.5 px-3 font-medium text-slate-900">{rec.nama}</td>
+                      <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap">{rec.kelas}</td>
+                      <td className="py-2.5 pl-3 text-right">
+                        <StatusBadge status={rec.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
 
       <EarlyCheckoutModal
         open={Boolean(pendingEarlyCheckout)}

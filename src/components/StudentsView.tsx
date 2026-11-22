@@ -229,7 +229,7 @@ export function StudentsView({
     };
 
     if (!cleaned.nis || !cleaned.nama || !cleaned.kelas) {
-      setFormError('NIS, Nama Lengkap, dan Kelas wajib diisi.');
+      setFormError('NISN, Nama Lengkap, dan Kelas wajib diisi.');
       return;
     }
 
@@ -358,8 +358,8 @@ export function StudentsView({
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              aria-label="Cari siswa berdasarkan NIS atau nama"
-              placeholder="Cari NIS atau nama siswa..."
+              aria-label="Cari siswa berdasarkan NISN atau nama"
+              placeholder="Cari NISN atau nama siswa..."
               className="w-full rounded-xl border border-slate-200 bg-slate-50/50 pl-10 pr-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
           </div>
@@ -555,7 +555,7 @@ export function StudentsView({
                       />
                     </th>
                   )}
-                  <th className={`py-3 ${showSelectionTools ? 'px-4' : 'pl-5 pr-4'}`}>NIS</th>
+                  <th className={`py-3 ${showSelectionTools ? 'px-4' : 'pl-5 pr-4'}`}>NISN</th>
                   <th className="py-3 px-4">Nama Siswa</th>
                   <th className="py-3 px-4">Kelas</th>
                   <th className="py-3 px-4">L/P</th>
@@ -698,7 +698,7 @@ export function StudentsView({
 
               <div>
                 <label htmlFor="field-nis" className="block text-xs font-medium text-slate-700 mb-1">
-                  NIS <span className="text-rose-600">*</span>
+                  NISN <span className="text-rose-600">*</span>
                 </label>
                 <input
                   id="field-nis"
@@ -825,7 +825,7 @@ export function StudentsView({
                 <div className="text-xs text-slate-600">
                   <p className="font-semibold text-slate-800">Format Kolom yang Didukung</p>
                   <p className="mt-0.5 font-mono text-[11px] text-slate-500">
-                    NIS, Nama, Kelas, Gender (L/P), No WA Ortu
+                    NISN, Nama, Kelas, Gender (L/P), No WA Ortu
                   </p>
                 </div>
                 <button
@@ -872,7 +872,7 @@ export function StudentsView({
                   </div>
                   {importResult.duplicates.length > 0 && (
                     <div className="flex items-center justify-between">
-                      <span className="text-slate-600">NIS duplikat dilewati:</span>
+                      <span className="text-slate-600">NISN duplikat dilewati:</span>
                       <span className="font-mono tabular-nums font-semibold text-amber-700">
                         {importResult.duplicates.length} ({importResult.duplicates.slice(0, 3).join(', ')})
                       </span>
@@ -1042,7 +1042,7 @@ export function StudentsView({
               Hapus Data Siswa?
             </h2>
             <p className="text-sm text-slate-600">
-              Siswa <span className="font-semibold text-slate-900">{deleteTarget.nama}</span> (NIS{' '}
+              Siswa <span className="font-semibold text-slate-900">{deleteTarget.nama}</span> (NISN{' '}
               <span className="font-mono tabular-nums">{deleteTarget.nis}</span>) akan dihapus dari daftar siswa.
             </p>
             <div className="flex items-center justify-end gap-2.5 pt-2">
@@ -1158,7 +1158,7 @@ export function StudentsView({
                     </p>
                     <div className="space-y-0.5 text-xs text-slate-500">
                       <p>
-                        NIS{' '}
+                        NISN{' '}
                         <span className="font-mono tabular-nums font-semibold text-slate-800 ml-1.5">
                           {ecardStudent.nis}
                         </span>
@@ -1227,7 +1227,7 @@ export function StudentsView({
                       {qrDataUrl ? (
                         <img
                           src={qrDataUrl}
-                          alt={`QR Code NIS ${ecardStudent.nis}`}
+                          alt={`QR Code NISN ${ecardStudent.nis}`}
                           className="h-32 w-32 object-contain"
                         />
                       ) : (
@@ -1237,7 +1237,7 @@ export function StudentsView({
                       )}
                     </div>
                     <p className="text-[10px] font-mono font-semibold text-slate-600 mt-1.5">
-                      NIS: {ecardStudent.nis}
+                      NISN: {ecardStudent.nis}
                     </p>
                   </div>
                 </div>

@@ -458,6 +458,180 @@ export function hydrateTimetableCellsFromSchedules(
   };
 }
 
+/**
+ * Synchronizes all TimetableConfigs from the authoritative TeacherSchedule list.
+ * Preserves each (tahun_ajaran, semester) config's bell schedule (jam mulai, durasi JP,
+ * jumlah JP, manual istirahat, custom classes) while rebuilding teacher-assigned cells
+ * so changes made in Mapel & Jadwal, Presensi Mapel Guru, or Cloud/Sheets appear
+ * automatically in Pengaturan Jadwal.
+ */
+export function syncTimetableConfigsFromSchedules(
+  configs: Record<string, TimetableConfig>,
+  schedules: TeacherSchedule[],
+  fallbackStartTime = '07:15'
+): Record<string, TimetableConfig> {
+  const next: Record<string, TimetableConfig> = {};
+
+  // Gather all (tahun_ajaran, semester) keys present in configs or schedules
+  const keyMeta = new Map<string, { tahun_ajaran: string; semester: SemesterKind }>();
+
+  for (const [k, cfg] of Object.entries(configs || {})) {
+    const tahunAjaran = resolveItemAcademicYear(cfg.tahun_ajaran);
+    const semester = normalizeSemester(cfg.semester, 'ganjil');
+    const normalizedKey = getTimetableConfigKey(tahunAjaran, semester) || k;
+    keyMeta.set(normalizedKey, { tahun_ajaran: tahunAjaran, semester });
+  }
+
+  for (const sch of schedules) {
+    const tahunAjaran = resolveItemAcademicYear(sch.tahun_ajaran);
+    const semester = normalizeSemester(sch.semester, 'ganjil');
+    const key = getTimetableConfigKey(tahunAjaran, semester);
+    if (!keyMeta.has(key)) {
+      keyMeta.set(key, { tahun_ajaran: tahunAjaran, semester });
+    }
+  }
+
+  for (const [key, meta] of keyMeta.entries()) {
+    const existing = configs[key];
+    const base: TimetableConfig = existing
+      ? {
+          ...existing,
+          tahun_ajaran: meta.tahun_ajaran,
+          semester: meta.semester,
+          istirahat: existing.istirahat.map((b) => ({ ...b })),
+          custom_classes: [...(existing.custom_classes || [])],
+          cells: { ...existing.cells },
+        }
+      : createDefaultTimetableConfig(
+          meta.tahun_ajaran,
+          meta.semester,
+          fallbackStartTime
+        );
+
+    const matchingSchedules = schedules.filter(
+      (s) =>
+        resolveItemAcademicYear(s.tahun_ajaran) === meta.tahun_ajaran &&
+        (!s.semester || normalizeSemester(s.semester, 'ganjil') === meta.semester)
+    );
+
+    // Automatically expand to 6 days if a Saturday schedule exists for this period
+    const hasSaturdaySchedule = matchingSchedules.some((s) => s.hari === 'Sabtu');
+    const adjustedBase: TimetableConfig =
+      hasSaturdaySchedule && base.jumlah_hari !== 6
+        ? { ...base, jumlah_hari: 6 }
+        : base;
+
+    // Rebuild all teacher-assigned cells from TeacherSchedules
+    const hydrated = hydrateTimetableCellsFromSchedules(
+      adjustedBase,
+      matchingSchedules,
+      true
+    );
+
+    // Preserve any incomplete draft cells (subject picked without teacher yet) if slot is still empty
+    const mergedCells: Record<string, TimetableCellValue> = { ...hydrated.cells };
+    if (existing) {
+      for (const [cellKey, cellVal] of Object.entries(existing.cells)) {
+        if (
+          cellVal?.mata_pelajaran?.trim() &&
+          !cellVal.teacher_user_id?.trim() &&
+          !mergedCells[cellKey]?.mata_pelajaran
+        ) {
+          mergedCells[cellKey] = { ...cellVal };
+        }
+      }
+    }
+
+    next[key] = {
+      ...hydrated,
+      cells: mergedCells,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  return next;
+}
+
+/**
+ * Updates subject names inside all TimetableConfig cells when a MasterSubject is renamed
+ * in Mapel & Jadwal so the matrix remains completely consistent.
+ */
+export function renameSubjectInTimetableConfigs(
+  configs: Record<string, TimetableConfig>,
+  oldSubjectName: string,
+  newSubjectName: string
+): Record<string, TimetableConfig> {
+  const oldNorm = oldSubjectName.trim().toLowerCase();
+  const nextName = newSubjectName.trim();
+  if (!oldNorm || !nextName || oldNorm === nextName.toLowerCase()) {
+    return configs;
+  }
+
+  let changedAny = false;
+  const out: Record<string, TimetableConfig> = {};
+
+  for (const [key, cfg] of Object.entries(configs || {})) {
+    let cfgChanged = false;
+    const nextCells: Record<string, TimetableCellValue> = {};
+    for (const [cellKey, cellVal] of Object.entries(cfg.cells || {})) {
+      if (cellVal?.mata_pelajaran?.trim().toLowerCase() === oldNorm) {
+        nextCells[cellKey] = { ...cellVal, mata_pelajaran: nextName };
+        cfgChanged = true;
+        changedAny = true;
+      } else {
+        nextCells[cellKey] = cellVal;
+      }
+    }
+    out[key] = cfgChanged
+      ? { ...cfg, cells: nextCells, updated_at: new Date().toISOString() }
+      : cfg;
+  }
+
+  return changedAny ? out : configs;
+}
+
+/**
+ * Maps a schedule's jam_mulai..jam_selesai to the matching lesson period range (Jam ke)
+ * in the active TimetableConfig so Mapel & Jadwal displays and edits slots in lockstep.
+ */
+export function findSlotRangeLabelForSchedule(
+  config: Pick<
+    TimetableConfig,
+    'jam_mulai_sekolah' | 'durasi_jp_menit' | 'jumlah_jp' | 'istirahat'
+  >,
+  jamMulai: string,
+  jamSelesai: string
+): { startJp: number; endJp: number; label: string } | null {
+  const schStart = parseTimeToMinutes(normalizeTimeHHMM(jamMulai, ''));
+  const schEnd = parseTimeToMinutes(normalizeTimeHHMM(jamSelesai, ''));
+  if (schStart === null || schEnd === null || schEnd <= schStart) return null;
+
+  const lessonSlots = generateDailyTimeSlots(config).filter(
+    (s): s is Extract<TimetableTimeSlot, { kind: 'lesson' }> => s.kind === 'lesson'
+  );
+  const matched: number[] = [];
+
+  for (const slot of lessonSlots) {
+    const slotStart = parseTimeToMinutes(slot.jam_mulai);
+    const slotEnd = parseTimeToMinutes(slot.jam_selesai);
+    if (slotStart === null || slotEnd === null) continue;
+    const overlap = Math.min(schEnd, slotEnd) - Math.max(schStart, slotStart);
+    const slotDur = slotEnd - slotStart;
+    if (overlap >= Math.min(15, Math.ceil(slotDur / 2))) {
+      matched.push(slot.jamKe);
+    }
+  }
+
+  if (matched.length === 0) return null;
+  const startJp = matched[0];
+  const endJp = matched[matched.length - 1];
+  return {
+    startJp,
+    endJp,
+    label: startJp === endJp ? `Jam ke-${startJp}` : `Jam ke-${startJp}–${endJp}`,
+  };
+}
+
 export function sanitizeTimetableConfigs(
   raw: unknown
 ): Record<string, TimetableConfig> {

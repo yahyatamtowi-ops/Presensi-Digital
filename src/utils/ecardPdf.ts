@@ -202,7 +202,7 @@ export async function generateECardsPdf(
     doc.setFont('courier', 'bold');
     doc.setFontSize(6.2);
     doc.setTextColor(71, 85, 105);
-    doc.text(`NIS: ${student.nis}`, rightColCenterX, qrY + qrSize + 4.2, { align: 'center' });
+    doc.text(`NISN: ${student.nis}`, rightColCenterX, qrY + qrSize + 4.2, { align: 'center' });
 
     // Student details on the left side of card body
     const infoX = x + 4.2;
@@ -220,10 +220,10 @@ export async function generateECardsPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(hasPrincipalSection ? 6.8 : 7.5);
     doc.setTextColor(100, 116, 139);
-    doc.text('NIS', infoX, afterNameY);
+    doc.text('NISN', infoX, afterNameY);
     doc.setFont('courier', 'bold');
     doc.setTextColor(15, 23, 42);
-    doc.text(student.nis, infoX + 8.8, afterNameY);
+    doc.text(student.nis, infoX + 9.5, afterNameY);
 
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(100, 116, 139);
