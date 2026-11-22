@@ -1,10 +1,13 @@
 import type { AttendanceRecord, SchoolSettings, Student } from '../types';
 import { getTodayDateString, shiftDateString } from './attendanceLogic';
 
+export const DEFAULT_APP_NAME = 'Presensi Digital';
+export const DEFAULT_SCHOOL_NAME = 'SMA Negeri 1 Kabun';
+export const DEFAULT_SCHOOL_LOGO = '/assets/aistudio/LOGO_SMANSA_3D_d5e941c9.png';
 export const DEFAULT_ACADEMIC_YEAR = '2026/2027';
 
 export const SEED_SETTINGS: SchoolSettings = {
-  nama_sekolah: 'SMA Negeri 1 Nusantara',
+  nama_sekolah: DEFAULT_SCHOOL_NAME,
   nama_kepala_sekolah: '',
   nip_kepala_sekolah: '',
   ttd_kepala_sekolah: '',
@@ -16,6 +19,7 @@ export const SEED_SETTINGS: SchoolSettings = {
   semester: 'ganjil',
   tema: 'indigo',
   script_url: '',
+  logo_sekolah: DEFAULT_SCHOOL_LOGO,
 };
 
 export const SEED_STUDENTS: Student[] = [

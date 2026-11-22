@@ -20,6 +20,8 @@ import {
   ArrowUp,
   BookOpen,
   CalendarDays,
+  Volume2,
+  WifiOff,
 } from 'lucide-react';
 import type {
   AuthSession,
@@ -29,7 +31,15 @@ import type {
   ToastMessage,
 } from '../types';
 import { canAccessTab } from '../utils/auth';
+import { DEFAULT_APP_NAME, DEFAULT_SCHOOL_LOGO } from '../utils/seedData';
 import { formatSemesterLabel } from '../utils/subjectAttendance';
+
+interface CloudSyncUiState {
+  connected: boolean;
+  syncing: boolean;
+  email: string | null;
+  onConnect: () => void;
+}
 
 interface LayoutShellProps {
   activeTab: TabId;
@@ -39,8 +49,12 @@ interface LayoutShellProps {
   onOpenLogin: () => void;
   onLogout: () => void;
   connectionStatus: ConnectionStatus;
+  isOnline?: boolean;
+  pendingSyncCount?: number;
   lastSyncedAt: string | null;
   onSyncNow: () => void;
+  onReplayVoice?: () => void;
+  cloudSync?: CloudSyncUiState;
   toasts: ToastMessage[];
   onDismissToast: (id: string) => void;
   children: ReactNode;
@@ -100,18 +114,40 @@ const TAB_TITLES: Record<TabId, { title: string; subtitle: string }> = {
   },
   pengaturan: {
     title: 'Pengaturan Sistem',
-    subtitle: 'Konfigurasi Google Apps Script, tahun ajaran, semester, tema aplikasi, jadwal scan QR, dan akun login',
+    subtitle: 'Konfigurasi Cloud Firebase, Google Sheets, tahun ajaran, semester, tema aplikasi, jadwal scan QR, dan akun login',
   },
 };
 
 function ConnectionPill({
   status,
+  isOnline = true,
+  pendingSyncCount = 0,
   lastSyncedAt,
+  cloudSync,
 }: {
   status: ConnectionStatus;
+  isOnline?: boolean;
+  pendingSyncCount?: number;
   lastSyncedAt: string | null;
+  cloudSync?: CloudSyncUiState;
 }) {
-  if (status === 'syncing') {
+  if (!isOnline) {
+    return (
+      <div
+        role="status"
+        data-testid="header-offline-pill"
+        title="Koneksi internet terputus. Presensi disimpan secara offline dan akan tersinkron otomatis saat terhubung kembali."
+        className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 whitespace-nowrap shrink-0"
+      >
+        <WifiOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span>
+          {pendingSyncCount > 0 ? `Offline · ${pendingSyncCount} Antrean` : 'Mode Offline'}
+        </span>
+      </div>
+    );
+  }
+
+  if (cloudSync?.syncing || status === 'syncing') {
     return (
       <div
         role="status"
@@ -119,6 +155,38 @@ function ConnectionPill({
       >
         <RefreshCw className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden="true" />
         <span>Sinkronisasi...</span>
+      </div>
+    );
+  }
+
+  if (pendingSyncCount > 0) {
+    return (
+      <div
+        role="status"
+        data-testid="header-pending-pill"
+        title={`${pendingSyncCount} data presensi/perubahan offline menunggu disinkronkan`}
+        className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 whitespace-nowrap shrink-0"
+      >
+        <RefreshCw className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span className="font-mono tabular-nums">{pendingSyncCount} Antrean Offline</span>
+      </div>
+    );
+  }
+
+  if (cloudSync?.connected) {
+    return (
+      <div
+        role="status"
+        title={
+          lastSyncedAt
+            ? `Cloud Firebase aktif (${cloudSync.email || 'Google'}) · Sinkron pukul ${lastSyncedAt}`
+            : `Cloud Firebase aktif (${cloudSync.email || 'Google'})`
+        }
+        className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 whitespace-nowrap shrink-0"
+      >
+        <Cloud className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span className="hidden sm:inline">Cloud Aktif (Real-Time)</span>
+        <span className="sm:hidden">Cloud Aktif</span>
       </div>
     );
   }
@@ -156,8 +224,8 @@ function ConnectionPill({
       className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 whitespace-nowrap shrink-0"
     >
       <CloudOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-      <span className="hidden sm:inline">Mode Offline/Cache</span>
-      <span className="sm:hidden">Offline</span>
+      <span className="hidden sm:inline">Mode Lokal</span>
+      <span className="sm:hidden">Lokal</span>
     </div>
   );
 }
@@ -170,8 +238,12 @@ export function LayoutShell({
   onOpenLogin,
   onLogout,
   connectionStatus,
+  isOnline = true,
+  pendingSyncCount = 0,
   lastSyncedAt,
   onSyncNow,
+  onReplayVoice,
+  cloudSync,
   toasts,
   onDismissToast,
   children,
@@ -254,19 +326,15 @@ export function LayoutShell({
         className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-white border-r border-slate-200/90 z-30"
       >
         <div className="h-16 px-5 flex items-center gap-3 border-b border-slate-200/80">
-          <div className="h-9 w-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 overflow-hidden">
-            {settings.logo_sekolah ? (
-              <img
-                src={settings.logo_sekolah}
-                alt={`Logo ${settings.nama_sekolah}`}
-                className="h-full w-full object-contain bg-white p-0.5 rounded-xl border border-slate-200"
-              />
-            ) : (
-              <QrCode className="h-5 w-5" aria-hidden="true" />
-            )}
+          <div className="h-9 w-9 rounded-xl bg-white border border-slate-200 flex items-center justify-center shrink-0 overflow-hidden p-0.5">
+            <img
+              src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
+              alt={`Logo ${settings.nama_sekolah}`}
+              className="h-full w-full object-contain rounded-lg"
+            />
           </div>
           <span className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap">
-            PresensiQR
+            {DEFAULT_APP_NAME}
           </span>
         </div>
 
@@ -371,16 +439,12 @@ export function LayoutShell({
         {/* Top Bar */}
         <header className="sticky top-0 z-20 h-14 lg:h-16 bg-white/95 backdrop-blur-sm border-b border-slate-200/80 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3">
           <div className="min-w-0 flex items-center gap-3">
-            <div className="lg:hidden h-8 w-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 overflow-hidden">
-              {settings.logo_sekolah ? (
-                <img
-                  src={settings.logo_sekolah}
-                  alt={`Logo ${settings.nama_sekolah}`}
-                  className="h-full w-full object-contain bg-white p-0.5 rounded-lg"
-                />
-              ) : (
-                <QrCode className="h-4.5 w-4.5" aria-hidden="true" />
-              )}
+            <div className="lg:hidden h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center shrink-0 overflow-hidden p-0.5">
+              <img
+                src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
+                alt={`Logo ${settings.nama_sekolah}`}
+                className="h-full w-full object-contain rounded-md"
+              />
             </div>
             <div className="min-w-0">
               <h1 className="text-base sm:text-lg font-semibold text-slate-900 truncate">
@@ -393,22 +457,55 @@ export function LayoutShell({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <ConnectionPill status={connectionStatus} lastSyncedAt={lastSyncedAt} />
-            <button
-              type="button"
-              onClick={onSyncNow}
-              disabled={connectionStatus === 'syncing'}
-              aria-label="Sinkronkan data dengan Google Sheets"
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-            >
-              <RefreshCw
-                className={`h-3.5 w-3.5 shrink-0 ${
-                  connectionStatus === 'syncing' ? 'animate-spin' : ''
-                }`}
-                aria-hidden="true"
-              />
-              <span className="hidden sm:inline">Sinkronkan</span>
-            </button>
+            <ConnectionPill
+              status={connectionStatus}
+              isOnline={isOnline}
+              pendingSyncCount={pendingSyncCount}
+              lastSyncedAt={lastSyncedAt}
+              cloudSync={cloudSync}
+            />
+            {cloudSync && !cloudSync.connected ? (
+              <button
+                type="button"
+                onClick={cloudSync.onConnect}
+                disabled={cloudSync.syncing}
+                aria-label="Hubungkan Cloud Firebase untuk sinkronisasi lintas perangkat"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                <Cloud className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className="hidden sm:inline">Hubungkan Cloud</span>
+                <span className="sm:hidden">Cloud</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onSyncNow}
+                disabled={connectionStatus === 'syncing' || cloudSync?.syncing}
+                aria-label="Sinkronkan data sekarang"
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 shrink-0 ${
+                    connectionStatus === 'syncing' || cloudSync?.syncing ? 'animate-spin' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+                <span className="hidden sm:inline">Sinkronkan</span>
+              </button>
+            )}
+
+            {/* Top-right Voice Activation / Test Button (especially helpful on Tablet & HP) */}
+            {onReplayVoice && (
+              <button
+                type="button"
+                onClick={onReplayVoice}
+                aria-label="Aktifkan atau putar suara sambutan perempuan"
+                title="Aktifkan / Putar Suara"
+                className="inline-flex items-center justify-center p-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-indigo-700 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                <Volume2 className="h-4 w-4" aria-hidden="true" />
+              </button>
+            )}
 
             {/* Top-right Fullscreen Button */}
             <button

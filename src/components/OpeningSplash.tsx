@@ -1,18 +1,29 @@
-import { useEffect, useState } from 'react';
-import { QrCode } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import type { SchoolSettings } from '../types';
+import { DEFAULT_SCHOOL_LOGO } from '../utils/seedData';
+import { unlockSpeechForMobile } from '../utils/sound';
 
 interface OpeningSplashProps {
   settings: SchoolSettings;
-  onFinish: () => void;
+  onFinish: (fromUserGesture?: boolean) => void;
 }
 
 export function OpeningSplash({ settings, onFinish }: OpeningSplashProps) {
   const [fadingOut, setFadingOut] = useState(false);
+  const finishedRef = useRef(false);
+
+  const finishOnce = (fromUserGesture: boolean) => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    if (fromUserGesture) {
+      unlockSpeechForMobile();
+    }
+    onFinish(fromUserGesture);
+  };
 
   useEffect(() => {
     const fadeTimer = setTimeout(() => setFadingOut(true), 1750);
-    const doneTimer = setTimeout(() => onFinish(), 2150);
+    const doneTimer = setTimeout(() => finishOnce(false), 2150);
     return () => {
       clearTimeout(fadeTimer);
       clearTimeout(doneTimer);
@@ -23,21 +34,18 @@ export function OpeningSplash({ settings, onFinish }: OpeningSplashProps) {
     <div
       role="status"
       aria-label={`Memuat Presensi Digital Siswa ${settings.nama_sekolah}`}
-      className={`fixed inset-0 z-[100] bg-slate-950 text-white flex flex-col items-center justify-center px-6 transition-opacity duration-400 ${
+      onClick={() => finishOnce(true)}
+      className={`fixed inset-0 z-[100] bg-slate-950 text-white flex flex-col items-center justify-center px-6 transition-opacity duration-400 cursor-pointer ${
         fadingOut ? 'opacity-0 pointer-events-none' : 'opacity-100'
       }`}
     >
       <div className="animate-splash-rise flex flex-col items-center text-center max-w-xl">
-        <div className="h-20 w-20 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center p-2.5 mb-6 shadow-2xl overflow-hidden">
-          {settings.logo_sekolah ? (
-            <img
-              src={settings.logo_sekolah}
-              alt={`Logo ${settings.nama_sekolah}`}
-              className="h-full w-full object-contain rounded-xl"
-            />
-          ) : (
-            <QrCode className="h-10 w-10 text-indigo-400" aria-hidden="true" />
-          )}
+        <div className="h-24 w-24 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center p-2.5 mb-6 shadow-2xl overflow-hidden">
+          <img
+            src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
+            alt={`Logo ${settings.nama_sekolah}`}
+            className="h-full w-full object-contain rounded-xl"
+          />
         </div>
 
         <p className="text-xs sm:text-sm font-semibold tracking-[0.22em] text-indigo-300 uppercase">
@@ -53,10 +61,13 @@ export function OpeningSplash({ settings, onFinish }: OpeningSplashProps) {
 
         <button
           type="button"
-          onClick={onFinish}
-          className="mt-6 text-xs font-medium text-slate-400 hover:text-white transition-colors px-3 py-1.5 rounded-lg"
+          onClick={(e) => {
+            e.stopPropagation();
+            finishOnce(true);
+          }}
+          className="mt-6 text-xs font-medium text-slate-300 hover:text-white transition-colors px-3 py-1.5 rounded-lg"
         >
-          Lewati animasi
+          Ketuk untuk masuk &amp; aktifkan suara
         </button>
       </div>
     </div>

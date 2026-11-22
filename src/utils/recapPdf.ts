@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import type { RecapPeriodType, SchoolSettings } from '../types';
 import type { DailyRecapRow, PeriodSummaryRow } from './attendanceLogic';
 import { getThemeAccentRgb, loadImageAsDataUrlAndDims } from './ecardPdf';
+import { DEFAULT_SCHOOL_LOGO } from './seedData';
 
 export const RECAP_PDF_F4_CONFIG = {
   orientation: 'portrait' as const,
@@ -106,9 +107,9 @@ export async function generateRecapPdf(
 
   const [accentR, accentG, accentB] = getThemeAccentRgb(settings.tema);
 
-  const logoImg = settings.logo_sekolah
-    ? await loadImageAsDataUrlAndDims(settings.logo_sekolah)
-    : null;
+  const logoImg = await loadImageAsDataUrlAndDims(
+    settings.logo_sekolah || DEFAULT_SCHOOL_LOGO
+  );
 
   function drawHeader() {
     doc.setFillColor(accentR, accentG, accentB);

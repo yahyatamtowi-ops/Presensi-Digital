@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Download, Eye, FileText, Printer, QrCode, X } from 'lucide-react';
 import type { SchoolSettings, Student } from '../types';
+import { DEFAULT_SCHOOL_LOGO } from '../utils/seedData';
 
 interface PdfPreviewModalProps {
   open: boolean;
@@ -127,15 +128,13 @@ export function PdfPreviewModal({
                       >
                         {/* Indigo Card Header */}
                         <div className="bg-indigo-600 px-3.5 py-2.5 text-white flex items-center gap-2.5">
-                          {settings.logo_sekolah && (
-                            <div className="h-8 w-8 rounded-md bg-white p-0.5 shrink-0 flex items-center justify-center">
-                              <img
-                                src={settings.logo_sekolah}
-                                alt={`Logo ${settings.nama_sekolah}`}
-                                className="h-full w-full object-contain"
-                              />
-                            </div>
-                          )}
+                          <div className="h-8 w-8 rounded-md bg-white p-0.5 shrink-0 flex items-center justify-center">
+                            <img
+                              src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
+                              alt={`Logo ${settings.nama_sekolah}`}
+                              className="h-full w-full object-contain"
+                            />
+                          </div>
                           <div className="min-w-0">
                             <p className="text-[9px] font-medium tracking-wide uppercase text-indigo-100">
                               Kartu Tanda Siswa Elektronik

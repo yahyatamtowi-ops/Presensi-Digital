@@ -1,0 +1,456 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all (Pillar 0)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Helper Functions
+    // =========================================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'tamtowiyahya65@gmail.com' ||
+        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    function isSchoolOwner(schoolId) {
+      return isVerifiedUser() &&
+        isValidId(schoolId) &&
+        schoolId == request.auth.uid &&
+        exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+        get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerId == request.auth.uid;
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidTimeHHMM(val) {
+      return val is string && val.size() == 5 && val.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$');
+    }
+
+    function isValidDateYMD(val) {
+      return val is string && val.size() == 10 && val.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$');
+    }
+
+    function isValidOptionalHttpsUrl(val, maxLen) {
+      return val is string && val.size() <= maxLen && (val == '' || val.matches('^https://.+'));
+    }
+
+    function isValidAttendanceStatus(val) {
+      return val in ['Hadir', 'Terlambat', 'Sakit', 'Izin', 'Alpa'];
+    }
+
+    function isValidDayOfWeek(val) {
+      return val in ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'];
+    }
+
+    function isValidSemester(val) {
+      return val in ['ganjil', 'genap'];
+    }
+
+    function isValidRole(val) {
+      return val in ['master_admin', 'kepala_sekolah', 'wali_kelas', 'guru'];
+    }
+
+    // =========================================================================
+    // Entity Schema Validators (Strict Field Allowlists & Bounds)
+    // =========================================================================
+
+    function isValidSchoolConfig(data, schoolId) {
+      return data.keys().hasAll([
+          'ownerId', 'nama_sekolah', 'nama_kepala_sekolah', 'nip_kepala_sekolah',
+          'ttd_kepala_sekolah', 'cap_sekolah', 'logo_sekolah', 'batas_jam_masuk',
+          'mode_presensi', 'jam_pulang_standar', 'tahun_ajaran', 'semester',
+          'tema', 'script_url', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'nama_sekolah', 'nama_kepala_sekolah', 'nip_kepala_sekolah',
+          'ttd_kepala_sekolah', 'cap_sekolah', 'logo_sekolah', 'batas_jam_masuk',
+          'mode_presensi', 'jam_pulang_standar', 'tahun_ajaran', 'semester',
+          'tema', 'script_url', 'createdAt', 'updatedAt'
+        ]) &&
+        data.ownerId == schoolId &&
+        isValidId(data.ownerId) &&
+        isValidString(data.nama_sekolah, 1, 200) &&
+        isValidString(data.nama_kepala_sekolah, 0, 160) &&
+        isValidString(data.nip_kepala_sekolah, 0, 64) &&
+        isValidString(data.ttd_kepala_sekolah, 0, 150000) &&
+        isValidString(data.cap_sekolah, 0, 150000) &&
+        isValidString(data.logo_sekolah, 0, 150000) &&
+        isValidTimeHHMM(data.batas_jam_masuk) &&
+        data.mode_presensi in ['masuk_saja', 'masuk_pulang'] &&
+        isValidTimeHHMM(data.jam_pulang_standar) &&
+        isValidString(data.tahun_ajaran, 4, 32) &&
+        isValidSemester(data.semester) &&
+        isValidString(data.tema, 1, 32) &&
+        isValidOptionalHttpsUrl(data.script_url, 500) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStudentRecord(data, schoolId) {
+      return data.keys().hasAll([
+          'ownerId', 'nis', 'nama', 'kelas', 'gender',
+          'no_wa_ortu', 'tahun_ajaran', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'nis', 'nama', 'kelas', 'gender',
+          'no_wa_ortu', 'tahun_ajaran', 'updatedAt'
+        ]) &&
+        data.ownerId == schoolId &&
+        isValidId(data.ownerId) &&
+        isValidString(data.nis, 1, 64) &&
+        isValidString(data.nama, 1, 160) &&
+        isValidString(data.kelas, 1, 64) &&
+        data.gender in ['L', 'P'] &&
+        isValidString(data.no_wa_ortu, 0, 32) &&
+        isValidString(data.tahun_ajaran, 4, 32) &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidAttendanceRecord(data, schoolId) {
+      return data.keys().hasAll([
+          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk',
+          'jam_pulang', 'alasan_pulang_cepat', 'status', 'keterangan',
+          'tahun_ajaran', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk',
+          'jam_pulang', 'alasan_pulang_cepat', 'status', 'keterangan',
+          'tahun_ajaran', 'updatedAt'
+        ]) &&
+        data.ownerId == schoolId &&
+        isValidId(data.ownerId) &&
+        isValidString(data.id, 1, 128) &&
+        isValidDateYMD(data.tanggal) &&
+        isValidString(data.nis, 1, 64) &&
+        isValidString(data.nama, 1, 160) &&
+        isValidString(data.kelas, 1, 64) &&
+        isValidString(data.jam_masuk, 1, 16) &&
+        isValidString(data.jam_pulang, 0, 16) &&
+        isValidString(data.alasan_pulang_cepat, 0, 300) &&
+        isValidAttendanceStatus(data.status) &&
+        isValidString(data.keterangan, 0, 400) &&
+        isValidString(data.tahun_ajaran, 4, 32) &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidMasterSubject(data, schoolId) {
+      return data.keys().hasAll([
+          'ownerId', 'id', 'kode', 'nama', 'deskripsi', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'id', 'kode', 'nama', 'deskripsi', 'updatedAt'
+        ]) &&
+        data.ownerId == schoolId &&
+        isValidId(data.ownerId) &&
+        isValidString(data.id, 1, 128) &&
+        isValidString(data.kode, 1, 32) &&
+        isValidString(data.nama, 1, 120) &&
+        isValidString(data.deskripsi, 0, 300) &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidTeacherSchedule(data, schoolId) {
+      return data.keys().hasAll([
+          'ownerId', 'id', 'hari', 'teacher_user_id', 'teacher_name', 'kelas',
+          'mata_pelajaran', 'jam_mulai', 'jam_selesai', 'tahun_ajaran',
+          'semester', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'id', 'hari', 'teacher_user_id', 'teacher_name', 'kelas',
+          'mata_pelajaran', 'jam_mulai', 'jam_selesai', 'tahun_ajaran',
+          'semester', 'updatedAt'
+        ]) &&
+        data.ownerId == schoolId &&
+        isValidId(data.ownerId) &&
+        isValidString(data.id, 1, 128) &&
+        isValidDayOfWeek(data.hari) &&
+        isValidString(data.teacher_user_id, 1, 128) &&
+        isValidString(data.teacher_name, 1, 160) &&
+        isValidString(data.kelas, 1, 64) &&
+        isValidString(data.mata_pelajaran, 1, 120) &&
+        isValidTimeHHMM(data.jam_mulai) &&
+        isValidTimeHHMM(data.jam_selesai) &&
+        isValidString(data.tahun_ajaran, 4, 32) &&
+        isValidSemester(data.semester) &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidSubjectAssignment(data, schoolId) {
+      return data.keys().hasAll([
+          'ownerId', 'id', 'teacher_user_id', 'teacher_name', 'kelas',
+          'mata_pelajaran', 'hari', 'jam_mulai', 'jam_selesai',
+          'tahun_ajaran', 'semester', 'source', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'id', 'teacher_user_id', 'teacher_name', 'kelas',
+          'mata_pelajaran', 'hari', 'jam_mulai', 'jam_selesai',
+          'tahun_ajaran', 'semester', 'source', 'updatedAt'
+        ]) &&
+        data.ownerId == schoolId &&
+        isValidId(data.ownerId) &&
+        isValidString(data.id, 1, 128) &&
+        isValidString(data.teacher_user_id, 1, 128) &&
+        isValidString(data.teacher_name, 1, 160) &&
+        isValidString(data.kelas, 1, 64) &&
+        isValidString(data.mata_pelajaran, 1, 120) &&
+        isValidString(data.hari, 0, 16) &&
+        isValidString(data.jam_mulai, 0, 8) &&
+        isValidString(data.jam_selesai, 0, 8) &&
+        isValidString(data.tahun_ajaran, 4, 32) &&
+        isValidSemester(data.semester) &&
+        data.source in ['schedule', 'manual', 'record'] &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidSubjectAttendanceRecord(data, schoolId) {
+      return data.keys().hasAll([
+          'ownerId', 'id', 'assignment_id', 'tanggal', 'kelas',
+          'mata_pelajaran', 'teacher_user_id', 'teacher_name', 'nis',
+          'nama', 'jam_masuk', 'status', 'keterangan', 'tahun_ajaran',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'id', 'assignment_id', 'tanggal', 'kelas',
+          'mata_pelajaran', 'teacher_user_id', 'teacher_name', 'nis',
+          'nama', 'jam_masuk', 'status', 'keterangan', 'tahun_ajaran',
+          'updatedAt'
+        ]) &&
+        data.ownerId == schoolId &&
+        isValidId(data.ownerId) &&
+        isValidString(data.id, 1, 128) &&
+        isValidString(data.assignment_id, 1, 128) &&
+        isValidDateYMD(data.tanggal) &&
+        isValidString(data.kelas, 1, 64) &&
+        isValidString(data.mata_pelajaran, 1, 120) &&
+        isValidString(data.teacher_user_id, 1, 128) &&
+        isValidString(data.teacher_name, 1, 160) &&
+        isValidString(data.nis, 1, 64) &&
+        isValidString(data.nama, 1, 160) &&
+        isValidString(data.jam_masuk, 1, 16) &&
+        isValidAttendanceStatus(data.status) &&
+        isValidString(data.keterangan, 0, 400) &&
+        isValidString(data.tahun_ajaran, 4, 32) &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidAppUserAccount(data, schoolId) {
+      return data.keys().hasAll([
+          'ownerId', 'id', 'username', 'password', 'nama', 'nip',
+          'role', 'jabatan', 'kelas_binaan', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'id', 'username', 'password', 'nama', 'nip',
+          'role', 'jabatan', 'kelas_binaan', 'updatedAt'
+        ]) &&
+        data.ownerId == schoolId &&
+        isValidId(data.ownerId) &&
+        isValidString(data.id, 1, 128) &&
+        isValidString(data.username, 1, 64) &&
+        isValidString(data.password, 1, 128) &&
+        isValidString(data.nama, 1, 160) &&
+        isValidString(data.nip, 0, 64) &&
+        isValidRole(data.role) &&
+        isValidString(data.jabatan, 1, 120) &&
+        isValidString(data.kelas_binaan, 0, 64) &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidAdminRole(data) {
+      return data.keys().hasAll(['role', 'email', 'createdAt']) &&
+        data.keys().hasOnly(['role', 'email', 'createdAt']) &&
+        data.role == 'admin' &&
+        isValidString(data.email, 3, 200) &&
+        data.createdAt == request.time;
+    }
+
+    // =========================================================================
+    // Admins Collection
+    // =========================================================================
+
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && isVerifiedUser() && (request.auth.uid == adminId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(adminId) && isAdmin() && isValidAdminRole(request.resource.data);
+      allow update: if false;
+      allow delete: if isValidId(adminId) && isAdmin();
+    }
+
+    // =========================================================================
+    // School Workspaces & Subcollections
+    // =========================================================================
+
+    match /schools/{schoolId} {
+      allow get: if isValidId(schoolId) && isVerifiedUser() && (schoolId == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(schoolId) &&
+        isVerifiedUser() &&
+        (schoolId == request.auth.uid || isAdmin()) &&
+        isValidSchoolConfig(request.resource.data, schoolId) &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time;
+      allow update: if isValidId(schoolId) &&
+        isVerifiedUser() &&
+        (resource.data.ownerId == request.auth.uid || isAdmin()) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'nama_sekolah', 'nama_kepala_sekolah', 'nip_kepala_sekolah',
+          'ttd_kepala_sekolah', 'cap_sekolah', 'logo_sekolah', 'batas_jam_masuk',
+          'mode_presensi', 'jam_pulang_standar', 'tahun_ajaran', 'semester',
+          'tema', 'script_url', 'updatedAt'
+        ]) &&
+        isValidSchoolConfig(request.resource.data, schoolId);
+      allow delete: if isValidId(schoolId) && isAdmin();
+
+      // Students (PII: no_wa_ortu -> strictly owner or admin)
+      match /students/{studentId} {
+        allow get: if isValidId(schoolId) && isValidId(studentId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isValidId(schoolId) && isValidId(studentId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          isValidStudentRecord(request.resource.data, schoolId);
+        allow update: if isValidId(schoolId) && isValidId(studentId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          request.resource.data.ownerId == resource.data.ownerId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'nis', 'nama', 'kelas', 'gender', 'no_wa_ortu', 'tahun_ajaran', 'updatedAt'
+          ]) &&
+          isValidStudentRecord(request.resource.data, schoolId);
+        allow delete: if isValidId(schoolId) && isValidId(studentId) && (isSchoolOwner(schoolId) || isAdmin());
+      }
+
+      // Daily Attendance Records
+      match /attendance/{recordId} {
+        allow get: if isValidId(schoolId) && isValidId(recordId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isValidId(schoolId) && isValidId(recordId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          isValidAttendanceRecord(request.resource.data, schoolId);
+        allow update: if isValidId(schoolId) && isValidId(recordId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          request.resource.data.ownerId == resource.data.ownerId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk', 'jam_pulang',
+            'alasan_pulang_cepat', 'status', 'keterangan', 'tahun_ajaran', 'updatedAt'
+          ]) &&
+          isValidAttendanceRecord(request.resource.data, schoolId);
+        allow delete: if isValidId(schoolId) && isValidId(recordId) && (isSchoolOwner(schoolId) || isAdmin());
+      }
+
+      // Master Subjects
+      match /subjects/{subjectId} {
+        allow get: if isValidId(schoolId) && isValidId(subjectId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isValidId(schoolId) && isValidId(subjectId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          isValidMasterSubject(request.resource.data, schoolId);
+        allow update: if isValidId(schoolId) && isValidId(subjectId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          request.resource.data.ownerId == resource.data.ownerId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'id', 'kode', 'nama', 'deskripsi', 'updatedAt'
+          ]) &&
+          isValidMasterSubject(request.resource.data, schoolId);
+        allow delete: if isValidId(schoolId) && isValidId(subjectId) && (isSchoolOwner(schoolId) || isAdmin());
+      }
+
+      // Teacher Schedules
+      match /schedules/{scheduleId} {
+        allow get: if isValidId(schoolId) && isValidId(scheduleId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isValidId(schoolId) && isValidId(scheduleId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          isValidTeacherSchedule(request.resource.data, schoolId);
+        allow update: if isValidId(schoolId) && isValidId(scheduleId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          request.resource.data.ownerId == resource.data.ownerId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'id', 'hari', 'teacher_user_id', 'teacher_name', 'kelas',
+            'mata_pelajaran', 'jam_mulai', 'jam_selesai', 'tahun_ajaran',
+            'semester', 'updatedAt'
+          ]) &&
+          isValidTeacherSchedule(request.resource.data, schoolId);
+        allow delete: if isValidId(schoolId) && isValidId(scheduleId) && (isSchoolOwner(schoolId) || isAdmin());
+      }
+
+      // Subject Assignments
+      match /subjectAssignments/{assignmentId} {
+        allow get: if isValidId(schoolId) && isValidId(assignmentId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isValidId(schoolId) && isValidId(assignmentId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          isValidSubjectAssignment(request.resource.data, schoolId);
+        allow update: if isValidId(schoolId) && isValidId(assignmentId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          request.resource.data.ownerId == resource.data.ownerId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'id', 'teacher_user_id', 'teacher_name', 'kelas', 'mata_pelajaran',
+            'hari', 'jam_mulai', 'jam_selesai', 'tahun_ajaran', 'semester',
+            'source', 'updatedAt'
+          ]) &&
+          isValidSubjectAssignment(request.resource.data, schoolId);
+        allow delete: if isValidId(schoolId) && isValidId(assignmentId) && (isSchoolOwner(schoolId) || isAdmin());
+      }
+
+      // Subject Attendance Records
+      match /subjectRecords/{recordId} {
+        allow get: if isValidId(schoolId) && isValidId(recordId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isValidId(schoolId) && isValidId(recordId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          isValidSubjectAttendanceRecord(request.resource.data, schoolId);
+        allow update: if isValidId(schoolId) && isValidId(recordId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          request.resource.data.ownerId == resource.data.ownerId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'id', 'assignment_id', 'tanggal', 'kelas', 'mata_pelajaran',
+            'teacher_user_id', 'teacher_name', 'nis', 'nama', 'jam_masuk',
+            'status', 'keterangan', 'tahun_ajaran', 'updatedAt'
+          ]) &&
+          isValidSubjectAttendanceRecord(request.resource.data, schoolId);
+        allow delete: if isValidId(schoolId) && isValidId(recordId) && (isSchoolOwner(schoolId) || isAdmin());
+      }
+
+      // Internal App Role Accounts (PII / Credentials -> strictly owner or admin)
+      match /accounts/{accountId} {
+        allow get: if isValidId(schoolId) && isValidId(accountId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isValidId(schoolId) && isValidId(accountId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          isValidAppUserAccount(request.resource.data, schoolId);
+        allow update: if isValidId(schoolId) && isValidId(accountId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          request.resource.data.ownerId == resource.data.ownerId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'id', 'username', 'password', 'nama', 'nip', 'role',
+            'jabatan', 'kelas_binaan', 'updatedAt'
+          ]) &&
+          isValidAppUserAccount(request.resource.data, schoolId);
+        allow delete: if isValidId(schoolId) && isValidId(accountId) && (isSchoolOwner(schoolId) || isAdmin());
+      }
+    }
+  }
+}

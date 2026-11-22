@@ -33,6 +33,8 @@ import {
   Building2,
   PenTool,
   Stamp,
+  Database,
+  ExternalLink,
 } from 'lucide-react';
 import type {
   AppThemeId,
@@ -52,8 +54,29 @@ import {
   type LastBackupMeta,
 } from '../utils/backupStorage';
 import { DEFAULT_SCRIPT_URL, GOOGLE_APPS_SCRIPT_TEMPLATE } from '../utils/gasApi';
+import { DEFAULT_SCHOOL_LOGO, DEFAULT_SCHOOL_NAME } from '../utils/seedData';
 import { normalizeSemester, validateTransparentPngFile } from '../utils/subjectAttendance';
 import { normalizeThemeId, THEME_PRESETS } from '../utils/themes';
+
+import {
+  formatBytesReadable,
+  type FirestoreQuotaSnapshot,
+  type QuotaMetricSummary,
+} from '../utils/firestoreUsage';
+import firebaseConfig from '../../firebase-applet-config.json';
+
+interface CloudSyncSettingsProps {
+  connected: boolean;
+  syncing: boolean;
+  email: string | null;
+  displayName: string | null;
+  lastSyncedAt: string | null;
+  quota: FirestoreQuotaSnapshot;
+  onResetLocalQuota: () => void;
+  onConnect: () => Promise<void>;
+  onDisconnect: () => Promise<void>;
+  onPushLocalToCloud: () => Promise<void>;
+}
 
 interface SettingsViewProps {
   settings: SchoolSettings;
@@ -62,11 +85,18 @@ interface SettingsViewProps {
   totalStudentsCount: number;
   totalRecordsCount: number;
   connectionStatus: ConnectionStatus;
+  isOnline?: boolean;
   pendingSyncCount?: number;
+  syncingQueue?: boolean;
+  onFlushOfflineQueue?: () => Promise<void> | void;
+  sheetsSupportsAkun?: boolean | null;
+  cloudSync?: CloudSyncSettingsProps;
   onSaveSettings: (newSettings: SchoolSettings) => Promise<void>;
   onSetDefaultIdentity: (namaSekolah: string, logoSekolah?: string) => void;
   onPreviewTheme: (tema: AppThemeId) => void;
-  onUpdateAccounts: (nextAccounts: UserAccount[]) => void;
+  onUpdateAccounts: (nextAccounts: UserAccount[]) => Promise<void> | void;
+  onPushAccountsToSheets?: () => Promise<void>;
+  onPullAccountsFromSheets?: () => Promise<void>;
   onTestAndSync: (scriptUrl: string) => Promise<void>;
   onPushAllToSheets: (scriptUrl: string) => Promise<void>;
   onSaveBackupToComputer: () => Promise<LastBackupMeta | null>;
@@ -117,15 +147,15 @@ const SETTINGS_SUBMENUS: Array<{
   },
   {
     id: 'koneksi',
-    label: 'Koneksi Sheets',
-    desc: 'URL Apps Script & Code.gs',
+    label: 'Cloud & Sheets',
+    desc: 'Sinkron Firebase & Sheets',
     Icon: Cloud,
     usesFormSave: true,
   },
   {
     id: 'akun',
     label: 'Akun & Akses',
-    desc: 'Admin, Wali Kelas & Guru',
+    desc: 'Admin, Kepsek, Wali Kelas & Guru',
     Icon: ShieldCheck,
     usesFormSave: false,
   },
@@ -146,7 +176,11 @@ const ACADEMIC_YEAR_PRESETS = [
   '2028/2029',
 ];
 
-function resizeLogoFileToDataUrl(file: File): Promise<string> {
+function resizeLogoFileToDataUrl(
+  file: File,
+  maxSize = 240,
+  maxChars = 42000
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -157,21 +191,70 @@ function resizeLogoFileToDataUrl(file: File): Promise<string> {
       }
       const img = new Image();
       img.onload = () => {
-        const maxSize = 256;
-        const ratio = Math.min(1, maxSize / Math.max(img.width, img.height));
-        const w = Math.max(1, Math.round(img.width * ratio));
-        const h = Math.max(1, Math.round(img.height * ratio));
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(result);
+        const naturalW = img.naturalWidth || img.width || 128;
+        const naturalH = img.naturalHeight || img.height || 128;
+        let targetMax = maxSize;
+        let bestDataUrl = '';
+
+        // Step 1: Try transparent PNG with progressive downscaling so logo stays crisp and <= 42k chars
+        // (guarantees safe storage in localStorage, Google Sheets 50k cell limit, and Firestore)
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const ratio = Math.min(1, targetMax / Math.max(naturalW, naturalH));
+          const w = Math.max(1, Math.round(naturalW * ratio));
+          const h = Math.max(1, Math.round(naturalH * ratio));
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(result.length <= maxChars ? result : '');
+            return;
+          }
+          ctx.clearRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+          bestDataUrl = canvas.toDataURL('image/png');
+          if (bestDataUrl.length <= maxChars) {
+            resolve(bestDataUrl);
+            return;
+          }
+          targetMax = Math.max(72, Math.round(targetMax * 0.78));
+        }
+
+        // Step 2: Fallback to WebP / JPEG compression for high-detail photographic logos
+        const fallbackSizes = [192, 144, 112, 96];
+        for (const sz of fallbackSizes) {
+          const ratio = Math.min(1, sz / Math.max(naturalW, naturalH));
+          const w = Math.max(1, Math.round(naturalW * ratio));
+          const h = Math.max(1, Math.round(naturalH * ratio));
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) continue;
+          ctx.clearRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+
+          const webpUrl = canvas.toDataURL('image/webp', 0.82);
+          if (webpUrl.startsWith('data:image/webp') && webpUrl.length <= maxChars) {
+            resolve(webpUrl);
+            return;
+          }
+
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+          const jpegUrl = canvas.toDataURL('image/jpeg', 0.8);
+          if (jpegUrl.length <= maxChars) {
+            resolve(jpegUrl);
+            return;
+          }
+        }
+
+        if (bestDataUrl && bestDataUrl.length <= 120000) {
+          resolve(bestDataUrl);
           return;
         }
-        ctx.clearRect(0, 0, w, h);
-        ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/png'));
+        reject(new Error('Ukuran gambar logo terlalu besar. Gunakan file gambar yang lebih ringan.'));
       };
       img.onerror = () => reject(new Error('Format gambar logo tidak didukung.'));
       img.src = result;
@@ -179,6 +262,27 @@ function resizeLogoFileToDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(new Error('Gagal membaca file logo.'));
     reader.readAsDataURL(file);
   });
+}
+
+function areSettingsEqual(a: SchoolSettings, b: SchoolSettings): boolean {
+  return (
+    (a.nama_sekolah || '').trim() === (b.nama_sekolah || '').trim() &&
+    (a.nama_kepala_sekolah || '').trim() === (b.nama_kepala_sekolah || '').trim() &&
+    (a.nip_kepala_sekolah || '').trim() === (b.nip_kepala_sekolah || '').trim() &&
+    (a.ttd_kepala_sekolah || '') === (b.ttd_kepala_sekolah || '') &&
+    (a.cap_sekolah || '') === (b.cap_sekolah || '') &&
+    (a.logo_sekolah || '') === (b.logo_sekolah || '') &&
+    normalizeTimeHHMM(a.batas_jam_masuk, '07:15') ===
+      normalizeTimeHHMM(b.batas_jam_masuk, '07:15') &&
+    normalizeScheduleMode(a.mode_presensi, 'masuk_saja') ===
+      normalizeScheduleMode(b.mode_presensi, 'masuk_saja') &&
+    normalizeTimeHHMM(a.jam_pulang_standar, '15:00') ===
+      normalizeTimeHHMM(b.jam_pulang_standar, '15:00') &&
+    (a.tahun_ajaran || '2026/2027').trim() === (b.tahun_ajaran || '2026/2027').trim() &&
+    normalizeSemester(a.semester, 'ganjil') === normalizeSemester(b.semester, 'ganjil') &&
+    normalizeThemeId(a.tema, 'indigo') === normalizeThemeId(b.tema, 'indigo') &&
+    (a.script_url || '').trim() === (b.script_url || '').trim()
+  );
 }
 
 function trimTransparentBounds(
@@ -308,11 +412,18 @@ export function SettingsView({
   totalStudentsCount,
   totalRecordsCount,
   connectionStatus,
+  isOnline = true,
   pendingSyncCount = 0,
+  syncingQueue = false,
+  onFlushOfflineQueue,
+  sheetsSupportsAkun = null,
+  cloudSync,
   onSaveSettings,
   onSetDefaultIdentity,
   onPreviewTheme,
   onUpdateAccounts,
+  onPushAccountsToSheets,
+  onPullAccountsFromSheets,
   onTestAndSync,
   onPushAllToSheets,
   onSaveBackupToComputer,
@@ -333,6 +444,7 @@ export function SettingsView({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pushingAll, setPushingAll] = useState(false);
+  const [syncingAccounts, setSyncingAccounts] = useState(false);
   const [savingBackup, setSavingBackup] = useState(false);
   const [restoringBackup, setRestoringBackup] = useState(false);
   const [lastBackupMeta, setLastBackupMeta] = useState<LastBackupMeta | null>(() =>
@@ -353,7 +465,7 @@ export function SettingsView({
   const [confirmResetDemo, setConfirmResetDemo] = useState(false);
   const [confirmResetAttendance, setConfirmResetAttendance] = useState(false);
 
-  // Sync external settings updates (e.g. backup restore) ONLY when user has no unsaved edits
+  // Sync external settings updates (e.g. cloud sync / backup restore) ONLY when user has no unsaved edits
   useEffect(() => {
     if (hasUnsavedChanges) return;
     setFormState({
@@ -362,6 +474,7 @@ export function SettingsView({
       nip_kepala_sekolah: settings.nip_kepala_sekolah || '',
       ttd_kepala_sekolah: settings.ttd_kepala_sekolah || '',
       cap_sekolah: settings.cap_sekolah || '',
+      logo_sekolah: settings.logo_sekolah || DEFAULT_SCHOOL_LOGO,
       batas_jam_masuk: normalizeTimeHHMM(settings.batas_jam_masuk, '07:15'),
       mode_presensi: normalizeScheduleMode(settings.mode_presensi, 'masuk_saja'),
       jam_pulang_standar: normalizeTimeHHMM(settings.jam_pulang_standar, '15:00'),
@@ -371,9 +484,14 @@ export function SettingsView({
     });
   }, [settings, hasUnsavedChanges]);
 
+  const isDirty = hasUnsavedChanges && !areSettingsEqual(formState, settings);
+
   function updateFormField(patch: Partial<SchoolSettings>) {
-    setHasUnsavedChanges(true);
-    setFormState((prev) => ({ ...prev, ...patch }));
+    setFormState((prev) => {
+      const next = { ...prev, ...patch };
+      setHasUnsavedChanges(!areSettingsEqual(next, settings));
+      return next;
+    });
   }
 
   async function handleSelectRestoreFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -466,7 +584,7 @@ export function SettingsView({
     setSaving(true);
     try {
       const normalizedPayload: SchoolSettings = {
-        nama_sekolah: formState.nama_sekolah.trim() || 'SMA Negeri 1 Nusantara',
+        nama_sekolah: formState.nama_sekolah.trim() || DEFAULT_SCHOOL_NAME,
         nama_kepala_sekolah: (formState.nama_kepala_sekolah || '').trim(),
         nip_kepala_sekolah: (formState.nip_kepala_sekolah || '').trim(),
         ttd_kepala_sekolah: formState.ttd_kepala_sekolah || '',
@@ -478,7 +596,7 @@ export function SettingsView({
         semester: normalizeSemester(formState.semester, 'ganjil'),
         tema: normalizeThemeId(formState.tema, 'indigo'),
         script_url: formState.script_url.trim(),
-        logo_sekolah: formState.logo_sekolah || '',
+        logo_sekolah: formState.logo_sekolah || DEFAULT_SCHOOL_LOGO,
       };
       setFormState(normalizedPayload);
       await onSaveSettings(normalizedPayload);
@@ -488,7 +606,7 @@ export function SettingsView({
     }
   }
 
-  function handleAddAccount(e: React.FormEvent) {
+  async function handleAddAccount(e: React.FormEvent) {
     e.preventDefault();
     const u = newUsername.trim();
     const p = newPassword.trim();
@@ -518,12 +636,17 @@ export function SettingsView({
       jabatan: formatRoleLabel(newRole, kelas),
       kelas_binaan: kelas || undefined,
     };
-    onUpdateAccounts([...accounts, created]);
     setNewUsername('');
     setNewPassword('');
     setNewNama('');
     setNewNip('');
     setAccountError(null);
+    setSyncingAccounts(true);
+    try {
+      await onUpdateAccounts([...accounts, created]);
+    } finally {
+      setSyncingAccounts(false);
+    }
   }
 
   function openEditAccountModal(acc: UserAccount) {
@@ -538,7 +661,7 @@ export function SettingsView({
     setEditAccountError(null);
   }
 
-  function handleSaveEditedAccount(e: React.FormEvent) {
+  async function handleSaveEditedAccount(e: React.FormEvent) {
     e.preventDefault();
     if (!editingAccount) return;
 
@@ -586,14 +709,20 @@ export function SettingsView({
       kelas_binaan: kelas || undefined,
     };
 
-    onUpdateAccounts(
-      accounts.map((a) => (a.id === editingAccount.id ? updatedAccount : a))
+    const nextList = accounts.map((a) =>
+      a.id === editingAccount.id ? updatedAccount : a
     );
     setEditingAccount(null);
     setEditAccountError(null);
+    setSyncingAccounts(true);
+    try {
+      await onUpdateAccounts(nextList);
+    } finally {
+      setSyncingAccounts(false);
+    }
   }
 
-  function handleRemoveAccount(id: string) {
+  async function handleRemoveAccount(id: string) {
     const target = accounts.find((a) => a.id === id);
     if (!target) return;
     const masterCount = accounts.filter((a) => a.role === 'master_admin').length;
@@ -602,7 +731,12 @@ export function SettingsView({
       return;
     }
     setAccountError(null);
-    onUpdateAccounts(accounts.filter((a) => a.id !== id));
+    setSyncingAccounts(true);
+    try {
+      await onUpdateAccounts(accounts.filter((a) => a.id !== id));
+    } finally {
+      setSyncingAccounts(false);
+    }
   }
 
   async function handleCopyTemplate() {
@@ -621,7 +755,7 @@ export function SettingsView({
   const renderSaveFooter = () => (
     <div className="pt-4 mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100">
       <p className="text-xs text-slate-500">
-        {hasUnsavedChanges
+        {isDirty
           ? 'Ada perubahan pengaturan yang belum disimpan.'
           : 'Semua pengaturan sudah tersimpan.'}
       </p>
@@ -660,7 +794,7 @@ export function SettingsView({
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               Kategori Pengaturan
             </p>
-            {hasUnsavedChanges && (
+            {isDirty && (
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200">
                 Belum disimpan
               </span>
@@ -700,7 +834,7 @@ export function SettingsView({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-semibold truncate">{label}</span>
-                      {usesFormSave && hasUnsavedChanges && (
+                      {usesFormSave && isDirty && (
                         <span
                           className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0"
                           aria-hidden="true"
@@ -725,24 +859,285 @@ export function SettingsView({
         >
           {currentSubMenuMeta.usesFormSave && (
             <form onSubmit={handleSubmit} className="space-y-6">
-              {/* SUB-MENU: KONEKSI GOOGLE SHEETS */}
+              {/* SUB-MENU: KONEKSI CLOUD FIREBASE & GOOGLE SHEETS */}
               {activeSubMenu === 'koneksi' && (
-                <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-                        <Cloud className="h-5 w-5" aria-hidden="true" />
+                <div className="space-y-6">
+                  {cloudSync && (
+                    <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
+                      <div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-3">
+                        <div className="flex items-start gap-3 min-w-0 flex-1">
+                          <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                            <Cloud className="h-5 w-5" aria-hidden="true" />
+                          </div>
+                          <div className="min-w-0">
+                            <h2 className="text-base font-semibold text-slate-900">
+                              Sinkronisasi Cloud Lintas Perangkat (Firebase)
+                            </h2>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              Hubungkan dengan akun Google yang sama di komputer, tablet, atau HP lain agar seluruh data tetap terhubung secara real-time.
+                            </p>
+                          </div>
+                        </div>
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border whitespace-nowrap shrink-0 ${
+                            cloudSync.connected
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : 'bg-slate-50 text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          <span
+                            className={`h-2 w-2 rounded-full ${
+                              cloudSync.connected ? 'bg-emerald-500' : 'bg-slate-400'
+                            }`}
+                            aria-hidden="true"
+                          />
+                          {cloudSync.connected ? 'Terhubung Real-Time' : 'Belum Terhubung'}
+                        </span>
                       </div>
-                      <div>
-                        <h2 className="text-base font-semibold text-slate-900">
-                          Koneksi Database Google Sheets
-                        </h2>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          Hubungkan aplikasi ke Google Apps Script Web App URL agar data siswa dan presensi tersinkron otomatis.
-                        </p>
+
+                      {cloudSync.connected ? (
+                        <div className="rounded-xl bg-emerald-50/70 border border-emerald-200/80 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-emerald-900 truncate">
+                              {cloudSync.displayName || 'Akun Google Terhubung'}
+                            </p>
+                            <p className="text-xs font-mono text-emerald-700 truncate mt-0.5">
+                              {cloudSync.email}
+                            </p>
+                            {cloudSync.lastSyncedAt && (
+                              <p className="text-[11px] text-emerald-700/80 mt-1">
+                                Pembaruan terakhir pukul {cloudSync.lastSyncedAt} · Data siswa, presensi masuk/pulang, alasan pulang cepat, jadwal mapel, pengaturan &amp; akun tersinkron otomatis.
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              disabled={cloudSync.syncing}
+                              onClick={() => void cloudSync.onPushLocalToCloud()}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-emerald-300 bg-white text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
+                            >
+                              <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>{cloudSync.syncing ? 'Menyinkronkan...' : 'Kirim Data Lokal ke Cloud'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={cloudSync.syncing}
+                              onClick={() => void cloudSync.onDisconnect()}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-200 bg-white text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50 transition-colors"
+                            >
+                              <span>Putuskan Cloud</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <p className="text-xs text-slate-600 leading-relaxed">
+                            Data saat ini tersimpan di browser perangkat ini. Klik tombol di samping dan masuk dengan akun Google sekolah untuk mengaktifkan penyimpanan cloud Firebase dan sinkronisasi otomatis antar perangkat.
+                          </p>
+                          <button
+                            type="button"
+                            disabled={cloudSync.syncing}
+                            onClick={() => void cloudSync.onConnect()}
+                            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors shrink-0"
+                          >
+                            <Cloud className="h-4 w-4" aria-hidden="true" />
+                            <span>{cloudSync.syncing ? 'Menghubungkan...' : 'Hubungkan Akun Google (Firebase)'}</span>
+                          </button>
+                        </div>
+                      )}
+                    </section>
+                  )}
+
+                  {/* PENGGUNAAN POIN / KUOTA GRATIS FIRESTORE (SPARK PLAN) */}
+                  {cloudSync && (
+                    <section
+                      aria-label="Penggunaan Kuota Gratis Firestore"
+                      className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4"
+                    >
+                      <div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-3">
+                        <div className="flex items-start gap-3 min-w-0 flex-1">
+                          <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                            <Database className="h-5 w-5" aria-hidden="true" />
+                          </div>
+                          <div className="min-w-0">
+                            <h2 className="text-base font-semibold text-slate-900">
+                              Penggunaan Poin Gratis Firestore (Spark Plan)
+                            </h2>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              Pantau estimasi pemakaian harian (Baca, Tulis, Hapus) dan kapasitas penyimpanan gratis Cloud Firestore agar tidak melewati batas maksimum.
+                            </p>
+                          </div>
+                        </div>
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium bg-slate-50 text-slate-600 border border-slate-200 whitespace-nowrap shrink-0">
+                          Periode: {cloudSync.quota.quotaDate} (PT)
+                        </span>
+                      </div>
+
+                      {(() => {
+                        const renderQuotaCard = (
+                          label: string,
+                          sublabel: string,
+                          metric: QuotaMetricSummary,
+                          formattedUsed: string,
+                          formattedLimit: string,
+                          formattedRemaining: string
+                        ) => {
+                          const barClass =
+                            metric.level === 'critical'
+                              ? 'bg-rose-500'
+                              : metric.level === 'warning'
+                                ? 'bg-amber-500'
+                                : 'bg-emerald-500';
+                          const badgeClass =
+                            metric.level === 'critical'
+                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                              : metric.level === 'warning'
+                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                          const statusLabel =
+                            metric.level === 'critical'
+                              ? 'Mendekati Batas'
+                              : metric.level === 'warning'
+                                ? 'Waspada'
+                                : 'Aman';
+
+                          return (
+                            <div
+                              key={label}
+                              className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-4 space-y-2.5"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="text-xs font-semibold text-slate-900">{label}</p>
+                                  <p className="text-[11px] text-slate-500">{sublabel}</p>
+                                </div>
+                                <span
+                                  className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border whitespace-nowrap shrink-0 ${badgeClass}`}
+                                >
+                                  {statusLabel}
+                                </span>
+                              </div>
+
+                              <div className="flex items-baseline justify-between gap-2">
+                                <p className="text-sm font-bold font-mono tabular-nums text-slate-900">
+                                  {formattedUsed}
+                                  <span className="text-xs font-normal text-slate-500">
+                                    {' '}
+                                    / {formattedLimit}
+                                  </span>
+                                </p>
+                                <span className="text-xs font-mono font-semibold tabular-nums text-indigo-700">
+                                  {metric.percent.toFixed(1)}%
+                                </span>
+                              </div>
+
+                              <div className="h-2 w-full rounded-full bg-slate-200/90 overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-300 ${barClass}`}
+                                  style={{ width: `${Math.min(100, Math.max(metric.used > 0 ? 2 : 0, metric.percent))}%` }}
+                                />
+                              </div>
+
+                              <p className="text-[11px] text-slate-500 font-mono tabular-nums">
+                                Sisa kuota: <span className="font-semibold text-slate-700">{formattedRemaining}</span>
+                              </p>
+                            </div>
+                          );
+                        };
+
+                        const q = cloudSync.quota;
+                        return (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                            {renderQuotaCard(
+                              'Pembacaan Dokumen (Reads)',
+                              'Batas gratis 50.000 poin / hari',
+                              q.reads,
+                              q.reads.used.toLocaleString('id-ID'),
+                              q.reads.limit.toLocaleString('id-ID'),
+                              `${q.reads.remaining.toLocaleString('id-ID')} baca`
+                            )}
+                            {renderQuotaCard(
+                              'Penulisan Dokumen (Writes)',
+                              'Batas gratis 20.000 poin / hari',
+                              q.writes,
+                              q.writes.used.toLocaleString('id-ID'),
+                              q.writes.limit.toLocaleString('id-ID'),
+                              `${q.writes.remaining.toLocaleString('id-ID')} tulis`
+                            )}
+                            {renderQuotaCard(
+                              'Penghapusan Dokumen (Deletes)',
+                              'Batas gratis 20.000 poin / hari',
+                              q.deletes,
+                              q.deletes.used.toLocaleString('id-ID'),
+                              q.deletes.limit.toLocaleString('id-ID'),
+                              `${q.deletes.remaining.toLocaleString('id-ID')} hapus`
+                            )}
+                            {renderQuotaCard(
+                              'Penyimpanan Cloud (Storage)',
+                              `Total ${q.storage.totalDocuments.toLocaleString('id-ID')} dokumen tersimpan · Batas 1 GiB`,
+                              q.storage,
+                              formatBytesReadable(q.storage.used),
+                              '1.00 GiB',
+                              formatBytesReadable(q.storage.remaining)
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      <div className="rounded-xl bg-slate-50 border border-slate-200/70 px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono tabular-nums">
+                          <span>Siswa: <strong className="text-slate-900">{cloudSync.quota.storage.breakdown.students}</strong></span>
+                          <span>·</span>
+                          <span>Presensi: <strong className="text-slate-900">{cloudSync.quota.storage.breakdown.attendance}</strong></span>
+                          <span>·</span>
+                          <span>Mapel &amp; Jadwal: <strong className="text-slate-900">{cloudSync.quota.storage.breakdown.subjects + cloudSync.quota.storage.breakdown.schedules + cloudSync.quota.storage.breakdown.subjectRecords}</strong></span>
+                          <span>·</span>
+                          <span>Akun: <strong className="text-slate-900">{cloudSync.quota.storage.breakdown.accounts}</strong></span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={cloudSync.onResetLocalQuota}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-[11px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                          >
+                            <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                            <span>Reset Counter Lokal</span>
+                          </button>
+                          <a
+                            href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/usage`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-indigo-200 bg-indigo-50 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors"
+                          >
+                            <span>Lihat Detail Firebase Console</span>
+                            <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                          </a>
+                        </div>
+                      </div>
+
+                      <p className="text-[11px] text-slate-500">
+                        Estimasi aktivitas pada perangkat ini. Kuota harian gratis Firestore (Spark Plan) direset otomatis oleh Google setiap hari pukul 00:00 Pacific Time (±14:00–15:00 WIB).
+                      </p>
+                    </section>
+                  )}
+
+                  <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                          <Cloud className="h-5 w-5" aria-hidden="true" />
+                        </div>
+                        <div>
+                          <h2 className="text-base font-semibold text-slate-900">
+                            Koneksi Database Google Sheets (Sinkronisasi Penuh)
+                          </h2>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Terhubung ke 8 sheet otomatis: <strong>Siswa</strong>, <strong>Presensi</strong>, <strong>Pengaturan</strong> (termasuk bagian Akun: <span className="font-mono">jumlah_akun</span>, <span className="font-mono">daftar_akun</span>, <span className="font-mono">akun_akses</span>), <strong>Akun</strong> (tabel detail Akun &amp; Akses), <strong>MasterMapel</strong>, <strong>JadwalGuru</strong>, <strong>MapelKelas</strong>, dan <strong>PresensiMapel</strong>.
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  </div>
 
                   <div>
                     <label
@@ -775,14 +1170,20 @@ export function SettingsView({
                     <button
                       type="button"
                       disabled={!formState.script_url.trim() || connectionStatus === 'syncing' || pushingAll}
-                      onClick={() => onTestAndSync(formState.script_url.trim())}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+                      onClick={async () => {
+                        const target = formState.script_url.trim();
+                        if (!target) return;
+                        setHasUnsavedChanges(false);
+                        await onTestAndSync(target);
+                        setHasUnsavedChanges(false);
+                      }}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors"
                     >
                       <RefreshCw
                         className={`h-3.5 w-3.5 ${connectionStatus === 'syncing' ? 'animate-spin' : ''}`}
                         aria-hidden="true"
                       />
-                      <span>Muat Ulang dari Spreadsheet</span>
+                      <span>Tarik Semua Data dari Spreadsheet</span>
                     </button>
 
                     <button
@@ -799,21 +1200,48 @@ export function SettingsView({
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 transition-colors"
                     >
                       <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>{pushingAll ? 'Mengirim ke Sheets...' : 'Kirim Data Lokal ke Sheets'}</span>
+                      <span>{pushingAll ? 'Mengirim ke Sheets...' : 'Kirim Semua Data Lokal ke Sheets'}</span>
                     </button>
 
                     {pendingSyncCount > 0 && (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-[11px] font-semibold text-amber-700">
-                        <span className="font-mono tabular-nums">{pendingSyncCount}</span> perubahan menunggu sinkron
-                      </span>
+                      <div className="inline-flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-[11px] font-semibold text-amber-800">
+                          <span className="font-mono tabular-nums">{pendingSyncCount}</span> data offline menunggu sinkron
+                        </span>
+                        {isOnline && onFlushOfflineQueue && (
+                          <button
+                            type="button"
+                            disabled={syncingQueue}
+                            onClick={() => void onFlushOfflineQueue()}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-[11px] font-semibold hover:bg-amber-700 disabled:opacity-50 transition-colors"
+                          >
+                            <RefreshCw
+                              className={`h-3 w-3 ${syncingQueue ? 'animate-spin' : ''}`}
+                              aria-hidden="true"
+                            />
+                            <span>{syncingQueue ? 'Menyinkronkan...' : 'Sinkronkan Antrean'}</span>
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
+
+                  <div className="rounded-xl border border-indigo-200/70 bg-indigo-50/40 p-3.5 space-y-1.5">
+                    <p className="text-xs font-semibold text-indigo-950">
+                      Cara Menyamakan 100% Data di Perangkat Lain (HP / Tablet / Laptop Baru)
+                    </p>
+                    <p className="text-[11px] text-indigo-900/85 leading-relaxed">
+                      Di perangkat lain, tempelkan <strong>Web App URL</strong> yang sama di atas lalu klik <strong>Tarik Semua Data dari Spreadsheet</strong> (atau klik <strong>Simpan Pengaturan</strong>). Sistem secara otomatis menarik seluruh 8 sheet — <em>Siswa, Presensi, Pengaturan Sekolah (nama, logo, kepala sekolah, TTD/cap, jam masuk/pulang, tema), Akun &amp; Akses, MasterMapel, JadwalGuru, MapelKelas, dan PresensiMapel</em> — tanpa menimpa data yang sudah ada di Spreadsheet.
+                    </p>
+                  </div>
+
                   <p className="text-[11px] text-slate-500">
-                    Sinkronisasi berjalan otomatis secara real-time setiap 10 detik, saat membuka tab, dan setiap kali data diubah.
+                    Sinkronisasi berjalan otomatis secara real-time setiap 10 detik, saat membuka tab, dan otomatis mengirim ulang antrean penyimpanan offline begitu koneksi internet kembali.
                   </p>
 
                   {renderSaveFooter()}
                 </section>
+                </div>
               )}
 
               {/* SUB-MENU: PROFIL & SEKOLAH */}
@@ -836,21 +1264,17 @@ export function SettingsView({
                   {/* Edit Logo Sekolah */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200/80">
             <div className="h-16 w-16 rounded-2xl border border-slate-200 bg-white flex items-center justify-center shrink-0 overflow-hidden p-1.5">
-              {formState.logo_sekolah ? (
-                <img
-                  src={formState.logo_sekolah}
-                  alt="Preview Logo Sekolah"
-                  className="h-full w-full object-contain"
-                />
-              ) : (
-                <QrCode className="h-8 w-8 text-indigo-600" aria-hidden="true" />
-              )}
+              <img
+                src={formState.logo_sekolah || DEFAULT_SCHOOL_LOGO}
+                alt="Preview Logo Sekolah"
+                className="h-full w-full object-contain"
+              />
             </div>
             <div className="flex-1 min-w-0 space-y-2">
               <div>
                 <p className="text-xs font-semibold text-slate-900">Logo Sekolah</p>
                 <p className="text-[11px] text-slate-500">
-                  Unggah gambar PNG, JPG, atau SVG (otomatis disesuaikan untuk kartu & PDF).
+                  Logo default aplikasi menggunakan lambang resmi SMA Negeri 1 Kabun. Anda dapat mengganti dengan gambar PNG, JPG, atau SVG lain.
                 </p>
               </div>
               {logoError && (
@@ -859,7 +1283,7 @@ export function SettingsView({
               <div className="flex flex-wrap items-center gap-2">
                 <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer">
                   <ImagePlus className="h-3.5 w-3.5 text-indigo-600" aria-hidden="true" />
-                  <span>{formState.logo_sekolah ? 'Ganti Logo' : 'Unggah Logo'}</span>
+                  <span>Ganti Logo</span>
                   <input
                     type="file"
                     accept="image/png,image/jpeg,image/webp,image/svg+xml"
@@ -867,23 +1291,31 @@ export function SettingsView({
                     className="sr-only"
                   />
                 </label>
-                {formState.logo_sekolah && (
+                {formState.logo_sekolah && formState.logo_sekolah !== DEFAULT_SCHOOL_LOGO && (
                   <button
                     type="button"
-                    onClick={() => updateFormField({ logo_sekolah: '' })}
+                    onClick={() => updateFormField({ logo_sekolah: DEFAULT_SCHOOL_LOGO })}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs font-medium text-rose-600 hover:bg-rose-50"
                   >
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Hapus Logo</span>
+                    <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Kembalikan Logo Default</span>
                   </button>
                 )}
                 <button
                   type="button"
                   onClick={() => {
-                    onSetDefaultIdentity(
-                      formState.nama_sekolah.trim() || 'SMA Negeri 1 Nusantara',
-                      formState.logo_sekolah || ''
-                    );
+                    const nextName =
+                      formState.nama_sekolah.trim() || DEFAULT_SCHOOL_NAME;
+                    const nextLogo = formState.logo_sekolah || DEFAULT_SCHOOL_LOGO;
+                    onSetDefaultIdentity(nextName, nextLogo);
+                    const nextSavedPreview: SchoolSettings = {
+                      ...settings,
+                      nama_sekolah: nextName,
+                      logo_sekolah: nextLogo,
+                    };
+                    if (areSettingsEqual(formState, nextSavedPreview)) {
+                      setHasUnsavedChanges(false);
+                    }
                     setSavedAsDefaultNotice(true);
                     setTimeout(() => setSavedAsDefaultNotice(false), 3000);
                   }}
@@ -915,7 +1347,7 @@ export function SettingsView({
                 required
                 value={formState.nama_sekolah}
                 onChange={(e) => updateFormField({ nama_sekolah: e.target.value })}
-                placeholder="SMA Negeri 1 Nusantara"
+                placeholder={DEFAULT_SCHOOL_NAME}
                 className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
               />
             </div>
@@ -1769,13 +2201,117 @@ export function SettingsView({
           </div>
           <div>
             <h2 className="text-base font-semibold text-slate-900">
-              Akun Login (Master Admin, Wali Kelas & Guru)
+              Akun & Akses (Master Admin, Kepala Sekolah, Wali Kelas & Guru)
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Master Admin mengakses seluruh menu & arsip tahun ajaran; Wali Kelas khusus mengakses kelas binaannya; Guru khusus mengecek siswa tidak hadir di Rekap & Export.
+              Setiap penambahan, perubahan, hapus akun, maupun reset password otomatis disinkronkan ke tab <span className="font-mono font-semibold text-slate-700">Akun</span> serta bagian Akun (<span className="font-mono text-slate-700">jumlah_akun</span>, <span className="font-mono text-slate-700">daftar_akun</span>, <span className="font-mono text-slate-700">akun_akses</span>) pada sheet <span className="font-mono font-semibold text-slate-700">Pengaturan</span> di Google Spreadsheet &amp; Firebase Cloud.
             </p>
           </div>
         </div>
+
+        {/* Status Koneksi Google Spreadsheet (Sheet Akun) */}
+        {!settings.script_url.trim() ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200 bg-slate-50/80">
+            <div className="flex items-start gap-2.5">
+              <FileSpreadsheet className="h-4 w-4 text-slate-500 mt-0.5 shrink-0" aria-hidden="true" />
+              <div>
+                <p className="text-xs font-semibold text-slate-800">
+                  Google Spreadsheet Belum Terhubung
+                </p>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Tambahkan Web App URL Google Apps Script agar Data Akun & Akses tersimpan otomatis ke tab <span className="font-mono">Akun</span> di Spreadsheet.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveSubMenu('koneksi')}
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors shrink-0"
+            >
+              <Cloud className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>Atur URL Spreadsheet</span>
+            </button>
+          </div>
+        ) : sheetsSupportsAkun === false ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-amber-300 bg-amber-50/80">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" aria-hidden="true" />
+              <div>
+                <p className="text-xs font-semibold text-amber-900">
+                  Skrip Code.gs di Spreadsheet Masih Versi Lama (Sheet Akun Belum Aktif)
+                </p>
+                <p className="text-[11px] text-amber-800 mt-0.5">
+                  Salin kode <span className="font-mono font-semibold">Code.gs</span> terbaru lalu lakukan <strong>Deploy → Kelola deployment → Versi baru</strong> di Apps Script agar tab <span className="font-mono font-semibold">Akun</span> dibuat dan tersinkron otomatis.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveSubMenu('koneksi');
+                setShowScriptGuide(true);
+              }}
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors shrink-0"
+            >
+              <Code2 className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>Buka & Salin Code.gs Terbaru</span>
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/70">
+            <div className="flex items-start gap-2.5">
+              <FileSpreadsheet className="h-4 w-4 text-emerald-700 mt-0.5 shrink-0" aria-hidden="true" />
+              <div>
+                <p className="text-xs font-semibold text-emerald-900">
+                  Terhubung ke Sheet <span className="font-mono">Akun</span> &amp; Sheet <span className="font-mono">Pengaturan</span> di Google Spreadsheet
+                </p>
+                <p className="text-[11px] text-emerald-800/90 mt-0.5">
+                  {syncingAccounts
+                    ? 'Menyinkronkan daftar akun ke Sheet Akun & Sheet Pengaturan...'
+                    : `Sinkronisasi 2 arah aktif untuk ${accounts.length} akun terdaftar (tersimpan di Sheet Akun & baris akun_akses pada Sheet Pengaturan).`}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {onPushAccountsToSheets && (
+                <button
+                  type="button"
+                  disabled={syncingAccounts}
+                  onClick={async () => {
+                    setSyncingAccounts(true);
+                    try {
+                      await onPushAccountsToSheets();
+                    } finally {
+                      setSyncingAccounts(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+                >
+                  <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>{syncingAccounts ? 'Mengirim...' : 'Kirim Akun ke Spreadsheet'}</span>
+                </button>
+              )}
+              {onPullAccountsFromSheets && (
+                <button
+                  type="button"
+                  disabled={syncingAccounts}
+                  onClick={async () => {
+                    setSyncingAccounts(true);
+                    try {
+                      await onPullAccountsFromSheets();
+                    } finally {
+                      setSyncingAccounts(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-300 bg-white text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60 transition-colors"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${syncingAccounts ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  <span>Muat dari Spreadsheet</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {accountError && (
           <div role="alert" className="p-3 rounded-xl border border-rose-200 bg-rose-50 text-xs font-medium text-rose-700">
@@ -1787,25 +2323,25 @@ export function SettingsView({
           <table className="w-full text-left border-collapse text-sm">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500">
-                <th className="py-2.5 px-4">Username</th>
-                <th className="py-2.5 px-4">Nama</th>
-                <th className="py-2.5 px-4">NIP</th>
-                <th className="py-2.5 px-4">Peran</th>
-                <th className="py-2.5 px-4">Kelas Binaan</th>
-                <th className="py-2.5 px-4 text-right">Aksi</th>
+                <th className="py-2.5 px-3">Username</th>
+                <th className="py-2.5 px-3">Nama</th>
+                <th className="py-2.5 px-3">NIP</th>
+                <th className="py-2.5 px-3">Peran</th>
+                <th className="py-2.5 px-3">Kelas</th>
+                <th className="py-2.5 px-3 text-right">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {accounts.map((acc) => (
                 <tr key={acc.id} className="hover:bg-slate-50/70">
-                  <td className="py-2.5 px-4 font-mono text-xs font-semibold text-slate-800 whitespace-nowrap">
+                  <td className="py-2.5 px-3 font-mono text-xs font-semibold text-slate-800 whitespace-nowrap">
                     {acc.username}
                   </td>
-                  <td className="py-2.5 px-4 text-slate-900">{acc.nama}</td>
-                  <td className="py-2.5 px-4 font-mono tabular-nums text-xs text-slate-600 whitespace-nowrap">
+                  <td className="py-2.5 px-3 text-xs sm:text-sm text-slate-900">{acc.nama}</td>
+                  <td className="py-2.5 px-3 font-mono tabular-nums text-xs text-slate-600 whitespace-nowrap">
                     {acc.nip || '-'}
                   </td>
-                  <td className="py-2.5 px-4 text-xs font-medium text-slate-600 whitespace-nowrap">
+                  <td className="py-2.5 px-3 text-xs font-medium text-slate-600 whitespace-nowrap">
                     {acc.role === 'master_admin'
                       ? 'Master Admin'
                       : acc.role === 'kepala_sekolah'
@@ -1814,16 +2350,16 @@ export function SettingsView({
                           ? 'Wali Kelas'
                           : 'Guru'}
                   </td>
-                  <td className="py-2.5 px-4 text-xs text-slate-600 whitespace-nowrap">
+                  <td className="py-2.5 px-3 text-xs text-slate-600 whitespace-nowrap">
                     {acc.role === 'wali_kelas' ? acc.kelas_binaan || '-' : '-'}
                   </td>
-                  <td className="py-2.5 px-4">
-                    <div className="flex items-center justify-end gap-1.5">
+                  <td className="py-2.5 px-3 whitespace-nowrap">
+                    <div className="flex items-center justify-end gap-1">
                       <button
                         type="button"
                         onClick={() => openEditAccountModal(acc)}
                         aria-label={`Edit akun ${acc.username}`}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-indigo-700 transition-colors"
+                        className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-indigo-700 transition-colors"
                       >
                         <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>Edit</span>
@@ -2100,7 +2636,7 @@ export function SettingsView({
                 Panduan & Template Kode Google Apps Script (Code.gs)
               </p>
               <p className="text-xs text-slate-500">
-                Salin skrip siap pakai untuk endpoint GET & POST Google Sheets Anda
+                Salin skrip siap pakai untuk sinkronisasi 8 sheet (Siswa, Presensi, Pengaturan, Akun, MasterMapel, JadwalGuru, MapelKelas, PresensiMapel)
               </p>
             </div>
           </div>
@@ -2114,9 +2650,9 @@ export function SettingsView({
         {showScriptGuide && (
           <div className="px-6 pb-6 pt-2 border-t border-slate-100 space-y-3">
             <ol className="list-decimal list-inside text-xs text-slate-600 space-y-1">
-              <li>Buka Google Sheets baru, lalu pilih menu <strong>Extensions &gt; Apps Script</strong>.</li>
-              <li>Tempel kode berikut ke dalam file <code className="font-mono text-slate-800">Code.gs</code>, lalu simpan.</li>
-              <li>Klik <strong>Deploy &gt; New deployment &gt; Web app</strong>, atur <em>Execute as: Me</em> dan <em>Who has access: Anyone</em>, lalu salin URL Web App ke kolom di atas.</li>
+              <li>Buka Google Sheets Anda, lalu pilih menu <strong>Extensions &gt; Apps Script</strong>.</li>
+              <li>Tempel seluruh kode berikut ke dalam file <code className="font-mono text-slate-800">Code.gs</code>, lalu simpan. Sheet <strong>Siswa, Presensi, Pengaturan, Akun, MasterMapel, JadwalGuru, MapelKelas, PresensiMapel</strong> akan dibuat otomatis.</li>
+              <li>Klik <strong>Deploy &gt; New deployment &gt; Web app</strong> (atau <em>Manage deployments &gt; Edit &gt; New version</em> bila memperbarui), atur <em>Execute as: Me</em> dan <em>Who has access: Anyone</em>, lalu salin URL Web App ke kolom di atas.</li>
             </ol>
 
             <div className="relative">

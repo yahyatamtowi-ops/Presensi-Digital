@@ -13,6 +13,9 @@ import {
   LogOut,
   UserCheck,
   Search,
+  WifiOff,
+  RefreshCw,
+  HardDrive,
 } from 'lucide-react';
 import type {
   AttendanceRecord,
@@ -35,6 +38,11 @@ interface ScannerViewProps {
   students: Student[];
   records: AttendanceRecord[];
   settings: SchoolSettings;
+  isOnline?: boolean;
+  pendingSyncCount?: number;
+  syncingQueue?: boolean;
+  hasRemoteSync?: boolean;
+  onSyncPendingNow?: () => void;
   onScanSubmit: (
     rawCode: string,
     scanAction?: ScanActionMode,
@@ -48,6 +56,11 @@ export function ScannerView({
   students,
   records,
   settings,
+  isOnline = true,
+  pendingSyncCount = 0,
+  syncingQueue = false,
+  hasRemoteSync = false,
+  onSyncPendingNow,
   onScanSubmit,
 }: ScannerViewProps) {
   const [cameraActive, setCameraActive] = useState(false);
@@ -299,6 +312,82 @@ export function ScannerView({
 
   return (
     <div className="space-y-6">
+      {/* Offline Storage & Auto-Sync Status Banner */}
+      {(!isOnline || pendingSyncCount > 0) && (
+        <section
+          role="status"
+          data-testid="scanner-offline-banner"
+          className={`rounded-2xl border p-4 sm:px-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+            !isOnline
+              ? 'bg-amber-50/90 border-amber-300 text-amber-950'
+              : 'bg-indigo-50/80 border-indigo-200 text-indigo-950'
+          }`}
+        >
+          <div className="flex items-start gap-3 min-w-0">
+            <div
+              className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
+                !isOnline
+                  ? 'bg-amber-100 text-amber-700'
+                  : 'bg-indigo-100 text-indigo-700'
+              }`}
+            >
+              {!isOnline ? (
+                <WifiOff className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <HardDrive className="h-4 w-4" aria-hidden="true" />
+              )}
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs sm:text-sm font-semibold">
+                {!isOnline
+                  ? 'Mode Penyimpanan Offline Aktif — Koneksi Internet Terputus'
+                  : `${pendingSyncCount} Data Presensi Offline Siap Disinkronkan`}
+              </p>
+              <p
+                className={`text-xs mt-0.5 ${
+                  !isOnline ? 'text-amber-800/90' : 'text-indigo-800/90'
+                }`}
+              >
+                {!isOnline
+                  ? hasRemoteSync
+                    ? 'Scan presensi tetap berjalan normal dan disimpan aman di perangkat ini. Semua data akan tersinkron otomatis begitu internet kembali.'
+                    : 'Scan presensi tetap berjalan normal dan tersimpan aman di penyimpanan lokal perangkat (IndexedDB & localStorage).'
+                  : 'Koneksi internet aktif. Data yang dicatat selama offline sedang atau siap dikirim otomatis ke Google Sheets.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {pendingSyncCount > 0 && (
+              <span
+                data-testid="scanner-pending-count"
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono font-semibold tabular-nums ${
+                  !isOnline
+                    ? 'bg-white/90 border-amber-300 text-amber-800'
+                    : 'bg-white border-indigo-200 text-indigo-700'
+                }`}
+              >
+                {pendingSyncCount} antrean offline
+              </span>
+            )}
+            {isOnline && pendingSyncCount > 0 && onSyncPendingNow && (
+              <button
+                type="button"
+                disabled={syncingQueue}
+                onClick={onSyncPendingNow}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-60 transition-colors"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${syncingQueue ? 'animate-spin' : ''}`}
+                  aria-hidden="true"
+                />
+                <span>{syncingQueue ? 'Menyinkronkan...' : 'Sinkronkan Sekarang'}</span>
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* Top Dual-Mode Schedule & Action Switcher Bar (Masuk & Pulang) */}
       {isDualMode && (
         <section

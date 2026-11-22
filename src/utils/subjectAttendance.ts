@@ -12,6 +12,7 @@ import type {
 import {
   getCurrentTimeString,
   getTodayDateString,
+  normalizeAttendanceStatus,
   normalizeTimeHHMM,
   parseTimeToMinutes,
   resolveItemAcademicYear,
@@ -180,32 +181,55 @@ export function validateTransparentPngFile(file: {
 // Master Subjects (Sub Menu: Mata Pelajaran)
 // ============================================================
 
+function getFieldNormalized(
+  obj: Record<string, unknown>,
+  candidates: string[]
+): string {
+  for (const key of candidates) {
+    if (obj[key] !== undefined && obj[key] !== null) {
+      return String(obj[key]).trim();
+    }
+  }
+  const normalizedMap = new Map<string, unknown>();
+  for (const [k, v] of Object.entries(obj)) {
+    normalizedMap.set(k.trim().toLowerCase().replace(/[\s-]+/g, '_'), v);
+  }
+  for (const key of candidates) {
+    const val = normalizedMap.get(key.toLowerCase());
+    if (val !== undefined && val !== null) {
+      return String(val).trim();
+    }
+  }
+  return '';
+}
+
 export function sanitizeMasterSubjects(rawList: unknown): MasterSubject[] {
   if (!Array.isArray(rawList)) return [];
   const seenNames = new Set<string>();
   const out: MasterSubject[] = [];
   for (const item of rawList) {
     if (!item || typeof item !== 'object') continue;
-    const obj = item as Partial<MasterSubject>;
-    const nama = String(obj.nama || '').trim();
+    const obj = item as Record<string, unknown>;
+    const nama = getFieldNormalized(obj, ['nama', 'nama_mapel', 'mata_pelajaran', 'name']);
     if (!nama) continue;
     const norm = nama.toLowerCase();
     if (seenNames.has(norm)) continue;
     seenNames.add(norm);
+    const rawKode = getFieldNormalized(obj, ['kode', 'kode_mapel', 'code']);
     const kode =
-      String(obj.kode || '')
-        .trim()
-        .toUpperCase() ||
+      rawKode.toUpperCase() ||
       nama
         .replace(/[^a-zA-Z0-9]/g, '')
         .slice(0, 4)
         .toUpperCase() ||
       'MPL';
+    const rawId = getFieldNormalized(obj, ['id']);
+    const deskripsi = getFieldNormalized(obj, ['deskripsi', 'keterangan', 'description']);
     out.push({
-      id: String(obj.id || `msub_${norm.replace(/\s+/g, '_')}`).trim(),
+      id: rawId || `msub_${norm.replace(/\s+/g, '_')}`,
       kode,
       nama,
-      deskripsi: obj.deskripsi ? String(obj.deskripsi).trim() : undefined,
+      deskripsi: deskripsi || undefined,
     });
   }
   return out;
@@ -303,24 +327,31 @@ export function sanitizeTeacherSchedules(rawList: unknown): TeacherSchedule[] {
   const out: TeacherSchedule[] = [];
   for (const item of rawList) {
     if (!item || typeof item !== 'object') continue;
-    const obj = item as Partial<TeacherSchedule>;
-    const hari = normalizeDayOfWeek(obj.hari);
-    const teacherId = String(obj.teacher_user_id || '').trim();
-    const kelas = String(obj.kelas || '').trim();
-    const mapel = String(obj.mata_pelajaran || '').trim();
+    const obj = item as Record<string, unknown>;
+    const hari = normalizeDayOfWeek(getFieldNormalized(obj, ['hari', 'day']));
+    const teacherId = getFieldNormalized(obj, ['teacher_user_id', 'guru_id', 'id_guru']);
+    const kelas = getFieldNormalized(obj, ['kelas', 'class']);
+    const mapel = getFieldNormalized(obj, ['mata_pelajaran', 'mapel', 'subject']);
     if (!hari || !teacherId || !kelas || !mapel) continue;
 
+    const rawId = getFieldNormalized(obj, ['id']);
+    const teacherName = getFieldNormalized(obj, ['teacher_name', 'nama_guru', 'guru']) || 'Guru';
+    const jamMulaiRaw = getFieldNormalized(obj, ['jam_mulai', 'mulai']);
+    const jamSelesaiRaw = getFieldNormalized(obj, ['jam_selesai', 'selesai']);
+    const tahunAjaranRaw = getFieldNormalized(obj, ['tahun_ajaran']);
+    const semesterRaw = getFieldNormalized(obj, ['semester']);
+
     out.push({
-      id: String(obj.id || `sch_${hari}_${teacherId}_${kelas}_${mapel}`).trim(),
+      id: rawId || `sch_${hari}_${teacherId}_${kelas}_${mapel}`,
       hari,
       teacher_user_id: teacherId,
-      teacher_name: String(obj.teacher_name || 'Guru').trim(),
+      teacher_name: teacherName,
       kelas,
       mata_pelajaran: mapel,
-      jam_mulai: normalizeTimeHHMM(obj.jam_mulai, '07:30'),
-      jam_selesai: normalizeTimeHHMM(obj.jam_selesai, '09:00'),
-      tahun_ajaran: resolveItemAcademicYear(obj.tahun_ajaran),
-      semester: obj.semester ? normalizeSemester(obj.semester) : undefined,
+      jam_mulai: normalizeTimeHHMM(jamMulaiRaw, '07:30'),
+      jam_selesai: normalizeTimeHHMM(jamSelesaiRaw, '09:00'),
+      tahun_ajaran: resolveItemAcademicYear(tahunAjaranRaw),
+      semester: semesterRaw ? normalizeSemester(semesterRaw) : undefined,
     });
   }
   return out;
@@ -527,23 +558,33 @@ export function sanitizeSubjectAssignments(rawList: unknown): SubjectAssignment[
   const out: SubjectAssignment[] = [];
   for (const item of rawList) {
     if (!item || typeof item !== 'object') continue;
-    const obj = item as Partial<SubjectAssignment>;
-    const kelas = String(obj.kelas || '').trim();
-    const mapel = String(obj.mata_pelajaran || '').trim();
-    const teacherId = String(obj.teacher_user_id || '').trim();
+    const obj = item as Record<string, unknown>;
+    const kelas = getFieldNormalized(obj, ['kelas', 'class']);
+    const mapel = getFieldNormalized(obj, ['mata_pelajaran', 'mapel', 'subject']);
+    const teacherId = getFieldNormalized(obj, ['teacher_user_id', 'guru_id', 'id_guru']);
     if (!kelas || !mapel || !teacherId) continue;
+
+    const rawId = getFieldNormalized(obj, ['id']);
+    const teacherName = getFieldNormalized(obj, ['teacher_name', 'nama_guru', 'guru']) || 'Guru';
+    const hariRaw = getFieldNormalized(obj, ['hari', 'day']);
+    const jamMulaiRaw = getFieldNormalized(obj, ['jam_mulai', 'mulai']);
+    const jamSelesaiRaw = getFieldNormalized(obj, ['jam_selesai', 'selesai']);
+    const tahunAjaranRaw = getFieldNormalized(obj, ['tahun_ajaran']);
+    const semesterRaw = getFieldNormalized(obj, ['semester']);
+    const sourceRaw = getFieldNormalized(obj, ['source', 'sumber']).toLowerCase();
+
     out.push({
-      id: String(obj.id || `mapel_${teacherId}_${kelas}_${mapel}`).trim(),
+      id: rawId || `mapel_${teacherId}_${kelas}_${mapel}`,
       teacher_user_id: teacherId,
-      teacher_name: String(obj.teacher_name || 'Guru').trim(),
+      teacher_name: teacherName,
       kelas,
       mata_pelajaran: mapel,
-      hari: normalizeDayOfWeek(obj.hari),
-      jam_mulai: obj.jam_mulai ? normalizeTimeHHMM(obj.jam_mulai, '') || undefined : undefined,
-      jam_selesai: obj.jam_selesai ? normalizeTimeHHMM(obj.jam_selesai, '') || undefined : undefined,
-      tahun_ajaran: resolveItemAcademicYear(obj.tahun_ajaran),
-      semester: obj.semester ? normalizeSemester(obj.semester) : undefined,
-      source: obj.source === 'schedule' || obj.source === 'record' ? obj.source : 'manual',
+      hari: normalizeDayOfWeek(hariRaw),
+      jam_mulai: jamMulaiRaw ? normalizeTimeHHMM(jamMulaiRaw, '') || undefined : undefined,
+      jam_selesai: jamSelesaiRaw ? normalizeTimeHHMM(jamSelesaiRaw, '') || undefined : undefined,
+      tahun_ajaran: resolveItemAcademicYear(tahunAjaranRaw),
+      semester: semesterRaw ? normalizeSemester(semesterRaw) : undefined,
+      source: sourceRaw === 'schedule' || sourceRaw === 'record' ? sourceRaw : 'manual',
     });
   }
   return out;
@@ -551,36 +592,36 @@ export function sanitizeSubjectAssignments(rawList: unknown): SubjectAssignment[
 
 export function sanitizeSubjectRecords(rawList: unknown): SubjectAttendanceRecord[] {
   if (!Array.isArray(rawList)) return [];
-  const validStatuses = new Set<AttendanceStatus>([
-    'Hadir',
-    'Terlambat',
-    'Sakit',
-    'Izin',
-    'Alpa',
-  ]);
   const out: SubjectAttendanceRecord[] = [];
   for (const item of rawList) {
     if (!item || typeof item !== 'object') continue;
-    const obj = item as Partial<SubjectAttendanceRecord>;
-    const tanggal = String(obj.tanggal || '').trim();
-    const assignmentId = String(obj.assignment_id || '').trim();
-    const nis = String(obj.nis || '').trim();
+    const obj = item as Record<string, unknown>;
+    const tanggal = getFieldNormalized(obj, ['tanggal', 'tgl', 'date']);
+    const assignmentId = getFieldNormalized(obj, ['assignment_id', 'id_mapel', 'jadwal_id']);
+    const nis = getFieldNormalized(obj, ['nis']);
     if (!tanggal || !assignmentId || !nis) continue;
-    const rawStatus = String(obj.status || 'Hadir') as AttendanceStatus;
+
+    const rawId = getFieldNormalized(obj, ['id']);
+    const keterangan = getFieldNormalized(obj, ['keterangan']) || undefined;
+    const rawStatus = getFieldNormalized(obj, ['status']);
+    const normalizedStatus =
+      normalizeAttendanceStatus(rawStatus) ??
+      (keterangan && /melewati jam|terlambat/i.test(keterangan) ? 'Terlambat' : 'Hadir');
+
     out.push({
-      id: String(obj.id || `${tanggal}_${assignmentId}_${nis}`).trim(),
+      id: rawId || `${tanggal}_${assignmentId}_${nis}`,
       assignment_id: assignmentId,
       tanggal,
-      kelas: String(obj.kelas || '-').trim(),
-      mata_pelajaran: String(obj.mata_pelajaran || '-').trim(),
-      teacher_user_id: String(obj.teacher_user_id || '').trim(),
-      teacher_name: String(obj.teacher_name || 'Guru').trim(),
+      kelas: getFieldNormalized(obj, ['kelas', 'class']) || '-',
+      mata_pelajaran: getFieldNormalized(obj, ['mata_pelajaran', 'mapel', 'subject']) || '-',
+      teacher_user_id: getFieldNormalized(obj, ['teacher_user_id', 'guru_id']),
+      teacher_name: getFieldNormalized(obj, ['teacher_name', 'nama_guru', 'guru']) || 'Guru',
       nis,
-      nama: String(obj.nama || nis).trim(),
-      jam_masuk: String(obj.jam_masuk || '-').trim(),
-      status: validStatuses.has(rawStatus) ? rawStatus : 'Hadir',
-      keterangan: obj.keterangan ? String(obj.keterangan).trim() : undefined,
-      tahun_ajaran: resolveItemAcademicYear(obj.tahun_ajaran),
+      nama: getFieldNormalized(obj, ['nama', 'nama_siswa']) || nis,
+      jam_masuk: getFieldNormalized(obj, ['jam_masuk']) || '-',
+      status: normalizedStatus,
+      keterangan,
+      tahun_ajaran: resolveItemAcademicYear(getFieldNormalized(obj, ['tahun_ajaran'])),
     });
   }
   return out;

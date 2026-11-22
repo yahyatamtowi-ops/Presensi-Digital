@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import QRCode from 'qrcode';
 import type { AppThemeId, SchoolSettings, Student } from '../types';
+import { DEFAULT_SCHOOL_LOGO } from './seedData';
 import { getThemeAccentRgbFromCatalog } from './themes';
 
 export function getThemeAccentRgb(tema?: AppThemeId): [number, number, number] {
@@ -114,7 +115,7 @@ export async function generateECardsPdf(
   const [r, g, b] = getThemeAccentRgb(settings.tema);
 
   const [logoImg, ttdImg, capImg] = await Promise.all([
-    settings.logo_sekolah ? loadImageAsDataUrlAndDims(settings.logo_sekolah, 160) : null,
+    loadImageAsDataUrlAndDims(settings.logo_sekolah || DEFAULT_SCHOOL_LOGO, 160),
     settings.ttd_kepala_sekolah
       ? loadImageAsDataUrlAndDims(settings.ttd_kepala_sekolah, 360)
       : null,

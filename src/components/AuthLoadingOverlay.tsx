@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Loader2, LogIn, LogOut, QrCode } from 'lucide-react';
+import { Loader2, LogIn, LogOut } from 'lucide-react';
 import type { SchoolSettings } from '../types';
+import { DEFAULT_SCHOOL_LOGO } from '../utils/seedData';
 
 export interface AuthTransitionState {
   mode: 'login' | 'logout';
@@ -57,15 +58,11 @@ export function AuthLoadingOverlay({
       <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900/90 p-8 shadow-2xl flex flex-col items-center text-center">
         <div className="relative mb-6">
           <div className="h-20 w-20 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center p-2.5 overflow-hidden">
-            {settings.logo_sekolah ? (
-              <img
-                src={settings.logo_sekolah}
-                alt={`Logo ${settings.nama_sekolah}`}
-                className="h-full w-full object-contain rounded-xl"
-              />
-            ) : (
-              <QrCode className="h-9 w-9 text-indigo-400" aria-hidden="true" />
-            )}
+            <img
+              src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
+              alt={`Logo ${settings.nama_sekolah}`}
+              className="h-full w-full object-contain rounded-xl"
+            />
           </div>
           <span className="absolute -bottom-2 -right-2 h-8 w-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-lg border border-slate-900">
             {isLogin ? (

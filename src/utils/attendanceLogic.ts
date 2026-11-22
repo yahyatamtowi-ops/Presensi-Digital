@@ -31,13 +31,50 @@ export function getCurrentTimeString(date: Date = new Date()): string {
 }
 
 export function parseTimeToMinutes(timeStr: string): number | null {
-  const clean = timeStr.trim();
+  const clean = String(timeStr ?? '').trim().replace(/\./g, ':');
+  if (!clean) return null;
+
+  const ampmMatch = clean.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
+  if (ampmMatch) {
+    let hours = Number(ampmMatch[1]);
+    const minutes = Number(ampmMatch[2]);
+    const meridiem = ampmMatch[4].toUpperCase();
+    if (hours >= 1 && hours <= 12 && minutes >= 0 && minutes <= 59) {
+      if (meridiem === 'PM' && hours < 12) hours += 12;
+      if (meridiem === 'AM' && hours === 12) hours = 0;
+      return hours * 60 + minutes;
+    }
+    return null;
+  }
+
   const match = clean.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
   if (!match) return null;
   const hours = Number(match[1]);
   const minutes = Number(match[2]);
   if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
   return hours * 60 + minutes;
+}
+
+export function normalizeAttendanceStatus(raw: unknown): AttendanceStatus | null {
+  const normalized = String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+  if (!normalized) return null;
+  if (normalized === 'hadir' || normalized === 'tepat waktu') return 'Hadir';
+  if (normalized === 'terlambat' || normalized === 'telat' || normalized === 'late') {
+    return 'Terlambat';
+  }
+  if (normalized === 'sakit') return 'Sakit';
+  if (normalized === 'izin' || normalized === 'ijin') return 'Izin';
+  if (
+    normalized === 'alpa' ||
+    normalized === 'alpha' ||
+    normalized === 'tanpa keterangan'
+  ) {
+    return 'Alpa';
+  }
+  return null;
 }
 
 /**

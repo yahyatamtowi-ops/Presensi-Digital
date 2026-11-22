@@ -560,6 +560,62 @@ test('getAcademicYearDateRange and computeAttendanceAnalytics calculate Harian, 
   assert.ok(result.topStudents.some((s) => s.nis === '2026001'));
 });
 
+test('determineAttendanceStatus handles dot-separated & AM/PM cutoff formats and checkout preserves Terlambat status', () => {
+  assert.equal(determineAttendanceStatus('07:20:00', '07.15'), 'Terlambat');
+  assert.equal(determineAttendanceStatus('07.20.00', '07:15'), 'Terlambat');
+  assert.equal(determineAttendanceStatus('08:05:00', '7:15 AM'), 'Terlambat');
+  assert.equal(determineAttendanceStatus('07:10:00', '07.15'), 'Hadir');
+
+  const lateIn = processQrScan({
+    qrRaw: '2026002',
+    students: sampleStudents,
+    records: [],
+    batasJamMasuk: '07:15',
+    modePresensi: 'masuk_pulang',
+    jamPulangStandar: '15:00',
+    scanAction: 'auto',
+    now: new Date(2026, 10, 20, 7, 35, 0),
+  });
+  assert.equal(lateIn.ok, true);
+  if (!lateIn.ok) return;
+  assert.equal(lateIn.record.status, 'Terlambat');
+
+  // Checking out later in the day MUST preserve Terlambat status (never flip to Hadir)
+  const lateOut = processQrScan({
+    qrRaw: '2026002',
+    students: sampleStudents,
+    records: [lateIn.record],
+    batasJamMasuk: '07:15',
+    modePresensi: 'masuk_pulang',
+    jamPulangStandar: '15:00',
+    scanAction: 'auto',
+    now: new Date(2026, 10, 20, 15, 5, 0),
+  });
+  assert.equal(lateOut.ok, true);
+  if (!lateOut.ok) return;
+  assert.equal(lateOut.scanType, 'pulang');
+  assert.equal(lateOut.record.status, 'Terlambat');
+  assert.equal(lateOut.record.jam_pulang, '15:05:00');
+
+  // Early checkout of a late student MUST also preserve Terlambat status and save alasan_pulang_cepat
+  const lateEarlyOut = processQrScan({
+    qrRaw: '2026002',
+    students: sampleStudents,
+    records: [lateIn.record],
+    batasJamMasuk: '07:15',
+    modePresensi: 'masuk_pulang',
+    jamPulangStandar: '15:00',
+    scanAction: 'pulang',
+    alasanPulangCepat: 'Izin keperluan keluarga',
+    now: new Date(2026, 10, 20, 11, 30, 0),
+  });
+  assert.equal(lateEarlyOut.ok, true);
+  if (!lateEarlyOut.ok) return;
+  assert.equal(lateEarlyOut.record.status, 'Terlambat');
+  assert.equal(lateEarlyOut.record.alasan_pulang_cepat, 'Izin keperluan keluarga');
+});
+
+
 
 
 

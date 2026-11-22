@@ -1,4 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { onAuthStateChanged, type User as FirebaseUser } from 'firebase/auth';
+import { auth, signInWithGoogle, signOutFirebase } from './firebase';
+import {
+  bulkUpsertAttendanceToCloud,
+  bulkUpsertStudentsToCloud,
+  bulkUpsertSubjectRecordsToCloud,
+  clearAllAttendanceInCloud,
+  deleteMasterSubjectFromCloud,
+  deleteStudentFromCloud,
+  deleteSubjectAssignmentFromCloud,
+  deleteTeacherScheduleFromCloud,
+  ensureSchoolWorkspaceExists,
+  pushFullLocalStateToCloud,
+  saveSchoolSettingsToCloud,
+  subscribeToSchoolWorkspace,
+  syncAllAccountsToCloud,
+  upsertAttendanceToCloud,
+  upsertMasterSubjectToCloud,
+  upsertStudentToCloud,
+  upsertSubjectAssignmentToCloud,
+  upsertSubjectRecordToCloud,
+  upsertTeacherScheduleToCloud,
+  type FullLocalSchoolSnapshot,
+} from './utils/firestoreSync';
 import type {
   AppThemeId,
   AttendanceRecord,
@@ -23,6 +47,7 @@ import {
   enqueueSyncMutation,
   fetchAllFromGas,
   flushSyncQueue,
+  hydrateSyncQueueFromOfflineStore,
   loadDefaultSchoolIdentity,
   loadLocalCache,
   loadSyncQueue,
@@ -33,6 +58,7 @@ import {
   saveLocalSettings,
   saveLocalStudents,
 } from './utils/gasApi';
+import { isBrowserOnline } from './utils/offlineStore';
 import {
   createAppBackupPayload,
   exportFullExcelArchive,
@@ -72,12 +98,21 @@ import {
 } from './utils/attendanceLogic';
 import { isDarkTheme, normalizeThemeId } from './utils/themes';
 import {
+  initSpeechEngine,
   playWarningBeep,
+  speakCheckoutSuccessNotification,
   speakDuplicateRejectedNotification,
   speakSuccessNotification,
   speakWaliKelasReminder,
   speakWelcomeGreeting,
+  unlockSpeechForMobile,
 } from './utils/sound';
+import {
+  buildFirestoreQuotaSnapshot,
+  loadFirestoreDailyUsage,
+  resetFirestoreDailyUsage,
+  subscribeFirestoreUsage,
+} from './utils/firestoreUsage';
 import {
   addMasterSubject,
   addSubjectAssignment,
@@ -159,28 +194,83 @@ export default function App() {
   });
   const welcomeSpokenRef = useRef(false);
 
-  const handleSplashFinish = useCallback(() => {
+  const handleSplashFinish = useCallback((fromUserGesture = false) => {
     setShowSplash(false);
     if (!welcomeSpokenRef.current) {
       welcomeSpokenRef.current = true;
-      speakWelcomeGreeting(latestDataRef.current.settings.nama_sekolah);
+      speakWelcomeGreeting(latestDataRef.current.settings.nama_sekolah, fromUserGesture);
     }
+  }, []);
+
+  const handleReplayVoice = useCallback(() => {
+    unlockSpeechForMobile();
+    speakWelcomeGreeting(latestDataRef.current.settings.nama_sekolah, true);
+  }, []);
+
+  // Preload Indonesian female TTS voices & register mobile/tablet gesture unlock once on mount
+  useEffect(() => {
+    initSpeechEngine();
   }, []);
 
   // Scan QR is always the default initial page (accessible without login)
   const [activeTab, setActiveTab] = useState<TabId>('scan');
+  const [isOnline, setIsOnline] = useState<boolean>(() => isBrowserOnline());
+  const [syncingQueue, setSyncingQueue] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(
-    initialCache.settings.script_url ? 'syncing' : 'offline'
+    !isBrowserOnline()
+      ? 'offline'
+      : initialCache.settings.script_url
+        ? 'syncing'
+        : 'offline'
   );
+  const [sheetsSupportsAkun, setSheetsSupportsAkun] = useState<boolean | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(
     () => loadSyncQueue().length
   );
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [firebaseAuthReady, setFirebaseAuthReady] = useState(false);
+  const [cloudSyncing, setCloudSyncing] = useState(false);
+  const [cloudConnected, setCloudConnected] = useState(false);
+  const [firestoreDailyUsage, setFirestoreDailyUsage] = useState(() =>
+    loadFirestoreDailyUsage()
+  );
+
   const syncInFlightRef = useRef(false);
+  const lastLocalSettingsSaveAtRef = useRef(0);
+  const settingsSaveInFlightRef = useRef(false);
+  const lastLocalAccountsSaveAtRef = useRef(0);
+  const accountsSaveInFlightRef = useRef(false);
+  const lastLocalRecordsSaveAtRef = useRef(0);
+  const recordsSaveInFlightCountRef = useRef(0);
+  const lastLocalStudentsSaveAtRef = useRef(0);
+  const studentsSaveInFlightCountRef = useRef(0);
+  const autoSeededAkunForUrlRef = useRef<string | null>(null);
+  const lastLocalAcademicSaveAtRef = useRef(0);
   const latestDataRef = useRef({ students, records, settings });
   latestDataRef.current = { students, records, settings };
+  const latestFullSnapshotRef = useRef<FullLocalSchoolSnapshot>({
+    settings,
+    students,
+    records,
+    masterSubjects,
+    teacherSchedules,
+    subjectAssignments,
+    subjectRecords,
+    accounts,
+  });
+  latestFullSnapshotRef.current = {
+    settings,
+    students,
+    records,
+    masterSubjects,
+    teacherSchedules,
+    subjectAssignments,
+    subjectRecords,
+    accounts,
+  };
 
   const activeTheme = previewTheme ?? settings.tema ?? 'indigo';
 
@@ -205,11 +295,351 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  useEffect(() => {
+    return subscribeFirestoreUsage(() => {
+      setFirestoreDailyUsage(loadFirestoreDailyUsage());
+    });
+  }, []);
+
+  const firestoreQuota = useMemo(
+    () =>
+      buildFirestoreQuotaSnapshot(firestoreDailyUsage, {
+        settings,
+        students,
+        records,
+        masterSubjects,
+        teacherSchedules,
+        subjectAssignments,
+        subjectRecords,
+        accounts,
+      }),
+    [
+      firestoreDailyUsage,
+      settings,
+      students,
+      records,
+      masterSubjects,
+      teacherSchedules,
+      subjectAssignments,
+      subjectRecords,
+      accounts,
+    ]
+  );
+
+  const handleResetLocalQuota = useCallback(() => {
+    setFirestoreDailyUsage(resetFirestoreDailyUsage());
+    pushToast({
+      type: 'info',
+      title: 'Counter Kuota Lokal Direset',
+      description:
+        'Penghitung penggunaan harian di perangkat ini direset ke 0. Total resmi tetap mengacu pada Firebase Console.',
+    });
+  }, [pushToast]);
+
+  const isQuotaExceededError = (err: unknown): boolean => {
+    const msg = (err instanceof Error ? err.message : String(err || '')).toLowerCase();
+    return msg.includes('resource-exhausted') || msg.includes('quota exceeded');
+  };
+
+  // Track Firebase Auth state for real-time cross-device cloud sync
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      setFirebaseAuthReady(true);
+      if (!user) {
+        setCloudConnected(false);
+        setCloudSyncing(false);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Attach real-time Firestore workspace listeners ONLY after auth is ready & user signed in
+  useEffect(() => {
+    if (!firebaseAuthReady || !firebaseUser) return;
+    if (!firebaseUser.emailVerified) {
+      pushToast({
+        type: 'warning',
+        title: 'Email Google Belum Terverifikasi',
+        description: 'Gunakan akun Google dengan email terverifikasi untuk sinkronisasi cloud.',
+      });
+      return;
+    }
+
+    let cancelled = false;
+    let unsubscribeWorkspace: (() => void) | null = null;
+
+    setCloudSyncing(true);
+
+    const bootstrapAndListen = async () => {
+      try {
+        const snapshot = latestFullSnapshotRef.current;
+        const { createdNew } = await ensureSchoolWorkspaceExists(
+          firebaseUser.uid,
+          snapshot
+        );
+        if (cancelled) return;
+
+        unsubscribeWorkspace = subscribeToSchoolWorkspace(firebaseUser.uid, {
+          getFallbackSettings: () => latestDataRef.current.settings,
+          onSettings: (cloudSettings) => {
+            if (settingsSaveInFlightRef.current) return;
+            setSettings(cloudSettings);
+            saveLocalSettings(cloudSettings);
+            saveDefaultSchoolIdentity({
+              nama_sekolah: cloudSettings.nama_sekolah,
+              logo_sekolah: cloudSettings.logo_sekolah || '',
+            });
+          },
+          onStudents: (cloudStudents) => {
+            setStudents(cloudStudents);
+            saveLocalStudents(cloudStudents);
+          },
+          onRecords: (cloudRecords) => {
+            setRecords(cloudRecords);
+            saveLocalRecords(cloudRecords);
+          },
+          onMasterSubjects: (cloudSubjects) => {
+            setMasterSubjects(cloudSubjects);
+            saveMasterSubjects(cloudSubjects);
+          },
+          onTeacherSchedules: (cloudSchedules) => {
+            setTeacherSchedules(cloudSchedules);
+            saveTeacherSchedules(cloudSchedules);
+          },
+          onSubjectAssignments: (cloudAssignments) => {
+            setSubjectAssignments(cloudAssignments);
+            saveSubjectAssignments(cloudAssignments);
+          },
+          onSubjectRecords: (cloudSubjectRecords) => {
+            setSubjectRecords(cloudSubjectRecords);
+            saveSubjectRecords(cloudSubjectRecords);
+          },
+          onAccounts: (cloudAccounts) => {
+            setAccounts(cloudAccounts);
+            saveUserAccounts(cloudAccounts);
+            setSession((prevSession) => {
+              if (!prevSession) return prevSession;
+              const matched = cloudAccounts.find(
+                (a) =>
+                  a.id === prevSession.userId ||
+                  a.username.toLowerCase() === prevSession.username.toLowerCase()
+              );
+              if (!matched) return prevSession;
+              const syncedSession: AuthSession = {
+                userId: matched.id,
+                username: matched.username,
+                nama: matched.nama,
+                nip: matched.nip,
+                role: matched.role,
+                jabatan: formatRoleLabel(matched.role, matched.kelas_binaan),
+                kelas_binaan: matched.kelas_binaan,
+              };
+              if (
+                syncedSession.userId === prevSession.userId &&
+                syncedSession.username === prevSession.username &&
+                syncedSession.nama === prevSession.nama &&
+                (syncedSession.nip || '') === (prevSession.nip || '') &&
+                syncedSession.role === prevSession.role &&
+                syncedSession.jabatan === prevSession.jabatan &&
+                (syncedSession.kelas_binaan || '') === (prevSession.kelas_binaan || '')
+              ) {
+                return prevSession;
+              }
+              saveAuthSession(syncedSession);
+              return syncedSession;
+            });
+          },
+          onSyncActivity: () => {
+            setCloudConnected(true);
+            setCloudSyncing(false);
+            setLastSyncedAt(getCurrentTimeString());
+          },
+          onError: (err, path) => {
+            setCloudSyncing(false);
+            if (isQuotaExceededError(err)) {
+              pushToast({
+                type: 'warning',
+                title: 'Kuota Gratis Firestore Hari Ini Habis',
+                description:
+                  'Batas gratis harian Spark Plan tercapai (reset otomatis 00:00 PT / 14:00 WIB). Data lokal tetap aman digunakan.',
+              });
+              return;
+            }
+            pushToast({
+              type: 'error',
+              title: 'Gangguan Sinkronisasi Cloud',
+              description: `Gagal memuat data cloud (${path}). Data lokal tetap aman digunakan.`,
+            });
+          },
+        });
+
+        setCloudConnected(true);
+        setCloudSyncing(false);
+        setLastSyncedAt(getCurrentTimeString());
+
+        if (createdNew) {
+          pushToast({
+            type: 'success',
+            title: 'Cloud Firebase Aktif',
+            description: `Data lokal (${snapshot.students.length} siswa, ${snapshot.records.length} presensi) diunggah ke Cloud dan siap dibuka di perangkat lain.`,
+          });
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setCloudConnected(false);
+        setCloudSyncing(false);
+        pushToast({
+          type: 'error',
+          title: 'Gagal Menghubungkan Cloud Firebase',
+          description:
+            err instanceof Error
+              ? err.message
+              : 'Periksa koneksi internet dan coba hubungkan kembali.',
+        });
+      }
+    };
+
+    void bootstrapAndListen();
+
+    return () => {
+      cancelled = true;
+      if (unsubscribeWorkspace) {
+        unsubscribeWorkspace();
+      }
+    };
+  }, [firebaseAuthReady, firebaseUser, pushToast]);
+
+  const runCloudWrite = useCallback(
+    (writer: (uid: string) => Promise<void>) => {
+      const uid = firebaseUser?.uid;
+      if (!uid || !firebaseUser?.emailVerified) return;
+      void writer(uid)
+        .then(() => {
+          setLastSyncedAt(getCurrentTimeString());
+        })
+        .catch((err) => {
+          if (isQuotaExceededError(err)) {
+            pushToast({
+              type: 'warning',
+              title: 'Kuota Gratis Firestore Tercapai',
+              description:
+                'Perubahan tersimpan lokal. Kuota gratis Spark Plan akan reset otomatis besok atau cek di menu Cloud & Sheets.',
+            });
+            return;
+          }
+          pushToast({
+            type: 'warning',
+            title: 'Perubahan Tersimpan Lokal',
+            description:
+              'Sinkronisasi cloud tertunda. Pastikan perangkat terhubung ke internet.',
+          });
+        });
+    },
+    [firebaseUser, pushToast]
+  );
+
+  const handleConnectCloud = useCallback(async () => {
+    setCloudSyncing(true);
+    try {
+      const user = await signInWithGoogle();
+      pushToast({
+        type: 'success',
+        title: 'Terhubung ke Cloud Firebase',
+        description: `Masuk sebagai ${user.email || user.displayName || 'Google'}. Data disinkronkan secara real-time lintas perangkat.`,
+      });
+    } catch (err) {
+      setCloudSyncing(false);
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        return;
+      }
+      pushToast({
+        type: 'error',
+        title: 'Gagal Masuk dengan Google',
+        description:
+          err instanceof Error
+            ? err.message
+            : 'Pastikan popup login Google diizinkan oleh browser.',
+      });
+    }
+  }, [pushToast]);
+
+  const handleDisconnectCloud = useCallback(async () => {
+    setCloudSyncing(true);
+    try {
+      await signOutFirebase();
+      setCloudConnected(false);
+      pushToast({
+        type: 'info',
+        title: 'Koneksi Cloud Diputuskan',
+        description: 'Aplikasi kembali ke penyimpanan lokal di perangkat ini.',
+      });
+    } catch (err) {
+      pushToast({
+        type: 'error',
+        title: 'Gagal Memutuskan Cloud',
+        description: err instanceof Error ? err.message : 'Coba lagi beberapa saat.',
+      });
+    } finally {
+      setCloudSyncing(false);
+    }
+  }, [pushToast]);
+
+  const handlePushLocalToCloud = useCallback(async () => {
+    const uid = firebaseUser?.uid;
+    if (!uid) {
+      await handleConnectCloud();
+      return;
+    }
+    setCloudSyncing(true);
+    try {
+      const snapshot = latestFullSnapshotRef.current;
+      await pushFullLocalStateToCloud(uid, snapshot, false);
+      setLastSyncedAt(getCurrentTimeString());
+      pushToast({
+        type: 'success',
+        title: 'Data Lokal Tersinkron ke Cloud',
+        description: `${snapshot.students.length} siswa, ${snapshot.records.length} presensi, jadwal mapel, dan pengaturan berhasil dikirim ke Firebase.`,
+      });
+    } catch (err) {
+      pushToast({
+        type: 'error',
+        title: 'Gagal Mengirim ke Cloud',
+        description: err instanceof Error ? err.message : 'Periksa koneksi internet Anda.',
+      });
+    } finally {
+      setCloudSyncing(false);
+    }
+  }, [firebaseUser, handleConnectCloud, pushToast]);
+
   const syncFromGas = useCallback(
-    async (scriptUrl: string, silent = false) => {
+    async (
+      scriptUrl: string,
+      silent = false,
+      options?: { forcePullRemote?: boolean }
+    ): Promise<{
+      ok: boolean;
+      hasRemoteData: boolean;
+      studentsCount: number;
+      recordsCount: number;
+      accountsCount: number;
+      schedulesCount: number;
+      subjectRecordsCount: number;
+    }> => {
+      const emptyResult = {
+        ok: false,
+        hasRemoteData: false,
+        studentsCount: 0,
+        recordsCount: 0,
+        accountsCount: 0,
+        schedulesCount: 0,
+        subjectRecordsCount: 0,
+      };
       const trimmed = scriptUrl.trim();
       if (!trimmed) {
         setConnectionStatus('offline');
+        setSheetsSupportsAkun(null);
         if (!silent) {
           pushToast({
             type: 'info',
@@ -218,21 +648,45 @@ export default function App() {
               'Isi Web App URL Google Apps Script di menu Pengaturan untuk sinkronisasi ke Google Sheets.',
           });
         }
-        return;
+        return emptyResult;
       }
 
-      if (syncInFlightRef.current) return;
+      if (!isBrowserOnline()) {
+        setIsOnline(false);
+        setConnectionStatus('offline');
+        if (!silent) {
+          pushToast({
+            type: 'warning',
+            title: 'Perangkat Sedang Offline',
+            description:
+              'Koneksi internet belum tersedia. Data tetap aman di penyimpanan offline dan akan tersinkron otomatis saat terhubung kembali.',
+          });
+        }
+        return emptyResult;
+      }
+
+      const forcePullRemote = Boolean(options?.forcePullRemote);
+      if (syncInFlightRef.current && !forcePullRemote) return emptyResult;
       syncInFlightRef.current = true;
 
-      if (!silent) {
+      if (!silent || forcePullRemote) {
         setConnectionStatus('syncing');
       }
 
       try {
         // Flush any queued offline mutations before pulling remote state
-        const flushResult = await flushSyncQueue(trimmed);
+        // (Skip flush when connecting a fresh device via forcePullRemote so stale defaults aren't pushed)
+        const flushResult = forcePullRemote
+          ? { flushed: 0, remaining: loadSyncQueue().length, lastError: undefined as string | undefined }
+          : await flushSyncQueue(trimmed);
         setPendingSyncCount(flushResult.remaining);
-        if (flushResult.remaining > 0 && !silent && flushResult.lastError) {
+        if (flushResult.flushed > 0) {
+          pushToast({
+            type: 'success',
+            title: 'Data Offline Tersinkronisasi',
+            description: `${flushResult.flushed} data yang disimpan saat offline berhasil dikirim otomatis ke Google Sheets.`,
+          });
+        } else if (flushResult.remaining > 0 && !silent && flushResult.lastError) {
           pushToast({
             type: 'warning',
             title: 'Sebagian Antrean Belum Tersimpan ke Sheets',
@@ -240,51 +694,89 @@ export default function App() {
           });
         }
 
+        const fetchStartedAt = Date.now();
         const remote = await fetchAllFromGas(trimmed);
+        setSheetsSupportsAkun(remote.supportsAkun);
 
-        if (remote.students.length > 0) {
+        const canApplyRemoteStudents =
+          (forcePullRemote ||
+            (flushResult.remaining === 0 &&
+              studentsSaveInFlightCountRef.current === 0 &&
+              lastLocalStudentsSaveAtRef.current <= fetchStartedAt)) &&
+          remote.students.length > 0;
+
+        if (canApplyRemoteStudents) {
+          latestDataRef.current.students = remote.students;
+          latestFullSnapshotRef.current.students = remote.students;
           setStudents(remote.students);
           saveLocalStudents(remote.students);
-          setRecords(remote.records);
-          saveLocalRecords(remote.records);
-        } else if (remote.records.length > 0) {
+        }
+
+        const canApplyRemoteRecords =
+          (forcePullRemote ||
+            (flushResult.remaining === 0 &&
+              recordsSaveInFlightCountRef.current === 0 &&
+              lastLocalRecordsSaveAtRef.current <= fetchStartedAt)) &&
+          remote.records.length > 0;
+
+        if (canApplyRemoteRecords) {
+          latestDataRef.current.records = remote.records;
+          latestFullSnapshotRef.current.records = remote.records;
           setRecords(remote.records);
           saveLocalRecords(remote.records);
         }
 
-        if (
-          remote.settings &&
-          (remote.settings.nama_sekolah ||
+        const shouldSkipSettingsMerge =
+          !forcePullRemote &&
+          (settingsSaveInFlightRef.current ||
+            lastLocalSettingsSaveAtRef.current > fetchStartedAt);
+
+        const hasRemoteSettingsFields =
+          Boolean(remote.settings) &&
+          (Boolean(remote.settings.nama_sekolah) ||
             remote.settings.nama_kepala_sekolah !== undefined ||
             remote.settings.nip_kepala_sekolah !== undefined ||
             remote.settings.ttd_kepala_sekolah !== undefined ||
             remote.settings.cap_sekolah !== undefined ||
-            remote.settings.batas_jam_masuk ||
-            remote.settings.mode_presensi ||
-            remote.settings.jam_pulang_standar ||
-            remote.settings.tahun_ajaran ||
-            remote.settings.semester ||
-            remote.settings.tema ||
-            remote.settings.logo_sekolah)
-        ) {
+            Boolean(remote.settings.batas_jam_masuk) ||
+            Boolean(remote.settings.mode_presensi) ||
+            Boolean(remote.settings.jam_pulang_standar) ||
+            Boolean(remote.settings.tahun_ajaran) ||
+            Boolean(remote.settings.semester) ||
+            Boolean(remote.settings.tema) ||
+            Boolean(remote.settings.logo_sekolah));
+
+        if (!shouldSkipSettingsMerge && (hasRemoteSettingsFields || forcePullRemote)) {
           setSettings((prev) => {
             const merged: SchoolSettings = {
               ...prev,
               nama_sekolah: remote.settings.nama_sekolah?.trim()
-                ? remote.settings.nama_sekolah
+                ? remote.settings.nama_sekolah.trim()
                 : prev.nama_sekolah,
-              nama_kepala_sekolah: remote.settings.nama_kepala_sekolah?.trim()
-                ? remote.settings.nama_kepala_sekolah
-                : prev.nama_kepala_sekolah,
-              nip_kepala_sekolah: remote.settings.nip_kepala_sekolah?.trim()
-                ? remote.settings.nip_kepala_sekolah
-                : prev.nip_kepala_sekolah,
-              ttd_kepala_sekolah: remote.settings.ttd_kepala_sekolah?.trim()
-                ? remote.settings.ttd_kepala_sekolah
-                : prev.ttd_kepala_sekolah,
-              cap_sekolah: remote.settings.cap_sekolah?.trim()
-                ? remote.settings.cap_sekolah
-                : prev.cap_sekolah,
+              nama_kepala_sekolah:
+                remote.settings.nama_kepala_sekolah !== undefined
+                  ? forcePullRemote
+                    ? String(remote.settings.nama_kepala_sekolah).trim()
+                    : remote.settings.nama_kepala_sekolah.trim() || prev.nama_kepala_sekolah
+                  : prev.nama_kepala_sekolah,
+              nip_kepala_sekolah:
+                remote.settings.nip_kepala_sekolah !== undefined
+                  ? forcePullRemote
+                    ? String(remote.settings.nip_kepala_sekolah).trim()
+                    : remote.settings.nip_kepala_sekolah.trim() || prev.nip_kepala_sekolah
+                  : prev.nip_kepala_sekolah,
+              ttd_kepala_sekolah:
+                remote.settings.ttd_kepala_sekolah !== undefined
+                  ? forcePullRemote
+                    ? String(remote.settings.ttd_kepala_sekolah).trim()
+                    : remote.settings.ttd_kepala_sekolah.trim() || prev.ttd_kepala_sekolah
+                  : prev.ttd_kepala_sekolah,
+              cap_sekolah:
+                remote.settings.cap_sekolah !== undefined
+                  ? forcePullRemote
+                    ? String(remote.settings.cap_sekolah).trim()
+                    : remote.settings.cap_sekolah.trim() || prev.cap_sekolah
+                  : prev.cap_sekolah,
               batas_jam_masuk: remote.settings.batas_jam_masuk
                 ? normalizeTimeHHMM(remote.settings.batas_jam_masuk, prev.batas_jam_masuk)
                 : prev.batas_jam_masuk,
@@ -297,15 +789,15 @@ export default function App() {
                     prev.jam_pulang_standar
                   )
                 : prev.jam_pulang_standar,
-              tahun_ajaran: remote.settings.tahun_ajaran || prev.tahun_ajaran,
+              tahun_ajaran: remote.settings.tahun_ajaran?.trim() || prev.tahun_ajaran,
               semester: remote.settings.semester
                 ? normalizeSemester(remote.settings.semester, prev.semester || 'ganjil')
                 : prev.semester || 'ganjil',
               tema: remote.settings.tema
                 ? normalizeThemeId(remote.settings.tema, prev.tema)
                 : prev.tema,
-              logo_sekolah: remote.settings.logo_sekolah
-                ? remote.settings.logo_sekolah
+              logo_sekolah: remote.settings.logo_sekolah?.trim()
+                ? remote.settings.logo_sekolah.trim()
                 : prev.logo_sekolah,
               script_url: trimmed,
             };
@@ -326,22 +818,134 @@ export default function App() {
             if (unchanged) {
               return prev;
             }
+            latestDataRef.current.settings = merged;
+            latestFullSnapshotRef.current.settings = merged;
             saveLocalSettings(merged);
+            saveDefaultSchoolIdentity({
+              nama_sekolah: merged.nama_sekolah,
+              logo_sekolah: merged.logo_sekolah || '',
+            });
             return merged;
           });
+        }
+
+        let syncedAccountsCount = remote.accounts.length;
+        const canApplyRemoteAccounts =
+          remote.accounts.length > 0 &&
+          (forcePullRemote ||
+            (!accountsSaveInFlightRef.current &&
+              lastLocalAccountsSaveAtRef.current <= fetchStartedAt));
+
+        if (canApplyRemoteAccounts) {
+          latestFullSnapshotRef.current.accounts = remote.accounts;
+          setAccounts(remote.accounts);
+          saveUserAccounts(remote.accounts);
+          setSession((prevSession) => {
+            if (!prevSession) return prevSession;
+            const matched = remote.accounts.find(
+              (a) =>
+                a.id === prevSession.userId ||
+                a.username.toLowerCase() === prevSession.username.toLowerCase()
+            );
+            if (!matched) return prevSession;
+            const syncedSession: AuthSession = {
+              userId: matched.id,
+              username: matched.username,
+              nama: matched.nama,
+              nip: matched.nip,
+              role: matched.role,
+              jabatan: formatRoleLabel(matched.role, matched.kelas_binaan),
+              kelas_binaan: matched.kelas_binaan,
+            };
+            if (
+              syncedSession.userId === prevSession.userId &&
+              syncedSession.username === prevSession.username &&
+              syncedSession.nama === prevSession.nama &&
+              (syncedSession.nip || '') === (prevSession.nip || '') &&
+              syncedSession.role === prevSession.role &&
+              syncedSession.jabatan === prevSession.jabatan &&
+              (syncedSession.kelas_binaan || '') === (prevSession.kelas_binaan || '')
+            ) {
+              return prevSession;
+            }
+            saveAuthSession(syncedSession);
+            return syncedSession;
+          });
+        } else if (
+          !forcePullRemote &&
+          remote.supportsAkun &&
+          remote.accounts.length === 0 &&
+          !accountsSaveInFlightRef.current &&
+          autoSeededAkunForUrlRef.current !== trimmed &&
+          latestFullSnapshotRef.current.accounts.length > 0
+        ) {
+          autoSeededAkunForUrlRef.current = trimmed;
+          accountsSaveInFlightRef.current = true;
+          try {
+            await postToGas(trimmed, 'syncAkun', {
+              accounts: latestFullSnapshotRef.current.accounts,
+            });
+            syncedAccountsCount = latestFullSnapshotRef.current.accounts.length;
+          } catch {
+            // Will retry on next manual push or account edit
+          } finally {
+            lastLocalAccountsSaveAtRef.current = Date.now();
+            accountsSaveInFlightRef.current = false;
+          }
+        }
+
+        if (forcePullRemote || lastLocalAcademicSaveAtRef.current <= fetchStartedAt) {
+          if (remote.masterSubjects.length > 0) {
+            latestFullSnapshotRef.current.masterSubjects = remote.masterSubjects;
+            setMasterSubjects(remote.masterSubjects);
+            saveMasterSubjects(remote.masterSubjects);
+          }
+          if (remote.teacherSchedules.length > 0) {
+            latestFullSnapshotRef.current.teacherSchedules = remote.teacherSchedules;
+            setTeacherSchedules(remote.teacherSchedules);
+            saveTeacherSchedules(remote.teacherSchedules);
+          }
+          if (remote.subjectAssignments.length > 0) {
+            latestFullSnapshotRef.current.subjectAssignments = remote.subjectAssignments;
+            setSubjectAssignments(remote.subjectAssignments);
+            saveSubjectAssignments(remote.subjectAssignments);
+          }
+          if (remote.subjectRecords.length > 0) {
+            latestFullSnapshotRef.current.subjectRecords = remote.subjectRecords;
+            setSubjectRecords(remote.subjectRecords);
+            saveSubjectRecords(remote.subjectRecords);
+          }
         }
 
         setConnectionStatus(flushResult.remaining > 0 ? 'error' : 'connected');
         setLastSyncedAt(getCurrentTimeString());
         if (!silent && flushResult.remaining === 0) {
-          pushToast({
-            type: 'success',
-            title: 'Sinkronisasi Berhasil',
-            description: `Terhubung real-time ke Google Sheets (${remote.students.length} siswa, ${remote.records.length} catatan presensi).`,
-          });
+          if (!remote.supportsAkun) {
+            pushToast({
+              type: 'warning',
+              title: 'Sinkronisasi Berhasil — Sheet Akun Belum Aktif',
+              description:
+                'Code.gs pada Spreadsheet masih versi lama dan belum memiliki Sheet Akun. Salin Code.gs terbaru di Pengaturan → Cloud & Sheets lalu lakukan Deploy Versi Baru agar Data Akun & Akses tersinkron.',
+            });
+          } else {
+            pushToast({
+              type: 'success',
+              title: 'Sinkronisasi Penuh Berhasil',
+              description: `Semua data disinkronkan dari Google Sheets (${remote.students.length} siswa, ${remote.records.length} presensi, ${syncedAccountsCount} akun, ${remote.masterSubjects.length} mapel, ${remote.teacherSchedules.length} jadwal, ${remote.subjectRecords.length} presensi mapel & pengaturan sekolah).`,
+            });
+          }
         }
+        return {
+          ok: true,
+          hasRemoteData: remote.hasRemoteData,
+          studentsCount: remote.students.length,
+          recordsCount: remote.records.length,
+          accountsCount: syncedAccountsCount,
+          schedulesCount: remote.teacherSchedules.length,
+          subjectRecordsCount: remote.subjectRecords.length,
+        };
       } catch (err) {
-        setConnectionStatus('error');
+        setConnectionStatus(!isBrowserOnline() ? 'offline' : 'error');
         if (!silent) {
           pushToast({
             type: 'error',
@@ -352,6 +956,7 @@ export default function App() {
                 : 'Menggunakan data cache lokal.',
           });
         }
+        return emptyResult;
       } finally {
         syncInFlightRef.current = false;
       }
@@ -359,7 +964,116 @@ export default function App() {
     [pushToast]
   );
 
-  // Realtime & everytime sync: on mount/URL change, every 10s, on focus, visibility, and online events
+  // Hydrate offline queue from IndexedDB backup on mount
+  useEffect(() => {
+    let active = true;
+    void hydrateSyncQueueFromOfflineStore().then((queue) => {
+      if (!active) return;
+      setPendingSyncCount(queue.length);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const flushOfflineQueueNow = useCallback(
+    async (opts?: { fromReconnect?: boolean; silentIfEmpty?: boolean }) => {
+      if (!isBrowserOnline()) {
+        setIsOnline(false);
+        setConnectionStatus('offline');
+        return;
+      }
+      const targetUrl = latestFullSnapshotRef.current.settings.script_url.trim();
+      const pendingBefore = loadSyncQueue().length;
+
+      if (targetUrl && pendingBefore > 0) {
+        setSyncingQueue(true);
+        setConnectionStatus('syncing');
+        try {
+          const flushResult = await flushSyncQueue(targetUrl);
+          setPendingSyncCount(flushResult.remaining);
+          if (flushResult.flushed > 0) {
+            setLastSyncedAt(getCurrentTimeString());
+            setConnectionStatus(flushResult.remaining > 0 ? 'error' : 'connected');
+            pushToast({
+              type: 'success',
+              title: opts?.fromReconnect
+                ? 'Koneksi Internet Kembali — Data Offline Tersinkron'
+                : 'Antrean Offline Berhasil Disinkronkan',
+              description:
+                flushResult.remaining === 0
+                  ? `${flushResult.flushed} data presensi/perubahan offline berhasil disimpan otomatis ke Google Sheets.`
+                  : `${flushResult.flushed} data terkirim, ${flushResult.remaining} data masih menunggu koneksi stabil.`,
+            });
+            if (flushResult.remaining === 0) {
+              void syncFromGas(targetUrl, true);
+            }
+          } else if (flushResult.remaining > 0 && flushResult.lastError) {
+            setConnectionStatus('error');
+            pushToast({
+              type: 'warning',
+              title: 'Sinkronisasi Antrean Tertunda',
+              description: `${flushResult.remaining} data tetap aman di perangkat: ${flushResult.lastError}`,
+            });
+          }
+        } finally {
+          setSyncingQueue(false);
+        }
+        return;
+      }
+
+      if (opts?.fromReconnect) {
+        if (targetUrl) {
+          void syncFromGas(targetUrl, true);
+        }
+        if (cloudConnected) {
+          pushToast({
+            type: 'success',
+            title: 'Koneksi Internet Kembali',
+            description:
+              'Data offline otomatis disinkronkan dengan Cloud Firebase & perangkat lain.',
+          });
+        } else if (targetUrl) {
+          pushToast({
+            type: 'success',
+            title: 'Koneksi Internet Kembali',
+            description: 'Terhubung kembali ke Google Sheets.',
+          });
+        }
+      } else if (!opts?.silentIfEmpty && pendingBefore === 0 && targetUrl) {
+        await syncFromGas(targetUrl, false);
+      }
+    },
+    [cloudConnected, pushToast, syncFromGas]
+  );
+
+  // Global browser online / offline detection + auto-flush when connection returns
+  useEffect(() => {
+    const handleBrowserOffline = () => {
+      setIsOnline(false);
+      setConnectionStatus('offline');
+      pushToast({
+        type: 'warning',
+        title: 'Koneksi Internet Terputus — Mode Offline Aktif',
+        description:
+          'Presensi siswa tetap berjalan normal. Semua data disimpan aman di perangkat dan akan tersinkron otomatis saat internet kembali.',
+      });
+    };
+
+    const handleBrowserOnline = () => {
+      setIsOnline(true);
+      void flushOfflineQueueNow({ fromReconnect: true });
+    };
+
+    window.addEventListener('offline', handleBrowserOffline);
+    window.addEventListener('online', handleBrowserOnline);
+    return () => {
+      window.removeEventListener('offline', handleBrowserOffline);
+      window.removeEventListener('online', handleBrowserOnline);
+    };
+  }, [flushOfflineQueueNow, pushToast]);
+
+  // Realtime & everytime sync: on mount/URL change, every 10s, on focus and visibility
   useEffect(() => {
     const url = settings.script_url.trim();
     if (!url) {
@@ -367,65 +1081,140 @@ export default function App() {
       return;
     }
 
-    void syncFromGas(url, true);
+    if (isBrowserOnline()) {
+      void syncFromGas(url, true);
+    } else {
+      setConnectionStatus('offline');
+    }
 
     const intervalId = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && navigator.onLine) {
-        void syncFromGas(url, true);
+      if (document.visibilityState === 'visible' && isBrowserOnline()) {
+        if (loadSyncQueue().length > 0) {
+          void flushOfflineQueueNow({ silentIfEmpty: true });
+        } else {
+          void syncFromGas(url, true);
+        }
       }
     }, 10000);
 
     const handleResumeSync = () => {
-      if (document.visibilityState === 'visible' && navigator.onLine) {
-        void syncFromGas(url, true);
+      if (document.visibilityState === 'visible' && isBrowserOnline()) {
+        if (loadSyncQueue().length > 0) {
+          void flushOfflineQueueNow({ silentIfEmpty: true });
+        } else {
+          void syncFromGas(url, true);
+        }
       }
     };
 
     window.addEventListener('focus', handleResumeSync);
-    window.addEventListener('online', handleResumeSync);
     document.addEventListener('visibilitychange', handleResumeSync);
 
     return () => {
       window.clearInterval(intervalId);
       window.removeEventListener('focus', handleResumeSync);
-      window.removeEventListener('online', handleResumeSync);
       document.removeEventListener('visibilitychange', handleResumeSync);
     };
-  }, [settings.script_url, syncFromGas]);
+  }, [settings.script_url, syncFromGas, flushOfflineQueueNow]);
 
   const syncMutation = useCallback(
     async (
       action: Parameters<typeof postToGas>[1],
       payload: Record<string, unknown>,
       urlOverride?: string
-    ) => {
+    ): Promise<boolean> => {
       const targetUrl = (urlOverride ?? settings.script_url).trim();
       if (!targetUrl) {
         setConnectionStatus('offline');
-        return;
+        return false;
       }
+
+      // Immediate zero-latency offline queueing when internet is unavailable
+      if (!isBrowserOnline()) {
+        setIsOnline(false);
+        const updatedQueue = enqueueSyncMutation(action, payload);
+        setPendingSyncCount(updatedQueue.length);
+        setConnectionStatus('offline');
+        return false;
+      }
+
       setConnectionStatus('syncing');
       try {
         await postToGas(targetUrl, action, payload);
+        if (action === 'syncAkun' || action === 'upsertAkun' || action === 'deleteAkun' || action === 'syncAll') {
+          setSheetsSupportsAkun(true);
+        }
         await flushSyncQueue(targetUrl);
         setPendingSyncCount(loadSyncQueue().length);
         setConnectionStatus('connected');
         setLastSyncedAt(getCurrentTimeString());
+        return true;
       } catch (err) {
-        enqueueSyncMutation(action, payload);
-        setPendingSyncCount(loadSyncQueue().length);
-        setConnectionStatus('error');
-        pushToast({
-          type: 'warning',
-          title: 'Tersimpan di Antrean Sinkronisasi',
-          description:
-            err instanceof Error
-              ? `Perubahan disimpan lokal dan akan disinkronkan otomatis: ${err.message}`
-              : 'Perubahan disimpan lokal dan akan disinkronkan otomatis saat terhubung.',
-        });
+        const updatedQueue = enqueueSyncMutation(action, payload);
+        setPendingSyncCount(updatedQueue.length);
+        const currentlyOnline = isBrowserOnline();
+        setIsOnline(currentlyOnline);
+        setConnectionStatus(currentlyOnline ? 'error' : 'offline');
+        const msg =
+          err instanceof Error
+            ? err.message
+            : 'Perubahan disimpan offline dan akan disinkronkan otomatis saat terhubung.';
+        if (msg.toLowerCase().includes('sheet akun')) {
+          setSheetsSupportsAkun(false);
+        }
+        if (currentlyOnline) {
+          pushToast({
+            type: 'warning',
+            title: 'Disimpan di Antrean Offline',
+            description: `Data tetap aman di perangkat (${updatedQueue.length} antrean) dan akan disinkronkan otomatis: ${msg}`,
+          });
+        }
+        return false;
       }
     },
     [settings.script_url, pushToast]
+  );
+
+  const syncRecordsMutation = useCallback(
+    async (
+      action: Parameters<typeof postToGas>[1],
+      payload: Record<string, unknown>,
+      urlOverride?: string
+    ): Promise<boolean> => {
+      recordsSaveInFlightCountRef.current += 1;
+      lastLocalRecordsSaveAtRef.current = Date.now();
+      try {
+        return await syncMutation(action, payload, urlOverride);
+      } finally {
+        lastLocalRecordsSaveAtRef.current = Date.now();
+        recordsSaveInFlightCountRef.current = Math.max(
+          0,
+          recordsSaveInFlightCountRef.current - 1
+        );
+      }
+    },
+    [syncMutation]
+  );
+
+  const syncStudentsMutation = useCallback(
+    async (
+      action: Parameters<typeof postToGas>[1],
+      payload: Record<string, unknown>,
+      urlOverride?: string
+    ): Promise<boolean> => {
+      studentsSaveInFlightCountRef.current += 1;
+      lastLocalStudentsSaveAtRef.current = Date.now();
+      try {
+        return await syncMutation(action, payload, urlOverride);
+      } finally {
+        lastLocalStudentsSaveAtRef.current = Date.now();
+        studentsSaveInFlightCountRef.current = Math.max(
+          0,
+          studentsSaveInFlightCountRef.current - 1
+        );
+      }
+    },
+    [syncMutation]
   );
 
   const handlePushAllToSheets = useCallback(
@@ -439,9 +1228,10 @@ export default function App() {
         });
         return;
       }
+      accountsSaveInFlightRef.current = true;
       setConnectionStatus('syncing');
       try {
-        const snapshot = latestDataRef.current;
+        const snapshot = latestFullSnapshotRef.current;
         await postToGas(targetUrl, 'syncAll', {
           students: snapshot.students,
           records: snapshot.records,
@@ -459,15 +1249,21 @@ export default function App() {
             tema: snapshot.settings.tema,
             logo_sekolah: snapshot.settings.logo_sekolah || '',
           },
+          accounts: snapshot.accounts,
+          masterSubjects: snapshot.masterSubjects,
+          teacherSchedules: snapshot.teacherSchedules,
+          subjectAssignments: snapshot.subjectAssignments,
+          subjectRecords: snapshot.subjectRecords,
         });
         clearSyncQueue();
         setPendingSyncCount(0);
+        setSheetsSupportsAkun(true);
         setConnectionStatus('connected');
         setLastSyncedAt(getCurrentTimeString());
         pushToast({
           type: 'success',
-          title: 'Data Lokal Terkirim ke Sheets',
-          description: `${snapshot.students.length} siswa dan ${snapshot.records.length} presensi berhasil disinkronkan.`,
+          title: 'Seluruh Data Lokal Terkirim ke Sheets',
+          description: `${snapshot.students.length} siswa, ${snapshot.records.length} presensi, ${snapshot.accounts.length} akun, ${snapshot.masterSubjects.length} mapel, ${snapshot.teacherSchedules.length} jadwal, dan ${snapshot.subjectRecords.length} presensi mapel berhasil disinkronkan.`,
         });
       } catch (err) {
         setConnectionStatus('error');
@@ -477,9 +1273,105 @@ export default function App() {
           description:
             err instanceof Error ? err.message : 'Periksa kembali URL Web App Anda.',
         });
+      } finally {
+        lastLocalAccountsSaveAtRef.current = Date.now();
+        accountsSaveInFlightRef.current = false;
       }
     },
     [pushToast]
+  );
+
+  const handlePushAccountsToSheets = useCallback(async () => {
+    const targetUrl = latestFullSnapshotRef.current.settings.script_url.trim();
+    if (!targetUrl) {
+      pushToast({
+        type: 'info',
+        title: 'Spreadsheet Belum Terhubung',
+        description:
+          'Masukkan Web App URL Google Apps Script di Pengaturan → Cloud & Sheets terlebih dahulu.',
+      });
+      return;
+    }
+    const currentAccounts = latestFullSnapshotRef.current.accounts;
+    accountsSaveInFlightRef.current = true;
+    lastLocalAccountsSaveAtRef.current = Date.now();
+    setConnectionStatus('syncing');
+    try {
+      await postToGas(targetUrl, 'syncAkun', { accounts: currentAccounts });
+      setSheetsSupportsAkun(true);
+      setConnectionStatus('connected');
+      setLastSyncedAt(getCurrentTimeString());
+      pushToast({
+        type: 'success',
+        title: 'Data Akun Terkirim ke Spreadsheet',
+        description: `${currentAccounts.length} akun (Master Admin, Kepala Sekolah, Wali Kelas & Guru) berhasil disimpan ke Sheet Akun di Google Spreadsheet.`,
+      });
+    } catch (err) {
+      setConnectionStatus('error');
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Gagal mengirim Data Akun ke Google Spreadsheet.';
+      if (msg.toLowerCase().includes('sheet akun')) {
+        setSheetsSupportsAkun(false);
+      }
+      pushToast({
+        type: 'error',
+        title: 'Gagal Sinkronisasi Data Akun',
+        description: msg,
+      });
+    } finally {
+      lastLocalAccountsSaveAtRef.current = Date.now();
+      accountsSaveInFlightRef.current = false;
+    }
+  }, [pushToast]);
+
+  const handlePullAccountsFromSheets = useCallback(async () => {
+    const targetUrl = latestFullSnapshotRef.current.settings.script_url.trim();
+    if (!targetUrl) {
+      pushToast({
+        type: 'info',
+        title: 'Spreadsheet Belum Terhubung',
+        description:
+          'Masukkan Web App URL Google Apps Script di Pengaturan → Cloud & Sheets terlebih dahulu.',
+      });
+      return;
+    }
+    lastLocalAccountsSaveAtRef.current = 0;
+    await syncFromGas(targetUrl, false, { forcePullRemote: true });
+  }, [pushToast, syncFromGas]);
+
+  const handleTestAndSyncSheets = useCallback(
+    async (urlInput: string) => {
+      const trimmed = urlInput.trim();
+      if (!trimmed) {
+        pushToast({
+          type: 'info',
+          title: 'URL Spreadsheet Belum Diisi',
+          description:
+            'Tempelkan Web App URL Google Apps Script (berakhiran /exec) terlebih dahulu.',
+        });
+        return;
+      }
+      // Persist the entered URL locally so this device stays linked after reload
+      if (latestFullSnapshotRef.current.settings.script_url.trim() !== trimmed) {
+        const linkedSettings: SchoolSettings = {
+          ...latestFullSnapshotRef.current.settings,
+          script_url: trimmed,
+        };
+        latestDataRef.current.settings = linkedSettings;
+        latestFullSnapshotRef.current.settings = linkedSettings;
+        setSettings(linkedSettings);
+        saveLocalSettings(linkedSettings);
+      }
+      lastLocalSettingsSaveAtRef.current = 0;
+      lastLocalAccountsSaveAtRef.current = 0;
+      lastLocalStudentsSaveAtRef.current = 0;
+      lastLocalRecordsSaveAtRef.current = 0;
+      lastLocalAcademicSaveAtRef.current = 0;
+      await syncFromGas(trimmed, false, { forcePullRemote: true });
+    },
+    [pushToast, syncFromGas]
   );
 
   const isMasterAdmin = session?.role === 'master_admin';
@@ -725,8 +1617,19 @@ export default function App() {
     if (!res.ok) {
       return res;
     }
+    lastLocalAccountsSaveAtRef.current = Date.now();
+    accountsSaveInFlightRef.current = true;
     setAccounts(res.accounts);
     saveUserAccounts(res.accounts);
+    void (async () => {
+      try {
+        await syncMutation('syncAkun', { accounts: res.accounts });
+      } finally {
+        lastLocalAccountsSaveAtRef.current = Date.now();
+        accountsSaveInFlightRef.current = false;
+      }
+    })();
+    runCloudWrite((uid) => syncAllAccountsToCloud(uid, res.accounts));
     pushToast({
       type: 'success',
       title: 'Password Diperbarui',
@@ -759,31 +1662,45 @@ export default function App() {
     scanAction: ScanActionMode = 'auto',
     alasanPulangCepat?: string
   ): ScanOutcome {
+    const currentSettings = latestDataRef.current.settings;
+    const currentStudents = latestDataRef.current.students;
+    const currentRecords = latestDataRef.current.records;
+    const currentActiveYearStudents = filterByAcademicYear(currentStudents, {
+      activeAcademicYear: currentSettings.tahun_ajaran,
+      isMasterAdmin: false,
+    });
+    const currentActiveYearRecords = filterByAcademicYear(currentRecords, {
+      activeAcademicYear: currentSettings.tahun_ajaran,
+      isMasterAdmin: false,
+    });
+
     const outcome = processQrScan({
       qrRaw: rawCode,
-      students: activeYearStudents,
-      records: activeYearRecords,
-      batasJamMasuk: settings.batas_jam_masuk,
-      modePresensi: settings.mode_presensi,
-      jamPulangStandar: settings.jam_pulang_standar,
+      students: currentActiveYearStudents,
+      records: currentActiveYearRecords,
+      batasJamMasuk: currentSettings.batas_jam_masuk,
+      modePresensi: currentSettings.mode_presensi,
+      jamPulangStandar: currentSettings.jam_pulang_standar,
       scanAction,
       alasanPulangCepat,
-      tahunAjaran: settings.tahun_ajaran,
+      tahunAjaran: currentSettings.tahun_ajaran,
     });
 
     if (outcome.ok) {
-      speakSuccessNotification(
-        outcome.scanType === 'pulang' ? 'Presensi Pulang Berhasil' : 'Presensi Berhasil'
-      );
+      if (outcome.scanType === 'pulang') {
+        speakCheckoutSuccessNotification();
+      } else {
+        speakSuccessNotification('Presensi Berhasil');
+      }
       const taggedRecord: AttendanceRecord = {
         ...outcome.record,
-        tahun_ajaran: outcome.record.tahun_ajaran || settings.tahun_ajaran,
+        tahun_ajaran: outcome.record.tahun_ajaran || currentSettings.tahun_ajaran,
       };
       let nextRecords: AttendanceRecord[];
       if (outcome.scanType === 'pulang') {
         const targetNisNorm = taggedRecord.nis.trim().toLowerCase();
         let replaced = false;
-        const mapped = records.map((r) => {
+        const mapped = currentRecords.map((r) => {
           const matchesTarget =
             r.id === taggedRecord.id ||
             (r.tanggal === taggedRecord.tanggal &&
@@ -794,12 +1711,18 @@ export default function App() {
           }
           return r;
         });
-        nextRecords = replaced ? mapped : [taggedRecord, ...records];
+        nextRecords = replaced ? mapped : [taggedRecord, ...currentRecords];
       } else {
-        nextRecords = [taggedRecord, ...records];
+        nextRecords = [taggedRecord, ...currentRecords];
       }
+      latestDataRef.current.records = nextRecords;
+      lastLocalRecordsSaveAtRef.current = Date.now();
       setRecords(nextRecords);
       saveLocalRecords(nextRecords);
+
+      const offlineSuffix = !isBrowserOnline()
+        ? ' · Disimpan offline di perangkat, akan tersinkron otomatis saat internet kembali.'
+        : '';
 
       if (outcome.scanType === 'pulang') {
         const earlyReason = taggedRecord.alasan_pulang_cepat?.trim();
@@ -809,20 +1732,21 @@ export default function App() {
             ? `${outcome.student.nama} — Pulang Cepat`
             : `${outcome.student.nama} — Pulang`,
           description: earlyReason
-            ? `NIS ${outcome.student.nis} (${outcome.student.kelas}) pulang cepat pukul ${taggedRecord.jam_pulang} · Alasan: ${earlyReason}`
-            : `NIS ${outcome.student.nis} (${outcome.student.kelas}) scan pulang pukul ${taggedRecord.jam_pulang}`,
+            ? `NIS ${outcome.student.nis} (${outcome.student.kelas}) pulang cepat pukul ${taggedRecord.jam_pulang} · Alasan: ${earlyReason}${offlineSuffix}`
+            : `NIS ${outcome.student.nis} (${outcome.student.kelas}) scan pulang pukul ${taggedRecord.jam_pulang}${offlineSuffix}`,
         });
       } else {
         pushToast({
           type: taggedRecord.status === 'Hadir' ? 'success' : 'warning',
           title: `${outcome.student.nama} — ${taggedRecord.status}`,
-          description: `NIS ${outcome.student.nis} (${outcome.student.kelas}) dicatat masuk pukul ${taggedRecord.jam_masuk}`,
+          description: `NIS ${outcome.student.nis} (${outcome.student.kelas}) dicatat masuk pukul ${taggedRecord.jam_masuk}${offlineSuffix}`,
         });
       }
-      void syncMutation('recordPresensi', {
+      void syncRecordsMutation('recordPresensi', {
         ...taggedRecord,
         record: { ...taggedRecord },
       });
+      runCloudWrite((uid) => upsertAttendanceToCloud(uid, taggedRecord));
       return outcome;
     }
 
@@ -890,6 +1814,7 @@ export default function App() {
       tahun_ajaran: settings.tahun_ajaran,
     };
     const nextStudents = [...students, taggedStudent];
+    lastLocalStudentsSaveAtRef.current = Date.now();
     setStudents(nextStudents);
     saveLocalStudents(nextStudents);
     pushToast({
@@ -897,7 +1822,8 @@ export default function App() {
       title: 'Siswa Ditambahkan',
       description: `${taggedStudent.nama} (${taggedStudent.kelas}) berhasil disimpan.`,
     });
-    void syncMutation('addSiswa', { ...taggedStudent });
+    void syncStudentsMutation('addSiswa', { ...taggedStudent });
+    runCloudWrite((uid) => upsertStudentToCloud(uid, taggedStudent));
     return { ok: true };
   }
 
@@ -909,6 +1835,7 @@ export default function App() {
       tahun_ajaran: settings.tahun_ajaran,
     }));
     const nextStudents = [...students, ...tagged];
+    lastLocalStudentsSaveAtRef.current = Date.now();
     setStudents(nextStudents);
     saveLocalStudents(nextStudents);
     pushToast({
@@ -916,7 +1843,8 @@ export default function App() {
       title: 'Import Siswa Berhasil',
       description: `${tagged.length} siswa baru berhasil ditambahkan ke Tahun Ajaran ${settings.tahun_ajaran}.`,
     });
-    void syncMutation('bulkAddSiswa', { students: tagged });
+    void syncStudentsMutation('bulkAddSiswa', { students: tagged });
+    runCloudWrite((uid) => bulkUpsertStudentsToCloud(uid, tagged));
   }
 
   function handleUpdateStudent(
@@ -940,6 +1868,7 @@ export default function App() {
         ? { ...updated, tahun_ajaran: s.tahun_ajaran || settings.tahun_ajaran }
         : s
     );
+    lastLocalStudentsSaveAtRef.current = Date.now();
     setStudents(nextStudents);
     saveLocalStudents(nextStudents);
 
@@ -948,15 +1877,33 @@ export default function App() {
         ? { ...r, nis: updated.nis, nama: updated.nama, kelas: updated.kelas }
         : r
     );
+    lastLocalRecordsSaveAtRef.current = Date.now();
     setRecords(nextRecords);
     saveLocalRecords(nextRecords);
 
+    const savedStudent = nextStudents.find((s) => s.nis === updated.nis) ?? {
+      ...updated,
+      tahun_ajaran: settings.tahun_ajaran,
+    };
+    const affectedRecords = nextRecords.filter((r) => r.nis === updated.nis);
     pushToast({
       type: 'success',
       title: 'Data Siswa Diperbarui',
       description: `${updated.nama} berhasil diperbarui.`,
     });
-    void syncMutation('updateSiswa', { originalNis, ...updated });
+    void syncStudentsMutation('updateSiswa', { originalNis, ...updated });
+    runCloudWrite(async (uid) => {
+      if (originalNis.trim().toLowerCase() !== updated.nis.trim().toLowerCase()) {
+        await deleteStudentFromCloud(uid, {
+          nis: originalNis,
+          tahun_ajaran: savedStudent.tahun_ajaran,
+        });
+      }
+      await upsertStudentToCloud(uid, savedStudent);
+      if (affectedRecords.length > 0) {
+        await bulkUpsertAttendanceToCloud(uid, affectedRecords);
+      }
+    });
     return { ok: true };
   }
 
@@ -980,6 +1927,7 @@ export default function App() {
           resolveItemAcademicYear(s.tahun_ajaran) === targetYear
         )
     );
+    lastLocalStudentsSaveAtRef.current = Date.now();
     setStudents(nextStudents);
     saveLocalStudents(nextStudents);
     pushToast({
@@ -987,7 +1935,10 @@ export default function App() {
       title: 'Siswa Dihapus',
       description: target ? `${target.nama} dihapus dari daftar siswa.` : undefined,
     });
-    void syncMutation('deleteSiswa', { nis });
+    void syncStudentsMutation('deleteSiswa', { nis });
+    runCloudWrite((uid) =>
+      deleteStudentFromCloud(uid, { nis, tahun_ajaran: targetYear })
+    );
   }
 
   function handleBulkDeleteStudents(nisList: string[]) {
@@ -1013,6 +1964,7 @@ export default function App() {
           allowedYears.has(resolveItemAcademicYear(s.tahun_ajaran))
         )
     );
+    lastLocalStudentsSaveAtRef.current = Date.now();
     setStudents(nextStudents);
     saveLocalStudents(nextStudents);
     pushToast({
@@ -1020,7 +1972,17 @@ export default function App() {
       title: `${nisList.length} Siswa Dihapus`,
       description: 'Data siswa terpilih telah dihapus dari daftar.',
     });
-    void syncMutation('bulkDeleteSiswa', { nisList });
+    const deletedTargets = students.filter(
+      (s) =>
+        delSet.has(s.nis) &&
+        allowedYears.has(resolveItemAcademicYear(s.tahun_ajaran))
+    );
+    void syncStudentsMutation('bulkDeleteSiswa', { nisList });
+    runCloudWrite(async (uid) => {
+      for (const s of deletedTargets) {
+        await deleteStudentFromCloud(uid, s);
+      }
+    });
   }
 
   function handleUpdateRecapStatus(params: {
@@ -1082,6 +2044,8 @@ export default function App() {
         )
       : [updatedRecord, ...records];
 
+    latestDataRef.current.records = nextRecords;
+    lastLocalRecordsSaveAtRef.current = Date.now();
     setRecords(nextRecords);
     saveLocalRecords(nextRecords);
     pushToast({
@@ -1089,10 +2053,11 @@ export default function App() {
       title: 'Status Presensi Diperbarui',
       description: `${student.nama} pada ${tanggal} ditandai ${status}.`,
     });
-    void syncMutation('updateStatusPresensi', {
+    void syncRecordsMutation('updateStatusPresensi', {
       ...updatedRecord,
       record: { ...updatedRecord },
     });
+    runCloudWrite((uid) => upsertAttendanceToCloud(uid, updatedRecord));
   }
 
   function handleConfirmCheckout(params: {
@@ -1102,7 +2067,8 @@ export default function App() {
   }) {
     const { tanggal, student, alasanPulangCepat } = params;
     const targetNisNorm = student.nis.trim().toLowerCase();
-    const existing = records.find(
+    const currentRecords = latestDataRef.current.records;
+    const existing = currentRecords.find(
       (r) =>
         r.tanggal === tanggal && r.nis.trim().toLowerCase() === targetNisNorm
     );
@@ -1122,14 +2088,16 @@ export default function App() {
         : checkoutNote,
     };
 
-    const nextRecords = records.map((r) =>
+    const nextRecords = currentRecords.map((r) =>
       r.tanggal === tanggal && r.nis.trim().toLowerCase() === targetNisNorm
         ? updatedRecord
         : r
     );
+    latestDataRef.current.records = nextRecords;
+    lastLocalRecordsSaveAtRef.current = Date.now();
     setRecords(nextRecords);
     saveLocalRecords(nextRecords);
-    speakSuccessNotification('Presensi Pulang Berhasil');
+    speakCheckoutSuccessNotification();
     pushToast({
       type: trimmedReason ? 'warning' : 'success',
       title: trimmedReason
@@ -1139,97 +2107,184 @@ export default function App() {
         ? `Jam pulang ${nowTime} (${tanggal}) dikonfirmasi · Alasan: ${trimmedReason}`
         : `Jam pulang ${nowTime} pada ${tanggal} berhasil dikonfirmasi.`,
     });
-    void syncMutation('recordPresensi', {
+    void syncRecordsMutation('recordPresensi', {
       ...updatedRecord,
       record: { ...updatedRecord },
     });
+    runCloudWrite((uid) => upsertAttendanceToCloud(uid, updatedRecord));
   }
 
   async function handleSaveSettings(newSettings: SchoolSettings) {
-    setPreviewTheme(null);
-    setSettings(newSettings);
-    const localSaveRes = saveLocalSettings(newSettings);
-    saveDefaultSchoolIdentity({
-      nama_sekolah: newSettings.nama_sekolah,
-      logo_sekolah: newSettings.logo_sekolah || '',
-    });
-    const modeLabel =
-      newSettings.mode_presensi === 'masuk_pulang'
-        ? `Masuk ${newSettings.batas_jam_masuk} · Pulang ${newSettings.jam_pulang_standar}`
-        : `Masuk Saja · Batas ${newSettings.batas_jam_masuk}`;
-    if (!localSaveRes.ok) {
-      pushToast({
-        type: 'error',
-        title: 'Gagal Menyimpan ke Penyimpanan Lokal',
-        description:
-          localSaveRes.error ||
-          'Ukuran file gambar terlalu besar untuk disimpan di browser.',
+    const previousUrl = latestFullSnapshotRef.current.settings.script_url.trim();
+    const nextUrl = newSettings.script_url.trim();
+    const isConnectingNewSpreadsheet = Boolean(nextUrl) && nextUrl !== previousUrl;
+
+    // Cross-Device Protection:
+    // When connecting a device to a new/different Spreadsheet URL, PULL all 8 sheets first
+    // so Device B's local defaults NEVER overwrite existing Pengaturan, Akun, Mapel, or Jadwal in Sheets!
+    if (isConnectingNewSpreadsheet && isBrowserOnline()) {
+      setPreviewTheme(null);
+      const linkedLocal: SchoolSettings = {
+        ...latestFullSnapshotRef.current.settings,
+        script_url: nextUrl,
+      };
+      latestDataRef.current.settings = linkedLocal;
+      latestFullSnapshotRef.current.settings = linkedLocal;
+      setSettings(linkedLocal);
+      saveLocalSettings(linkedLocal);
+
+      const pullRes = await syncFromGas(nextUrl, true, { forcePullRemote: true });
+      if (pullRes.ok && pullRes.hasRemoteData) {
+        pushToast({
+          type: 'success',
+          title: 'Terhubung & Tersinkron Penuh dari Spreadsheet',
+          description: `Seluruh data berhasil disamakan (${pullRes.studentsCount} siswa, ${pullRes.recordsCount} presensi, ${pullRes.accountsCount} akun, ${pullRes.schedulesCount} jadwal, pengaturan & logo) tanpa menimpa data Spreadsheet.`,
+        });
+        return;
+      }
+      // If Spreadsheet is genuinely blank (brand-new), fall through and initialize it with local settings & accounts
+    }
+
+    settingsSaveInFlightRef.current = true;
+    lastLocalSettingsSaveAtRef.current = Date.now();
+    try {
+      setPreviewTheme(null);
+      latestDataRef.current.settings = newSettings;
+      latestFullSnapshotRef.current.settings = newSettings;
+      setSettings(newSettings);
+      const localSaveRes = saveLocalSettings(newSettings);
+      saveDefaultSchoolIdentity({
+        nama_sekolah: newSettings.nama_sekolah,
+        logo_sekolah: newSettings.logo_sekolah || '',
       });
-    } else {
+      const modeLabel =
+        newSettings.mode_presensi === 'masuk_pulang'
+          ? `Masuk ${newSettings.batas_jam_masuk} · Pulang ${newSettings.jam_pulang_standar}`
+          : `Masuk Saja · Batas ${newSettings.batas_jam_masuk}`;
+      if (!localSaveRes.ok) {
+        pushToast({
+          type: 'error',
+          title: 'Gagal Menyimpan ke Penyimpanan Lokal',
+          description:
+            localSaveRes.error ||
+            'Ukuran file gambar terlalu besar untuk disimpan di browser.',
+        });
+      } else {
+        pushToast({
+          type: 'success',
+          title: 'Pengaturan Disimpan',
+          description: `${newSettings.nama_sekolah} · TA ${newSettings.tahun_ajaran} (Smt ${formatSemesterLabel(
+            newSettings.semester
+          )}) · ${modeLabel}`,
+        });
+      }
+
+      const uid = firebaseUser?.uid;
+      if (uid && firebaseUser?.emailVerified) {
+        try {
+          await saveSchoolSettingsToCloud(uid, newSettings);
+          setLastSyncedAt(getCurrentTimeString());
+        } catch (err) {
+          if (isQuotaExceededError(err)) {
+            pushToast({
+              type: 'warning',
+              title: 'Kuota Gratis Firestore Tercapai',
+              description:
+                'Pengaturan dan logo tersimpan lokal, namun sinkronisasi Cloud tertunda hingga kuota reset.',
+            });
+          } else {
+            pushToast({
+              type: 'warning',
+              title: 'Pengaturan Tersimpan Lokal',
+              description:
+                'Sinkronisasi pengaturan ke Cloud Firebase tertunda. Cek koneksi internet Anda.',
+            });
+          }
+        }
+      }
+
+      await syncMutation(
+        'savePengaturan',
+        {
+          nama_sekolah: newSettings.nama_sekolah,
+          nama_kepala_sekolah: newSettings.nama_kepala_sekolah || '',
+          nip_kepala_sekolah: newSettings.nip_kepala_sekolah || '',
+          ttd_kepala_sekolah: newSettings.ttd_kepala_sekolah || '',
+          cap_sekolah: newSettings.cap_sekolah || '',
+          batas_jam_masuk: newSettings.batas_jam_masuk,
+          mode_presensi: newSettings.mode_presensi,
+          jam_pulang_standar: newSettings.jam_pulang_standar,
+          tahun_ajaran: newSettings.tahun_ajaran,
+          semester: normalizeSemester(newSettings.semester, 'ganjil'),
+          tema: newSettings.tema,
+          logo_sekolah: newSettings.logo_sekolah || '',
+          accounts: latestFullSnapshotRef.current.accounts,
+        },
+        newSettings.script_url
+      );
+    } finally {
+      lastLocalSettingsSaveAtRef.current = Date.now();
+      settingsSaveInFlightRef.current = false;
+    }
+  }
+
+  async function handleSetDefaultIdentity(namaSekolah: string, logoSekolah?: string) {
+    settingsSaveInFlightRef.current = true;
+    lastLocalSettingsSaveAtRef.current = Date.now();
+    try {
+      const saved = saveDefaultSchoolIdentity({
+        nama_sekolah: namaSekolah,
+        logo_sekolah: logoSekolah || '',
+      });
+      const nextSettings: SchoolSettings = {
+        ...settings,
+        nama_sekolah: saved.nama_sekolah,
+        logo_sekolah: saved.logo_sekolah || '',
+      };
+      setSettings(nextSettings);
+      saveLocalSettings(nextSettings);
       pushToast({
         type: 'success',
-        title: 'Pengaturan Disimpan',
-        description: `${newSettings.nama_sekolah} · TA ${newSettings.tahun_ajaran} (Smt ${formatSemesterLabel(
-          newSettings.semester
-        )}) · ${modeLabel}`,
+        title: 'Identitas Default Diperbarui',
+        description: `"${saved.nama_sekolah}" dan logo saat ini telah dijadikan default aplikasi.`,
       });
-    }
-    await syncMutation(
-      'savePengaturan',
-      {
-        nama_sekolah: newSettings.nama_sekolah,
-        nama_kepala_sekolah: newSettings.nama_kepala_sekolah || '',
-        nip_kepala_sekolah: newSettings.nip_kepala_sekolah || '',
-        ttd_kepala_sekolah: newSettings.ttd_kepala_sekolah || '',
-        cap_sekolah: newSettings.cap_sekolah || '',
-        batas_jam_masuk: newSettings.batas_jam_masuk,
-        mode_presensi: newSettings.mode_presensi,
-        jam_pulang_standar: newSettings.jam_pulang_standar,
-        tahun_ajaran: newSettings.tahun_ajaran,
-        semester: normalizeSemester(newSettings.semester, 'ganjil'),
-        tema: newSettings.tema,
-        logo_sekolah: newSettings.logo_sekolah || '',
-      },
-      newSettings.script_url
-    );
-  }
 
-  function handleSetDefaultIdentity(namaSekolah: string, logoSekolah?: string) {
-    const saved = saveDefaultSchoolIdentity({
-      nama_sekolah: namaSekolah,
-      logo_sekolah: logoSekolah || '',
-    });
-    const nextSettings: SchoolSettings = {
-      ...settings,
-      nama_sekolah: saved.nama_sekolah,
-      logo_sekolah: saved.logo_sekolah || '',
-    };
-    setSettings(nextSettings);
-    saveLocalSettings(nextSettings);
-    pushToast({
-      type: 'success',
-      title: 'Identitas Default Diperbarui',
-      description: `"${saved.nama_sekolah}" dan logo saat ini telah dijadikan default aplikasi.`,
-    });
-    if (nextSettings.script_url.trim()) {
-      void syncMutation('savePengaturan', {
-        nama_sekolah: nextSettings.nama_sekolah,
-        nama_kepala_sekolah: nextSettings.nama_kepala_sekolah || '',
-        nip_kepala_sekolah: nextSettings.nip_kepala_sekolah || '',
-        ttd_kepala_sekolah: nextSettings.ttd_kepala_sekolah || '',
-        cap_sekolah: nextSettings.cap_sekolah || '',
-        batas_jam_masuk: nextSettings.batas_jam_masuk,
-        mode_presensi: nextSettings.mode_presensi,
-        jam_pulang_standar: nextSettings.jam_pulang_standar,
-        tahun_ajaran: nextSettings.tahun_ajaran,
-        semester: normalizeSemester(nextSettings.semester, 'ganjil'),
-        tema: nextSettings.tema,
-        logo_sekolah: nextSettings.logo_sekolah || '',
-      });
+      const uid = firebaseUser?.uid;
+      if (uid && firebaseUser?.emailVerified) {
+        try {
+          await saveSchoolSettingsToCloud(uid, nextSettings);
+          setLastSyncedAt(getCurrentTimeString());
+        } catch {
+          // Already saved locally
+        }
+      }
+
+      if (nextSettings.script_url.trim()) {
+        await syncMutation('savePengaturan', {
+          nama_sekolah: nextSettings.nama_sekolah,
+          nama_kepala_sekolah: nextSettings.nama_kepala_sekolah || '',
+          nip_kepala_sekolah: nextSettings.nip_kepala_sekolah || '',
+          ttd_kepala_sekolah: nextSettings.ttd_kepala_sekolah || '',
+          cap_sekolah: nextSettings.cap_sekolah || '',
+          batas_jam_masuk: nextSettings.batas_jam_masuk,
+          mode_presensi: nextSettings.mode_presensi,
+          jam_pulang_standar: nextSettings.jam_pulang_standar,
+          tahun_ajaran: nextSettings.tahun_ajaran,
+          semester: normalizeSemester(nextSettings.semester, 'ganjil'),
+          tema: nextSettings.tema,
+          logo_sekolah: nextSettings.logo_sekolah || '',
+          accounts: latestFullSnapshotRef.current.accounts,
+        });
+      }
+    } finally {
+      lastLocalSettingsSaveAtRef.current = Date.now();
+      settingsSaveInFlightRef.current = false;
     }
   }
 
-  function handleUpdateAccounts(nextAccounts: UserAccount[]) {
+  async function handleUpdateAccounts(nextAccounts: UserAccount[]): Promise<void> {
+    accountsSaveInFlightRef.current = true;
+    lastLocalAccountsSaveAtRef.current = Date.now();
     setAccounts(nextAccounts);
     saveUserAccounts(nextAccounts);
 
@@ -1250,16 +2305,39 @@ export default function App() {
       }
     }
 
-    pushToast({
-      type: 'success',
-      title: 'Daftar Akun Diperbarui',
-      description: `Total ${nextAccounts.length} akun aktif tersimpan.`,
-    });
+    runCloudWrite((uid) => syncAllAccountsToCloud(uid, nextAccounts));
+
+    try {
+      const hasSheetsUrl = Boolean(settings.script_url.trim());
+      if (hasSheetsUrl) {
+        const synced = await syncMutation('syncAkun', { accounts: nextAccounts });
+        if (synced) {
+          pushToast({
+            type: 'success',
+            title: 'Daftar Akun Tersimpan ke Spreadsheet',
+            description: `Total ${nextAccounts.length} akun aktif tersimpan lokal & disinkronkan ke Sheet Akun di Google Spreadsheet.`,
+          });
+        }
+      } else {
+        pushToast({
+          type: 'success',
+          title: 'Daftar Akun Diperbarui',
+          description: `Total ${nextAccounts.length} akun aktif tersimpan. Hubungkan Google Spreadsheet di Cloud & Sheets untuk sinkronisasi otomatis.`,
+        });
+      }
+    } finally {
+      lastLocalAccountsSaveAtRef.current = Date.now();
+      accountsSaveInFlightRef.current = false;
+    }
   }
 
   function handleResetAllAttendance() {
+    latestDataRef.current.records = [];
+    lastLocalRecordsSaveAtRef.current = Date.now();
+    lastLocalAcademicSaveAtRef.current = Date.now();
     setRecords([]);
     saveLocalRecords([]);
+    latestFullSnapshotRef.current.subjectRecords = [];
     setSubjectRecords([]);
     saveSubjectRecords([]);
     pushToast({
@@ -1268,7 +2346,8 @@ export default function App() {
       description:
         'Seluruh riwayat presensi harian & mata pelajaran telah dikosongkan. Data siswa tetap tersimpan.',
     });
-    void syncMutation('resetPresensi', {});
+    void syncRecordsMutation('resetPresensi', {});
+    runCloudWrite((uid) => clearAllAttendanceInCloud(uid));
   }
 
   function handleResetDemo() {
@@ -1292,6 +2371,51 @@ export default function App() {
       description:
         'Data siswa, riwayat presensi, dan contoh jadwal pelajaran guru telah dimuat ke penyimpanan lokal.',
     });
+    if (fresh.settings.script_url.trim()) {
+      void syncMutation(
+        'syncAll',
+        {
+          students: fresh.students,
+          records: fresh.records,
+          settings: {
+            nama_sekolah: fresh.settings.nama_sekolah,
+            nama_kepala_sekolah: fresh.settings.nama_kepala_sekolah || '',
+            nip_kepala_sekolah: fresh.settings.nip_kepala_sekolah || '',
+            ttd_kepala_sekolah: fresh.settings.ttd_kepala_sekolah || '',
+            cap_sekolah: fresh.settings.cap_sekolah || '',
+            batas_jam_masuk: fresh.settings.batas_jam_masuk,
+            mode_presensi: fresh.settings.mode_presensi,
+            jam_pulang_standar: fresh.settings.jam_pulang_standar,
+            tahun_ajaran: fresh.settings.tahun_ajaran,
+            semester: normalizeSemester(fresh.settings.semester, 'ganjil'),
+            tema: fresh.settings.tema,
+            logo_sekolah: fresh.settings.logo_sekolah || '',
+          },
+          accounts,
+          masterSubjects,
+          teacherSchedules: demoSchedules,
+          subjectAssignments: demoAssignments,
+          subjectRecords: [],
+        },
+        fresh.settings.script_url
+      );
+    }
+    runCloudWrite((uid) =>
+      pushFullLocalStateToCloud(
+        uid,
+        {
+          settings: fresh.settings,
+          students: fresh.students,
+          records: fresh.records,
+          masterSubjects,
+          teacherSchedules: demoSchedules,
+          subjectAssignments: demoAssignments,
+          subjectRecords: [],
+          accounts,
+        },
+        true
+      )
+    );
   }
 
   function handleAddMasterSubject(input: {
@@ -1301,8 +2425,11 @@ export default function App() {
   }): { ok: boolean; error?: string } {
     const res = addMasterSubject(masterSubjects, input);
     if (!res.ok) return res;
+    lastLocalAcademicSaveAtRef.current = Date.now();
     setMasterSubjects(res.subjects);
     saveMasterSubjects(res.subjects);
+    void syncMutation('upsertMasterMapel', { ...res.subject, subject: res.subject });
+    runCloudWrite((uid) => upsertMasterSubjectToCloud(uid, res.subject));
     pushToast({
       type: 'success',
       title: 'Mata Pelajaran Ditambahkan',
@@ -1317,8 +2444,11 @@ export default function App() {
   ): { ok: boolean; error?: string } {
     const res = updateMasterSubject(masterSubjects, id, input);
     if (!res.ok) return res;
+    lastLocalAcademicSaveAtRef.current = Date.now();
     setMasterSubjects(res.subjects);
     saveMasterSubjects(res.subjects);
+    void syncMutation('upsertMasterMapel', { ...res.subject, subject: res.subject });
+    runCloudWrite((uid) => upsertMasterSubjectToCloud(uid, res.subject));
     pushToast({
       type: 'success',
       title: 'Mata Pelajaran Diperbarui',
@@ -1330,8 +2460,11 @@ export default function App() {
   function handleDeleteMasterSubject(id: string) {
     const target = masterSubjects.find((s) => s.id === id);
     const next = masterSubjects.filter((s) => s.id !== id);
+    lastLocalAcademicSaveAtRef.current = Date.now();
     setMasterSubjects(next);
     saveMasterSubjects(next);
+    void syncMutation('deleteMasterMapel', { id });
+    runCloudWrite((uid) => deleteMasterSubjectFromCloud(uid, id));
     pushToast({
       type: 'info',
       title: 'Mata Pelajaran Dihapus',
@@ -1355,8 +2488,11 @@ export default function App() {
       semester: input.semester ?? normalizeSemester(settings.semester, 'ganjil'),
     });
     if (!res.ok) return res;
+    lastLocalAcademicSaveAtRef.current = Date.now();
     setTeacherSchedules(res.schedules);
     saveTeacherSchedules(res.schedules);
+    void syncMutation('upsertJadwalGuru', { ...res.schedule, schedule: res.schedule });
+    runCloudWrite((uid) => upsertTeacherScheduleToCloud(uid, res.schedule));
     pushToast({
       type: 'success',
       title: 'Jadwal Guru Ditambahkan',
@@ -1384,8 +2520,11 @@ export default function App() {
       semester: input.semester ?? normalizeSemester(settings.semester, 'ganjil'),
     });
     if (!res.ok) return res;
+    lastLocalAcademicSaveAtRef.current = Date.now();
     setTeacherSchedules(res.schedules);
     saveTeacherSchedules(res.schedules);
+    void syncMutation('upsertJadwalGuru', { ...res.schedule, schedule: res.schedule });
+    runCloudWrite((uid) => upsertTeacherScheduleToCloud(uid, res.schedule));
     pushToast({
       type: 'success',
       title: 'Jadwal Guru Diperbarui',
@@ -1397,8 +2536,11 @@ export default function App() {
   function handleDeleteTeacherSchedule(id: string) {
     const target = teacherSchedules.find((s) => s.id === id);
     const next = teacherSchedules.filter((s) => s.id !== id);
+    lastLocalAcademicSaveAtRef.current = Date.now();
     setTeacherSchedules(next);
     saveTeacherSchedules(next);
+    void syncMutation('deleteJadwalGuru', { id });
+    runCloudWrite((uid) => deleteTeacherScheduleFromCloud(uid, id));
     pushToast({
       type: 'info',
       title: 'Jadwal Dihapus',
@@ -1430,8 +2572,11 @@ export default function App() {
       semester: normalizeSemester(settings.semester, 'ganjil'),
     });
     if (!res.ok) return res;
+    lastLocalAcademicSaveAtRef.current = Date.now();
     setSubjectAssignments(res.assignments);
     saveSubjectAssignments(res.assignments);
+    void syncMutation('upsertMapelKelas', { ...res.assignment, assignment: res.assignment });
+    runCloudWrite((uid) => upsertSubjectAssignmentToCloud(uid, res.assignment));
     pushToast({
       type: 'success',
       title: 'Kelas & Mapel Ditambahkan',
@@ -1443,8 +2588,11 @@ export default function App() {
   function handleDeleteSubjectAssignment(assignmentId: string) {
     const target = subjectAssignments.find((a) => a.id === assignmentId);
     const nextAssignments = subjectAssignments.filter((a) => a.id !== assignmentId);
+    lastLocalAcademicSaveAtRef.current = Date.now();
     setSubjectAssignments(nextAssignments);
     saveSubjectAssignments(nextAssignments);
+    void syncMutation('deleteMapelKelas', { id: assignmentId });
+    runCloudWrite((uid) => deleteSubjectAssignmentFromCloud(uid, assignmentId));
     pushToast({
       type: 'info',
       title: 'Kelas & Mapel Dihapus',
@@ -1459,19 +2607,27 @@ export default function App() {
     rawCode: string,
     tanggal: string
   ): SubjectScanOutcome {
+    const currentSubjectRecords = latestFullSnapshotRef.current.subjectRecords;
     const outcome = processSubjectQrScan({
       qrRaw: rawCode,
       assignment,
       students: activeYearStudents,
-      records: subjectRecords,
+      records: currentSubjectRecords,
       tanggal,
     });
 
     if (outcome.ok) {
       speakSuccessNotification('Presensi Berhasil');
-      const nextRecords = [outcome.record, ...subjectRecords];
+      const nextRecords = [outcome.record, ...currentSubjectRecords];
+      latestFullSnapshotRef.current.subjectRecords = nextRecords;
+      lastLocalAcademicSaveAtRef.current = Date.now();
       setSubjectRecords(nextRecords);
       saveSubjectRecords(nextRecords);
+      void syncMutation('recordPresensiMapel', {
+        ...outcome.record,
+        record: { ...outcome.record },
+      });
+      runCloudWrite((uid) => upsertSubjectRecordToCloud(uid, outcome.record));
       pushToast({
         type: outcome.record.status === 'Hadir' ? 'success' : 'warning',
         title: `${outcome.student.nama} — ${outcome.record.status}`,
@@ -1512,15 +2668,23 @@ export default function App() {
     tanggal: string;
     status: AttendanceStatus;
   }) {
+    const currentSubjectRecords = latestFullSnapshotRef.current.subjectRecords;
     const res = upsertSubjectAttendanceStatus({
-      records: subjectRecords,
+      records: currentSubjectRecords,
       assignment: params.assignment,
       student: params.student,
       tanggal: params.tanggal,
       status: params.status,
     });
+    latestFullSnapshotRef.current.subjectRecords = res.records;
+    lastLocalAcademicSaveAtRef.current = Date.now();
     setSubjectRecords(res.records);
     saveSubjectRecords(res.records);
+    void syncMutation('recordPresensiMapel', {
+      ...res.record,
+      record: { ...res.record },
+    });
+    runCloudWrite((uid) => upsertSubjectRecordToCloud(uid, res.record));
     pushToast({
       type: 'success',
       title: 'Status Mapel Diperbarui',
@@ -1534,9 +2698,32 @@ export default function App() {
     tanggal: string;
   }) {
     if (params.students.length === 0) return;
-    let nextRecords = [...subjectRecords];
+    const currentSubjectRecords = latestFullSnapshotRef.current.subjectRecords;
+    // Preserve already-recorded statuses (Terlambat, Sakit, Izin, Alpa, Hadir) — only mark unrecorded students
+    const recordedNisSet = new Set(
+      currentSubjectRecords
+        .filter(
+          (r) =>
+            r.tanggal === params.tanggal &&
+            r.assignment_id === params.assignment.id
+        )
+        .map((r) => r.nis.trim().toLowerCase())
+    );
+    const unrecordedStudents = params.students.filter(
+      (student) => !recordedNisSet.has(student.nis.trim().toLowerCase())
+    );
+    if (unrecordedStudents.length === 0) {
+      pushToast({
+        type: 'info',
+        title: 'Semua Siswa Sudah Tercatat',
+        description: `Seluruh siswa pada ${params.assignment.mata_pelajaran} (${params.assignment.kelas}) sudah memiliki status presensi.`,
+      });
+      return;
+    }
+    let nextRecords = [...currentSubjectRecords];
+    const updatedBatch: SubjectAttendanceRecord[] = [];
     const nowTime = getCurrentTimeString();
-    for (const student of params.students) {
+    for (const student of unrecordedStudents) {
       const res = upsertSubjectAttendanceStatus({
         records: nextRecords,
         assignment: params.assignment,
@@ -1546,14 +2733,19 @@ export default function App() {
         currentTime: nowTime,
       });
       nextRecords = res.records;
+      updatedBatch.push(res.record);
     }
+    latestFullSnapshotRef.current.subjectRecords = nextRecords;
+    lastLocalAcademicSaveAtRef.current = Date.now();
     setSubjectRecords(nextRecords);
     saveSubjectRecords(nextRecords);
+    void syncMutation('bulkRecordPresensiMapel', { records: updatedBatch });
+    runCloudWrite((uid) => bulkUpsertSubjectRecordsToCloud(uid, updatedBatch));
     speakSuccessNotification('Presensi Berhasil');
     pushToast({
       type: 'success',
-      title: `${params.students.length} Siswa Ditandai Hadir`,
-      description: `${params.assignment.mata_pelajaran} — Kelas ${params.assignment.kelas} (${params.tanggal}).`,
+      title: `${unrecordedStudents.length} Siswa Ditandai Hadir`,
+      description: `${params.assignment.mata_pelajaran} — Kelas ${params.assignment.kelas} (${params.tanggal}). Status siswa yang sudah tercatat tetap dipertahankan.`,
     });
   }
 
@@ -1709,10 +2901,50 @@ export default function App() {
             tema: restoredSettings.tema,
             logo_sekolah: restoredSettings.logo_sekolah || '',
           },
+          accounts: restoredAccounts.length > 0 ? restoredAccounts : accounts,
+          masterSubjects:
+            Array.isArray(restoredMasterSubjects) && restoredMasterSubjects.length > 0
+              ? restoredMasterSubjects
+              : masterSubjects,
+          teacherSchedules: Array.isArray(restoredTeacherSchedules)
+            ? restoredTeacherSchedules
+            : teacherSchedules,
+          subjectAssignments: Array.isArray(restoredAssignments)
+            ? restoredAssignments
+            : subjectAssignments,
+          subjectRecords: Array.isArray(restoredSubjectRecords)
+            ? restoredSubjectRecords
+            : subjectRecords,
         },
         restoredSettings.script_url
       );
     }
+
+    runCloudWrite((uid) =>
+      pushFullLocalStateToCloud(
+        uid,
+        {
+          settings: restoredSettings,
+          students: restoredStudents,
+          records: restoredRecords,
+          masterSubjects:
+            Array.isArray(restoredMasterSubjects) && restoredMasterSubjects.length > 0
+              ? restoredMasterSubjects
+              : masterSubjects,
+          teacherSchedules: Array.isArray(restoredTeacherSchedules)
+            ? restoredTeacherSchedules
+            : teacherSchedules,
+          subjectAssignments: Array.isArray(restoredAssignments)
+            ? restoredAssignments
+            : subjectAssignments,
+          subjectRecords: Array.isArray(restoredSubjectRecords)
+            ? restoredSubjectRecords
+            : subjectRecords,
+          accounts: restoredAccounts.length > 0 ? restoredAccounts : accounts,
+        },
+        true
+      )
+    );
   }
 
   const effectiveTab: TabId = canAccessTab(session?.role ?? null, activeTab)
@@ -1748,8 +2980,34 @@ export default function App() {
         }}
         onLogout={handleLogout}
         connectionStatus={connectionStatus}
+        isOnline={isOnline}
+        pendingSyncCount={pendingSyncCount}
         lastSyncedAt={lastSyncedAt}
-        onSyncNow={() => void syncFromGas(settings.script_url, false)}
+        onSyncNow={() => {
+          if (pendingSyncCount > 0 && settings.script_url.trim()) {
+            void flushOfflineQueueNow();
+            return;
+          }
+          if (settings.script_url.trim()) {
+            void syncFromGas(settings.script_url, false, { forcePullRemote: true });
+          } else if (!cloudConnected) {
+            void handleConnectCloud();
+          } else {
+            pushToast({
+              type: 'success',
+              title: 'Cloud Firebase Tersinkron Real-Time',
+              description:
+                'Semua data pada perangkat ini aktif tersinkron otomatis melalui Cloud Firebase.',
+            });
+          }
+        }}
+        cloudSync={{
+          connected: cloudConnected,
+          syncing: cloudSyncing,
+          email: firebaseUser?.email ?? null,
+          onConnect: () => void handleConnectCloud(),
+        }}
+        onReplayVoice={handleReplayVoice}
         toasts={toasts}
         onDismissToast={dismissToast}
       >
@@ -1758,6 +3016,11 @@ export default function App() {
             students={activeYearStudents}
             records={activeYearRecords}
             settings={settings}
+            isOnline={isOnline}
+            pendingSyncCount={pendingSyncCount}
+            syncingQueue={syncingQueue}
+            hasRemoteSync={Boolean(settings.script_url.trim()) || cloudConnected}
+            onSyncPendingNow={() => void flushOfflineQueueNow()}
             onScanSubmit={handleScanSubmit}
           />
         )}
@@ -1872,12 +3135,30 @@ export default function App() {
             totalStudentsCount={students.length}
             totalRecordsCount={records.length}
             connectionStatus={connectionStatus}
+            isOnline={isOnline}
             pendingSyncCount={pendingSyncCount}
+            syncingQueue={syncingQueue}
+            onFlushOfflineQueue={() => flushOfflineQueueNow()}
+            sheetsSupportsAkun={sheetsSupportsAkun}
+            cloudSync={{
+              connected: cloudConnected,
+              syncing: cloudSyncing,
+              email: firebaseUser?.email ?? null,
+              displayName: firebaseUser?.displayName ?? null,
+              lastSyncedAt,
+              quota: firestoreQuota,
+              onResetLocalQuota: handleResetLocalQuota,
+              onConnect: handleConnectCloud,
+              onDisconnect: handleDisconnectCloud,
+              onPushLocalToCloud: handlePushLocalToCloud,
+            }}
             onSaveSettings={handleSaveSettings}
             onSetDefaultIdentity={handleSetDefaultIdentity}
             onPreviewTheme={(tema) => setPreviewTheme(tema)}
             onUpdateAccounts={handleUpdateAccounts}
-            onTestAndSync={(url) => syncFromGas(url, false)}
+            onPushAccountsToSheets={handlePushAccountsToSheets}
+            onPullAccountsFromSheets={handlePullAccountsFromSheets}
+            onTestAndSync={handleTestAndSyncSheets}
             onPushAllToSheets={handlePushAllToSheets}
             onSaveBackupToComputer={handleSaveBackupToComputer}
             onExportExcelArchive={handleExportExcelArchive}

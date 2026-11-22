@@ -14,7 +14,10 @@ import {
   resetPasswordWithNip,
 } from './auth';
 import {
+  GOOGLE_APPS_SCRIPT_TEMPLATE,
   normalizeSheetDateString,
+  prepareGasPayload,
+  sanitizeAccounts,
   sanitizeRecords,
   sanitizeStudents,
   validateGasScriptUrl,
@@ -30,7 +33,12 @@ import {
   createAppBackupPayload,
   parseAndValidateBackupJson,
 } from './backupStorage';
-import { SEED_SETTINGS } from './seedData';
+import {
+  DEFAULT_APP_NAME,
+  DEFAULT_SCHOOL_LOGO,
+  DEFAULT_SCHOOL_NAME,
+  SEED_SETTINGS,
+} from './seedData';
 import { RECAP_PDF_F4_CONFIG, getRecapPdfColumns } from './recapPdf';
 import { getECardLayoutMetrics } from './ecardPdf';
 import { THEME_PRESETS, isDarkTheme, normalizeThemeId } from './themes';
@@ -277,13 +285,13 @@ test('normalizeIndonesianPhone and buildWhatsAppUrl format parent WhatsApp links
 
 test('backupStorage creates valid JSON backups, filenames, and validates/sanitizes restores safely', () => {
   const filenameJson = buildBackupFilename(
-    'SMA Negeri 1 Nusantara',
+    'SMA Negeri 1 Kabun',
     'json',
     new Date(2026, 10, 20, 9, 5, 0)
   );
   assert.equal(
     filenameJson,
-    'Backup_PresensiQR_SMA_Negeri_1_Nusantara_2026-11-20_09-05.json'
+    'Backup_Presensi_Digital_SMA_Negeri_1_Kabun_2026-11-20_09-05.json'
   );
 
   const filenameXlsx = buildBackupFilename(
@@ -293,7 +301,7 @@ test('backupStorage creates valid JSON backups, filenames, and validates/sanitiz
   );
   assert.equal(
     filenameXlsx,
-    'Arsip_PresensiQR_SMA_Negeri_1_2026-11-20_14-30.xlsx'
+    'Arsip_Presensi_Digital_SMA_Negeri_1_2026-11-20_14-30.xlsx'
   );
 
   const payload = createAppBackupPayload({
@@ -441,8 +449,8 @@ test('THEME_PRESETS offers expanded light and dark variations with safe normaliz
 
 test('buildWelcomeGreetingText produces exact Indonesian welcome phrase with school name', () => {
   assert.equal(
-    buildWelcomeGreetingText('SMA Negeri 1 Nusantara'),
-    'Selamat Datang di Aplikasi Presensi Digital SMA Negeri 1 Nusantara'
+    buildWelcomeGreetingText('SMA Negeri 1 Kabun'),
+    'Selamat Datang di Aplikasi Presensi Digital SMA Negeri 1 Kabun'
   );
   assert.equal(
     buildWelcomeGreetingText('  SMK Harapan Bangsa  '),
@@ -450,5 +458,386 @@ test('buildWelcomeGreetingText produces exact Indonesian welcome phrase with sch
   );
 });
 
+test('Default branding constants use Presensi Digital, SMA Negeri 1 Kabun, and uploaded SMAN 1 Kabun logo', () => {
+  assert.equal(DEFAULT_APP_NAME, 'Presensi Digital');
+  assert.equal(DEFAULT_SCHOOL_NAME, 'SMA Negeri 1 Kabun');
+  assert.equal(DEFAULT_SCHOOL_LOGO, '/assets/aistudio/LOGO_SMANSA_3D_d5e941c9.png');
+  assert.equal(SEED_SETTINGS.nama_sekolah, 'SMA Negeri 1 Kabun');
+  assert.equal(SEED_SETTINGS.logo_sekolah, '/assets/aistudio/LOGO_SMANSA_3D_d5e941c9.png');
+});
+
+test('Google Sheets sync sanitizes accounts, builds full 8-module syncAll payload, and exposes all sheets in Code.gs template', () => {
+  const sanitized = sanitizeAccounts([
+    {
+      id: 'usr_1',
+      username: 'admin',
+      password: 'secret',
+      nama: 'Admin Sekolah',
+      nip: '198001012010011001',
+      role: 'master_admin',
+    },
+    {
+      id: 'usr_dup',
+      username: 'ADMIN',
+      password: 'dup',
+      nama: 'Duplicate',
+      role: 'guru',
+    },
+    {
+      id: 'usr_kepsek',
+      username: 'kepsek',
+      password: 'pw',
+      nama: 'Kepala Sekolah',
+      role: 'kepala_sekolah',
+    },
+    {
+      id: 'usr_invalid_role',
+      username: 'bad',
+      password: 'pw',
+      nama: 'Bad Role',
+      role: 'superhero',
+    },
+    {
+      id: 'usr_incomplete',
+      username: 'missing_pw',
+      password: '',
+      nama: 'No Password',
+      role: 'guru',
+    },
+  ]);
+
+  assert.equal(sanitized.length, 3);
+  assert.equal(sanitized[0].username, 'admin');
+  assert.equal(sanitized[0].jabatan, 'Master Admin');
+  assert.equal(sanitized[1].role, 'kepala_sekolah');
+  assert.equal(sanitized[1].jabatan, 'Kepala Sekolah');
+  assert.equal(sanitized[2].role, 'guru');
+  assert.equal(sanitized[2].jabatan, 'Guru Mata Pelajaran');
+
+  const syncAkunPayload = prepareGasPayload('syncAkun', {
+    accounts: DEFAULT_USER_ACCOUNTS,
+  });
+  assert.ok(Array.isArray(syncAkunPayload.accounts));
+  assert.ok(Array.isArray(syncAkunPayload.akun));
+  assert.equal((syncAkunPayload.accounts as unknown[]).length, DEFAULT_USER_ACCOUNTS.length);
+  assert.equal((syncAkunPayload.akun as unknown[]).length, DEFAULT_USER_ACCOUNTS.length);
+
+  // Verify human-readable role labels and Indonesian sheet column aliases from manual Google Sheets edits
+  const sheetEditedAccounts = sanitizeAccounts([
+    {
+      ID: 'usr_sheet_1',
+      User: 'kepsek_baru',
+      'Kata Sandi': 'sandi123',
+      'Nama Lengkap': 'H. Budi Santoso, M.Pd',
+      NIP: '197001011998021001',
+      Peran: 'Kepala Sekolah',
+    },
+    {
+      id: 'usr_sheet_2',
+      username: 'wali_xi',
+      sandi: 'wali123',
+      nama: 'Dra. Rina Kartika',
+      hak_akses: 'Wali Kelas',
+      kelas: 'XI IPA 1',
+    },
+    {
+      id: 'usr_sheet_3',
+      username: 'super_admin',
+      password: '123',
+      nama: 'Administrator Utama',
+      role: 'Master Admin',
+    },
+  ]);
+  assert.equal(sheetEditedAccounts.length, 3);
+  assert.equal(sheetEditedAccounts[0].role, 'kepala_sekolah');
+  assert.equal(sheetEditedAccounts[0].username, 'kepsek_baru');
+  assert.equal(sheetEditedAccounts[1].role, 'wali_kelas');
+  assert.equal(sheetEditedAccounts[1].kelas_binaan, 'XI IPA 1');
+  assert.equal(sheetEditedAccounts[2].role, 'master_admin');
+
+  const upsertAkunPayload = prepareGasPayload('upsertAkun', {
+    account: sheetEditedAccounts[1],
+  });
+  assert.equal((upsertAkunPayload.account as { username?: string })?.username, 'wali_xi');
+  assert.equal((upsertAkunPayload.akun as { role?: string })?.role, 'wali_kelas');
+
+  const syncAllPayload = prepareGasPayload('syncAll', {
+    students: [{ nis: '2026001', nama: 'Budi', kelas: 'X IPA 1', gender: 'L' }],
+    records: [
+      {
+        id: '2026-11-20_2026001',
+        tanggal: '2026-11-20',
+        nis: '2026001',
+        nama: 'Budi',
+        kelas: 'X IPA 1',
+        jam_masuk: '07:05:00',
+        jam_pulang: '13:00:00',
+        alasan_pulang_cepat: 'Sakit di sekolah',
+        status: 'Hadir',
+      },
+    ],
+    settings: SEED_SETTINGS,
+    accounts: DEFAULT_USER_ACCOUNTS,
+    masterSubjects: [{ id: 'mp_1', kode: 'MTK', nama: 'Matematika' }],
+    teacherSchedules: [
+      {
+        id: 'sch_1',
+        hari: 'Senin',
+        teacher_user_id: 'usr_guru',
+        teacher_name: 'Siti Aminah',
+        kelas: 'X IPA 1',
+        mata_pelajaran: 'Matematika',
+        jam_mulai: '07:30',
+        jam_selesai: '09:00',
+        tahun_ajaran: '2026/2027',
+        semester: 'ganjil',
+      },
+    ],
+    subjectAssignments: [
+      {
+        id: 'asg_1',
+        teacher_user_id: 'usr_guru',
+        teacher_name: 'Siti Aminah',
+        kelas: 'X IPA 1',
+        mata_pelajaran: 'Matematika',
+        tahun_ajaran: '2026/2027',
+      },
+    ],
+    subjectRecords: [
+      {
+        id: '2026-11-20_asg_1_2026001',
+        tanggal: '2026-11-20',
+        assignment_id: 'asg_1',
+        kelas: 'X IPA 1',
+        mata_pelajaran: 'Matematika',
+        teacher_user_id: 'usr_guru',
+        teacher_name: 'Siti Aminah',
+        nis: '2026001',
+        nama: 'Budi',
+        jam_masuk: '07:35:00',
+        status: 'Hadir',
+      },
+    ],
+  });
+
+  assert.equal(Array.isArray(syncAllPayload.accounts), true);
+  assert.equal(Array.isArray(syncAllPayload.masterSubjects), true);
+  assert.equal(Array.isArray(syncAllPayload.teacherSchedules), true);
+  assert.equal(Array.isArray(syncAllPayload.subjectAssignments), true);
+  assert.equal(Array.isArray(syncAllPayload.subjectRecords), true);
+
+  // Verify Code.gs template supports all 8 sheets, auto-creation, and all sync actions
+  for (const sheetName of [
+    "'Siswa'",
+    "'Presensi'",
+    "'Pengaturan'",
+    "'Akun'",
+    "'MasterMapel'",
+    "'JadwalGuru'",
+    "'MapelKelas'",
+    "'PresensiMapel'",
+  ]) {
+    assert.ok(
+      GOOGLE_APPS_SCRIPT_TEMPLATE.includes(sheetName),
+      `Code.gs template missing sheet ${sheetName}`
+    );
+  }
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes('ensureAllSheetsExist'));
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes('akun: akunList'));
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes('accounts: akunList'));
+  for (const actionName of [
+    "'syncAkun'",
+    "'upsertAkun'",
+    "'deleteAkun'",
+    "'upsertMasterMapel'",
+    "'deleteMasterMapel'",
+    "'upsertJadwalGuru'",
+    "'deleteJadwalGuru'",
+    "'upsertMapelKelas'",
+    "'deleteMapelKelas'",
+    "'recordPresensiMapel'",
+    "'bulkRecordPresensiMapel'",
+    "'syncAll'",
+  ]) {
+    assert.ok(
+      GOOGLE_APPS_SCRIPT_TEMPLATE.includes(actionName),
+      `Code.gs template missing action ${actionName}`
+    );
+  }
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes('alasan_pulang_cepat'));
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes('SMA Negeri 1 Kabun'));
+});
+
+test('sanitizeRecords self-heals shifted Presensi columns, case-insensitive statuses, corrupted late notes, and duplicates', () => {
+  const sanitized = sanitizeRecords([
+    // 1. Case-insensitive status variants
+    {
+      tanggal: '2026-11-20',
+      nis: '2026001',
+      nama: 'Ahmad',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:35:00',
+      status: 'terlambat',
+      keterangan: 'Melewati batas jam masuk',
+      tahun_ajaran: '2026/2027',
+    },
+    {
+      tanggal: '2026-11-20',
+      nis: '2026002',
+      nama: 'Siti',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:40:00',
+      status: 'TERLAMBAT ',
+      keterangan: 'Melewati batas jam masuk',
+    },
+    // 2. Shifted-column Case A: 10-col row read under shifted 11-col header (alasan_pulang_cepat has status)
+    {
+      tanggal: '2026-11-20',
+      nis: '2026003',
+      nama: 'Budi',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:45:00',
+      jam_pulang: '-',
+      alasan_pulang_cepat: 'Terlambat',
+      status: 'Melewati batas jam masuk',
+      keterangan: '2026/2027',
+      tahun_ajaran: '',
+    },
+    // 3. Shifted-column Case B: 11-col shifted row written into 10-col legacy header (keterangan has status)
+    {
+      tanggal: '2026-11-20',
+      nis: '2026004',
+      nama: 'Dewi',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:50:00',
+      jam_pulang: '-',
+      status: '',
+      keterangan: 'Terlambat',
+      tahun_ajaran: 'Melewati batas jam masuk',
+    },
+    // 4. Previously corrupted record where status was flipped to Hadir despite Melewati batas jam masuk note
+    {
+      tanggal: '2026-11-20',
+      nis: '2026005',
+      nama: 'Eko',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:55:00',
+      status: 'Hadir',
+      keterangan: 'Melewati batas jam masuk',
+      tahun_ajaran: '2026/2027',
+    },
+    // 5. Manually overridden Hadir MUST remain Hadir (never forced back to Terlambat)
+    {
+      tanggal: '2026-11-20',
+      nis: '2026006',
+      nama: 'Fani',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:55:00',
+      status: 'Hadir',
+      keterangan: 'Diubah manual (Hadir)',
+      tahun_ajaran: '2026/2027',
+    },
+    // 6. Normal 11-col row with BOTH Terlambat AND alasan_pulang_cepat
+    {
+      tanggal: '2026-11-20',
+      nis: '2026007',
+      nama: 'Gina',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:25:00',
+      jam_pulang: '11:00:00',
+      status: 'Terlambat',
+      keterangan: 'Melewati batas jam masuk · Pulang cepat 11:00:00 (Alasan: Sakit)',
+      tahun_ajaran: '2026/2027',
+      alasan_pulang_cepat: 'Sakit',
+    },
+    // 7. Duplicate row for same (tanggal, nis) with checkout time should merge cleanly
+    {
+      tanggal: '2026-11-20',
+      nis: '2026001',
+      nama: 'Ahmad',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:35:00',
+      jam_pulang: '15:10:00',
+      status: 'Terlambat',
+      keterangan: 'Melewati batas jam masuk · Pulang 15:10:00',
+      tahun_ajaran: '2026/2027',
+    },
+  ]);
+
+  assert.equal(sanitized.length, 7);
+  const byNis = new Map(sanitized.map((r) => [r.nis, r]));
+
+  assert.equal(byNis.get('2026001')?.status, 'Terlambat');
+  assert.equal(byNis.get('2026001')?.jam_pulang, '15:10:00');
+  assert.equal(byNis.get('2026002')?.status, 'Terlambat');
+
+  // Case A healed
+  assert.equal(byNis.get('2026003')?.status, 'Terlambat');
+  assert.equal(byNis.get('2026003')?.keterangan, 'Melewati batas jam masuk');
+  assert.equal(byNis.get('2026003')?.tahun_ajaran, '2026/2027');
+  assert.equal(byNis.get('2026003')?.alasan_pulang_cepat, undefined);
+
+  // Case B healed
+  assert.equal(byNis.get('2026004')?.status, 'Terlambat');
+  assert.equal(byNis.get('2026004')?.keterangan, 'Melewati batas jam masuk');
+
+  // Corrupted Hadir healed to Terlambat, manual Hadir preserved
+  assert.equal(byNis.get('2026005')?.status, 'Terlambat');
+  assert.equal(byNis.get('2026006')?.status, 'Hadir');
+
+  // Normal 11-col row with Terlambat + early checkout preserved
+  assert.equal(byNis.get('2026007')?.status, 'Terlambat');
+  assert.equal(byNis.get('2026007')?.alasan_pulang_cepat, 'Sakit');
+
+  // Code.gs template must place status before alasan_pulang_cepat & use header-aware mapping
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes('appendMissingHeaders'));
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes('mapObjectToHeaders'));
+  const presensiHeaderLine = GOOGLE_APPS_SCRIPT_TEMPLATE.split('\n').find((line) =>
+    line.includes('var HEADERS_PRESENSI =')
+  );
+  assert.ok(presensiHeaderLine);
+  assert.ok(
+    presensiHeaderLine.indexOf("'status'") < presensiHeaderLine.indexOf("'alasan_pulang_cepat'"),
+    'HEADERS_PRESENSI must keep status in its original column before alasan_pulang_cepat'
+  );
+});
+
+test('Pengaturan sheet & Code.gs store and synchronize Akun & Akses rows (jumlah_akun, daftar_akun, akun_akses) alongside Sheet Akun', () => {
+  const savePengaturanPayload = prepareGasPayload('savePengaturan', {
+    nama_sekolah: 'SMA Negeri 1 Kabun',
+    batas_jam_masuk: '07:15',
+    accounts: DEFAULT_USER_ACCOUNTS,
+  });
+
+  assert.equal(savePengaturanPayload.jumlah_akun, String(DEFAULT_USER_ACCOUNTS.length));
+  assert.ok(
+    typeof savePengaturanPayload.daftar_akun === 'string' &&
+      savePengaturanPayload.daftar_akun.includes('master') &&
+      savePengaturanPayload.daftar_akun.includes('kepsek')
+  );
+  assert.ok(typeof savePengaturanPayload.akun_akses === 'string');
+  const parsedAkunAkses = JSON.parse(savePengaturanPayload.akun_akses as string) as Array<{
+    username: string;
+  }>;
+  assert.equal(parsedAkunAkses.length, DEFAULT_USER_ACCOUNTS.length);
+
+  const syncAllPayload = prepareGasPayload('syncAll', {
+    students: [],
+    records: [],
+    settings: SEED_SETTINGS,
+    accounts: DEFAULT_USER_ACCOUNTS,
+  });
+  const syncSettings = syncAllPayload.settings as Record<string, unknown>;
+  assert.equal(syncSettings.jumlah_akun, String(DEFAULT_USER_ACCOUNTS.length));
+  assert.ok(typeof syncSettings.daftar_akun === 'string' && syncSettings.daftar_akun.length > 0);
+  assert.ok(typeof syncSettings.akun_akses === 'string' && syncSettings.akun_akses.includes('kepsek'));
+
+  // Code.gs must write Akun section into Sheet Pengaturan and keep it synced on every account action
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes("['jumlah_akun'"));
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes("['daftar_akun'"));
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes("['akun_akses'"));
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes('syncAccountsIntoPengaturanSheet'));
+  assert.ok(GOOGLE_APPS_SCRIPT_TEMPLATE.includes('parseAccountsJsonSafe'));
+});
 
 

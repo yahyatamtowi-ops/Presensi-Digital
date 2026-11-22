@@ -27,7 +27,7 @@ import { normalizeThemeId } from './themes';
 const LAST_BACKUP_META_KEY = 'presensiqr_last_backup_meta_v2';
 
 export interface AppBackupPayload {
-  app: 'PresensiQR';
+  app: 'Presensi Digital' | 'PresensiQR';
   schemaVersion: number;
   exportedAt: string;
   exportedBy: string;
@@ -67,7 +67,7 @@ export function createAppBackupPayload(params: {
 }): AppBackupPayload {
   const now = params.now ?? new Date();
   return {
-    app: 'PresensiQR',
+    app: 'Presensi Digital',
     schemaVersion: 4,
     exportedAt: now.toISOString(),
     exportedBy: params.exportedBy?.trim() || 'Master Admin',
@@ -113,7 +113,8 @@ export function buildBackupFilename(
   const dd = String(now.getDate()).padStart(2, '0');
   const hh = String(now.getHours()).padStart(2, '0');
   const min = String(now.getMinutes()).padStart(2, '0');
-  const prefix = extension === 'xlsx' ? 'Arsip_PresensiQR' : 'Backup_PresensiQR';
+  const prefix =
+    extension === 'xlsx' ? 'Arsip_Presensi_Digital' : 'Backup_Presensi_Digital';
   return `${prefix}_${safeSchool || 'Sekolah'}_${yyyy}-${mm}-${dd}_${hh}-${min}.${extension}`;
 }
 
@@ -132,7 +133,7 @@ export function parseAndValidateBackupJson(
   } catch {
     return {
       ok: false,
-      error: 'Format file tidak valid. Pastikan memilih file backup .json dari PresensiQR.',
+      error: 'Format file tidak valid. Pastikan memilih file backup .json dari Presensi Digital.',
     };
   }
 
@@ -150,7 +151,7 @@ export function parseAndValidateBackupJson(
     return {
       ok: false,
       error:
-        'File JSON tidak memiliki data siswa maupun presensi yang valid untuk PresensiQR.',
+        'File JSON tidak memiliki data siswa maupun presensi yang valid untuk Presensi Digital.',
     };
   }
 
@@ -239,7 +240,7 @@ export function parseAndValidateBackupJson(
   return {
     ok: true,
     backup: {
-      app: 'PresensiQR',
+      app: 'Presensi Digital',
       schemaVersion: typeof root.schemaVersion === 'number' ? root.schemaVersion : 4,
       exportedAt:
         typeof root.exportedAt === 'string'
@@ -345,7 +346,7 @@ export async function saveBackupToComputer(
         suggestedName: filename,
         types: [
           {
-            description: 'File Backup PresensiQR (.json)',
+            description: 'File Backup Presensi Digital (.json)',
             accept: { 'application/json': ['.json'] },
           },
         ],
@@ -467,6 +468,20 @@ export function exportFullExcelArchive(payload: AppBackupPayload): {
   ];
   const wsPengaturan = XLSX.utils.json_to_sheet(settingsRows);
   XLSX.utils.book_append_sheet(wb, wsPengaturan, 'Pengaturan');
+
+  const accountRows = (payload.data.accounts ?? []).map((a) => ({
+    ID: a.id,
+    Username: a.username,
+    'Nama Lengkap': a.nama,
+    NIP: a.nip || '',
+    Peran: a.role,
+    Jabatan: a.jabatan,
+    'Kelas Binaan': a.kelas_binaan || '',
+  }));
+  if (accountRows.length > 0) {
+    const wsAkun = XLSX.utils.json_to_sheet(accountRows);
+    XLSX.utils.book_append_sheet(wb, wsAkun, 'Akun');
+  }
 
   const subjectRecordRows = (payload.data.subjectRecords ?? []).map((r) => ({
     Tanggal: r.tanggal,

@@ -10,6 +10,7 @@ import type {
 import type { PeriodAnalyticsOverview, PeriodSummaryRow } from './attendanceLogic';
 import { getThemeAccentRgb, loadImageAsDataUrlAndDims } from './ecardPdf';
 import { RECAP_PDF_F4_CONFIG, type RecapPdfColumnSpec } from './recapPdf';
+import { DEFAULT_APP_NAME, DEFAULT_SCHOOL_LOGO } from './seedData';
 import {
   computeSubjectSessionSummary,
   formatIndonesianDateWithDay,
@@ -114,9 +115,9 @@ export async function generateSubjectAttendancePdf(params: {
   });
 
   const [accentR, accentG, accentB] = getThemeAccentRgb(settings.tema);
-  const logoImg = settings.logo_sekolah
-    ? await loadImageAsDataUrlAndDims(settings.logo_sekolah)
-    : null;
+  const logoImg = await loadImageAsDataUrlAndDims(
+    settings.logo_sekolah || DEFAULT_SCHOOL_LOGO
+  );
 
   const sortedStudents = [...classStudents].sort((a, b) => a.nama.localeCompare(b.nama));
   const recByNis = new Map<string, SubjectAttendanceRecord>();
@@ -412,7 +413,7 @@ export async function generateSubjectAttendancePdf(params: {
     doc.setFontSize(7);
     doc.setTextColor(148, 163, 184);
     doc.text(
-      `PresensiQR · ${settings.nama_sekolah} · ${assignment.mata_pelajaran} (${assignment.kelas})`,
+      `${DEFAULT_APP_NAME} · ${settings.nama_sekolah} · ${assignment.mata_pelajaran} (${assignment.kelas})`,
       marginX,
       pageHeight - 8
     );
@@ -465,9 +466,9 @@ export async function generateMonthlyAnalyticsPdf(params: {
   });
 
   const [accentR, accentG, accentB] = getThemeAccentRgb(settings.tema);
-  const logoImg = settings.logo_sekolah
-    ? await loadImageAsDataUrlAndDims(settings.logo_sekolah)
-    : null;
+  const logoImg = await loadImageAsDataUrlAndDims(
+    settings.logo_sekolah || DEFAULT_SCHOOL_LOGO
+  );
   const semesterLabel = formatSemesterLabel(settings.semester);
 
   // Header Banner
@@ -686,7 +687,7 @@ export async function generateMonthlyAnalyticsPdf(params: {
     doc.setFontSize(7);
     doc.setTextColor(148, 163, 184);
     doc.text(
-      `PresensiQR · Analisis Bulanan ${monthLabel} · ${settings.nama_sekolah}`,
+      `${DEFAULT_APP_NAME} · Analisis Bulanan ${monthLabel} · ${settings.nama_sekolah}`,
       marginX,
       pageHeight - 8
     );

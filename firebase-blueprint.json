@@ -1,0 +1,668 @@
+{
+  "entities": {
+    "SchoolConfig": {
+      "title": "SchoolConfig",
+      "description": "Konfigurasi profil sekolah, pengesahan E-Card, jadwal presensi, tahun ajaran, dan tema aplikasi untuk sinkronisasi lintas perangkat.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "nama_sekolah": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "nama_kepala_sekolah": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "nip_kepala_sekolah": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "ttd_kepala_sekolah": {
+          "type": "string",
+          "maxLength": 150000
+        },
+        "cap_sekolah": {
+          "type": "string",
+          "maxLength": 150000
+        },
+        "logo_sekolah": {
+          "type": "string",
+          "maxLength": 150000
+        },
+        "batas_jam_masuk": {
+          "type": "string",
+          "pattern": "^[0-2][0-9]:[0-5][0-9]$",
+          "maxLength": 5
+        },
+        "mode_presensi": {
+          "type": "string",
+          "enum": ["masuk_saja", "masuk_pulang"]
+        },
+        "jam_pulang_standar": {
+          "type": "string",
+          "pattern": "^[0-2][0-9]:[0-5][0-9]$",
+          "maxLength": 5
+        },
+        "tahun_ajaran": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "semester": {
+          "type": "string",
+          "enum": ["ganjil", "genap"]
+        },
+        "tema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "script_url": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "nama_sekolah",
+        "nama_kepala_sekolah",
+        "nip_kepala_sekolah",
+        "ttd_kepala_sekolah",
+        "cap_sekolah",
+        "logo_sekolah",
+        "batas_jam_masuk",
+        "mode_presensi",
+        "jam_pulang_standar",
+        "tahun_ajaran",
+        "semester",
+        "tema",
+        "script_url",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StudentRecord": {
+      "title": "StudentRecord",
+      "description": "Data induk siswa termasuk nomor WhatsApp orang tua (PII terbatas pemilik sekolah).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "nis": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "nama": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "kelas": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "gender": {
+          "type": "string",
+          "enum": ["L", "P"]
+        },
+        "no_wa_ortu": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "tahun_ajaran": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "nis",
+        "nama",
+        "kelas",
+        "gender",
+        "no_wa_ortu",
+        "tahun_ajaran",
+        "updatedAt"
+      ]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Catatan presensi harian masuk, pulang, dan konfirmasi alasan pulang cepat siswa.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "tanggal": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10
+        },
+        "nis": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "nama": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "kelas": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "jam_masuk": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16
+        },
+        "jam_pulang": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "alasan_pulang_cepat": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Hadir", "Terlambat", "Sakit", "Izin", "Alpa"]
+        },
+        "keterangan": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "tahun_ajaran": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "id",
+        "tanggal",
+        "nis",
+        "nama",
+        "kelas",
+        "jam_masuk",
+        "jam_pulang",
+        "alasan_pulang_cepat",
+        "status",
+        "keterangan",
+        "tahun_ajaran",
+        "updatedAt"
+      ]
+    },
+    "MasterSubject": {
+      "title": "MasterSubject",
+      "description": "Daftar master mata pelajaran sekolah.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "kode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "nama": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "deskripsi": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "id", "kode", "nama", "deskripsi", "updatedAt"]
+    },
+    "TeacherSchedule": {
+      "title": "TeacherSchedule",
+      "description": "Jadwal pelajaran mingguan guru per kelas dan mata pelajaran.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "hari": {
+          "type": "string",
+          "enum": ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+        },
+        "teacher_user_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "teacher_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "kelas": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "mata_pelajaran": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "jam_mulai": {
+          "type": "string",
+          "pattern": "^[0-2][0-9]:[0-5][0-9]$",
+          "maxLength": 5
+        },
+        "jam_selesai": {
+          "type": "string",
+          "pattern": "^[0-2][0-9]:[0-5][0-9]$",
+          "maxLength": 5
+        },
+        "tahun_ajaran": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "semester": {
+          "type": "string",
+          "enum": ["ganjil", "genap"]
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "id",
+        "hari",
+        "teacher_user_id",
+        "teacher_name",
+        "kelas",
+        "mata_pelajaran",
+        "jam_mulai",
+        "jam_selesai",
+        "tahun_ajaran",
+        "semester",
+        "updatedAt"
+      ]
+    },
+    "SubjectAssignment": {
+      "title": "SubjectAssignment",
+      "description": "Penugasan kelas dan mata pelajaran guru.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "teacher_user_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "teacher_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "kelas": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "mata_pelajaran": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "hari": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "jam_mulai": {
+          "type": "string",
+          "maxLength": 8
+        },
+        "jam_selesai": {
+          "type": "string",
+          "maxLength": 8
+        },
+        "tahun_ajaran": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "semester": {
+          "type": "string",
+          "enum": ["ganjil", "genap"]
+        },
+        "source": {
+          "type": "string",
+          "enum": ["schedule", "manual", "record"]
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "id",
+        "teacher_user_id",
+        "teacher_name",
+        "kelas",
+        "mata_pelajaran",
+        "hari",
+        "jam_mulai",
+        "jam_selesai",
+        "tahun_ajaran",
+        "semester",
+        "source",
+        "updatedAt"
+      ]
+    },
+    "SubjectAttendanceRecord": {
+      "title": "SubjectAttendanceRecord",
+      "description": "Catatan presensi kehadiran siswa per mata pelajaran.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "assignment_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "tanggal": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10
+        },
+        "kelas": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "mata_pelajaran": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "teacher_user_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "teacher_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "nis": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "nama": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "jam_masuk": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Hadir", "Terlambat", "Sakit", "Izin", "Alpa"]
+        },
+        "keterangan": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "tahun_ajaran": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "id",
+        "assignment_id",
+        "tanggal",
+        "kelas",
+        "mata_pelajaran",
+        "teacher_user_id",
+        "teacher_name",
+        "nis",
+        "nama",
+        "jam_masuk",
+        "status",
+        "keterangan",
+        "tahun_ajaran",
+        "updatedAt"
+      ]
+    },
+    "AppUserAccount": {
+      "title": "AppUserAccount",
+      "description": "Akun peran internal aplikasi sekolah (Master Admin, Kepala Sekolah, Wali Kelas, Guru) - akses privat pemilik workspace.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "username": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "password": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "nama": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "nip": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "role": {
+          "type": "string",
+          "enum": ["master_admin", "kepala_sekolah", "wali_kelas", "guru"]
+        },
+        "jabatan": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "kelas_binaan": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerId",
+        "id",
+        "username",
+        "password",
+        "nama",
+        "nip",
+        "role",
+        "jabatan",
+        "kelas_binaan",
+        "updatedAt"
+      ]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Daftar UID administrator terverifikasi.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["admin"]
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["role", "email", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/schools/{schoolId}": {
+      "schema": {
+        "$ref": "#/entities/SchoolConfig"
+      },
+      "description": "Dokumen konfigurasi utama workspace sekolah per pemilik Google Auth UID."
+    },
+    "/schools/{schoolId}/students/{studentId}": {
+      "schema": {
+        "$ref": "#/entities/StudentRecord"
+      },
+      "description": "Subkoleksi daftar siswa sekolah (mengandung PII no_wa_ortu)."
+    },
+    "/schools/{schoolId}/attendance/{recordId}": {
+      "schema": {
+        "$ref": "#/entities/AttendanceRecord"
+      },
+      "description": "Subkoleksi catatan presensi harian siswa termasuk alasan pulang cepat."
+    },
+    "/schools/{schoolId}/subjects/{subjectId}": {
+      "schema": {
+        "$ref": "#/entities/MasterSubject"
+      },
+      "description": "Subkoleksi master mata pelajaran sekolah."
+    },
+    "/schools/{schoolId}/schedules/{scheduleId}": {
+      "schema": {
+        "$ref": "#/entities/TeacherSchedule"
+      },
+      "description": "Subkoleksi jadwal pelajaran guru."
+    },
+    "/schools/{schoolId}/subjectAssignments/{assignmentId}": {
+      "schema": {
+        "$ref": "#/entities/SubjectAssignment"
+      },
+      "description": "Subkoleksi penugasan kelas dan mata pelajaran guru."
+    },
+    "/schools/{schoolId}/subjectRecords/{recordId}": {
+      "schema": {
+        "$ref": "#/entities/SubjectAttendanceRecord"
+      },
+      "description": "Subkoleksi catatan presensi kehadiran mata pelajaran siswa."
+    },
+    "/schools/{schoolId}/accounts/{accountId}": {
+      "schema": {
+        "$ref": "#/entities/AppUserAccount"
+      },
+      "description": "Subkoleksi akun peran internal aplikasi sekolah."
+    },
+    "/admins/{adminId}": {
+      "schema": {
+        "$ref": "#/entities/AdminRole"
+      },
+      "description": "Dokumen peran admin tingkat platform."
+    }
+  }
+}

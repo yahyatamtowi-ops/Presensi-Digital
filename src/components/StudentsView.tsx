@@ -23,6 +23,7 @@ import {
   type ParsedStudentImportResult,
 } from '../utils/importExport';
 import { generateECardsPdf } from '../utils/ecardPdf';
+import { DEFAULT_SCHOOL_LOGO } from '../utils/seedData';
 import { PdfPreviewModal } from './PdfPreviewModal';
 
 interface StudentsViewProps {
@@ -1132,15 +1133,13 @@ export function StudentsView({
             <div className="p-6 flex flex-col items-center gap-5 bg-slate-50/60">
               <div className="ecard-print-area w-full max-w-[440px] rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-md">
                 <div className="bg-indigo-600 px-5 py-3.5 text-white flex items-center gap-3">
-                  {settings.logo_sekolah && (
-                    <div className="h-10 w-10 rounded-lg bg-white p-1 shrink-0 flex items-center justify-center">
-                      <img
-                        src={settings.logo_sekolah}
-                        alt={`Logo ${settings.nama_sekolah}`}
-                        className="h-full w-full object-contain"
-                      />
-                    </div>
-                  )}
+                  <div className="h-10 w-10 rounded-lg bg-white p-1 shrink-0 flex items-center justify-center">
+                    <img
+                      src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
+                      alt={`Logo ${settings.nama_sekolah}`}
+                      className="h-full w-full object-contain"
+                    />
+                  </div>
                   <div className="min-w-0">
                     <p className="text-[10px] font-medium uppercase tracking-wide text-indigo-100">
                       Kartu Tanda Siswa Elektronik
