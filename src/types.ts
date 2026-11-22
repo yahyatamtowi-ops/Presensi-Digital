@@ -126,6 +126,50 @@ export interface SubjectAttendanceRecord {
   tahun_ajaran: string;
 }
 
+export type SchoolDayCount = 5 | 6;
+
+export interface TimetableBreak {
+  id: string;
+  label: string; // e.g. 'Istirahat 1', 'Istirahat 2'
+  jam_mulai: string; // HH:MM
+  jam_selesai: string; // HH:MM
+}
+
+export interface TimetableCellValue {
+  mata_pelajaran: string;
+  teacher_user_id?: string;
+  teacher_name?: string;
+}
+
+export interface TimetableConfig {
+  tahun_ajaran: string;
+  semester: SemesterKind;
+  jumlah_hari: SchoolDayCount; // 5 (Senin-Jumat) | 6 (Senin-Sabtu)
+  jam_mulai_sekolah: string; // HH:MM e.g. '07:15'
+  durasi_jp_menit: number; // e.g. 45
+  jumlah_jp: number; // e.g. 8
+  istirahat: TimetableBreak[];
+  custom_classes?: string[];
+  /** Key format: `${hari}|${jamKe}|${kelas}` */
+  cells: Record<string, TimetableCellValue>;
+  updated_at?: string;
+}
+
+export type TimetableTimeSlot =
+  | {
+      kind: 'lesson';
+      jamKe: number;
+      jam_mulai: string;
+      jam_selesai: string;
+    }
+  | {
+      kind: 'break';
+      breakId: string;
+      label: string;
+      jam_mulai: string;
+      jam_selesai: string;
+    };
+
 export type ConnectionStatus = 'connected' | 'offline' | 'syncing' | 'error';
 
 export type TabId =
@@ -135,6 +179,7 @@ export type TabId =
   | 'rekap'
   | 'mapel'
   | 'jadwal'
+  | 'pengaturan_jadwal'
   | 'analisis'
   | 'pengaturan';
 

@@ -42,6 +42,7 @@ import {
   computeSubjectSessionSummary,
   formatIndonesianDateWithDay,
   formatSemesterLabel,
+  getDateForDayInSameWeek,
   getIndonesianDayOfWeek,
   getRecordsForAssignmentOnDate,
   resolveAssignmentsForDate,
@@ -154,6 +155,7 @@ export function SubjectAttendanceView({
     getIndonesianDayOfWeek(getTodayDateString())
   );
   const [newJamMulai, setNewJamMulai] = useState('');
+  const [newJamSelesai, setNewJamSelesai] = useState('');
   const [addError, setAddError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -220,6 +222,35 @@ export function SubjectAttendanceView({
       session.userId,
     ]
   );
+
+  // Teacher's weekly schedule overview across all school days (so schedules added by Master Admin are always immediately visible and 1-click reachable)
+  const teacherWeeklyScheduleByDay = useMemo(() => {
+    if (isMasterAdmin) return [] as Array<{ day: DayOfWeek; items: SubjectAssignment[] }>;
+    return SCHOOL_DAYS.map((day) => {
+      const dateForDay = getDateForDayInSameWeek(selectedDate, day);
+      const items = resolveAssignmentsForDate({
+        selectedDate: dateForDay,
+        academicYear: settings.tahun_ajaran,
+        semester: settings.semester,
+        schedules,
+        manualAssignments: assignments,
+        records,
+        role: session.role,
+        teacherUserId: session.userId,
+      });
+      return { day, items };
+    }).filter((entry) => entry.items.length > 0);
+  }, [
+    isMasterAdmin,
+    selectedDate,
+    settings.tahun_ajaran,
+    settings.semester,
+    schedules,
+    assignments,
+    records,
+    session.role,
+    session.userId,
+  ]);
 
   // =========================================================================
   // MASTER ADMIN DERIVED DATA
@@ -591,7 +622,8 @@ export function SubjectAttendanceView({
     );
     setNewMapel(masterSubjects[0]?.nama || '');
     setNewHari(selectedDayName === 'Minggu' ? 'Senin' : selectedDayName);
-    setNewJamMulai('');
+    setNewJamMulai('07:30');
+    setNewJamSelesai('09:00');
     setAddError(null);
     setAddModalOpen(true);
   }
@@ -603,18 +635,23 @@ export function SubjectAttendanceView({
       mata_pelajaran: newMapel,
       hari: newHari,
       jam_mulai: newJamMulai || undefined,
+      jam_selesai: newJamSelesai || undefined,
     });
     if (!res.ok) {
       setAddError(res.error || 'Gagal menambahkan kelas & mata pelajaran.');
       return;
     }
-    if (res.assignment && newHari === selectedDayName) {
+    if (res.assignment) {
+      if (newHari !== selectedDayName) {
+        setSelectedDate(getDateForDayInSameWeek(selectedDate, newHari));
+      }
       setActiveAssignmentId(res.assignment.id);
     }
     setAddModalOpen(false);
     setNewKelas('');
     setNewMapel('');
     setNewJamMulai('');
+    setNewJamSelesai('');
     setAddError(null);
   }
 
@@ -1062,6 +1099,39 @@ export function SubjectAttendanceView({
           </button>
         </div>
       </div>
+
+      {/* Teacher Weekly Schedule Quick Day Switcher (shows all days assigned by Master Admin or self-added) */}
+      {teacherWeeklyScheduleByDay.length > 0 && (
+        <div
+          data-testid="teacher-weekly-schedule-strip"
+          className="bg-white rounded-2xl border border-slate-200/80 px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)] flex flex-wrap items-center gap-2"
+        >
+          <span className="text-xs font-semibold text-slate-600 mr-1">
+            Jadwal Mengajar Anda:
+          </span>
+          {teacherWeeklyScheduleByDay.map(({ day, items }) => {
+            const isSelectedDay = day === selectedDayName;
+            return (
+              <button
+                key={day}
+                type="button"
+                data-testid={`teacher-day-jump-${day}`}
+                onClick={() => setSelectedDate(getDateForDayInSameWeek(selectedDate, day))}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap ${
+                  isSelectedDay
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-indigo-50 hover:text-indigo-700'
+                }`}
+              >
+                <span>{day}</span>
+                <span className={`font-mono tabular-nums text-[11px] ${isSelectedDay ? 'text-indigo-100' : 'text-slate-500'}`}>
+                  ({items.length})
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Main Split Layout: Left Sub-Menu Kelas + Right Presensi Workspace */}
       {dateAssignments.length === 0 ? (
@@ -1839,24 +1909,41 @@ export function SubjectAttendanceView({
                 />
               </div>
 
-              <div>
-                <label
-                  htmlFor="mapel-input-time"
-                  className="block text-xs font-medium text-slate-700 mb-1.5"
-                >
-                  Jam Mulai Pelajaran (Opsional)
-                </label>
-                <input
-                  id="mapel-input-time"
-                  type="time"
-                  value={newJamMulai}
-                  onChange={(e) => setNewJamMulai(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm font-mono text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Jika diisi, siswa yang masuk melewati jam mulai akan otomatis tercatat Terlambat.
-                </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="mapel-input-time"
+                    className="block text-xs font-medium text-slate-700 mb-1.5"
+                  >
+                    Jam Mulai Pelajaran
+                  </label>
+                  <input
+                    id="mapel-input-time"
+                    type="time"
+                    value={newJamMulai}
+                    onChange={(e) => setNewJamMulai(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-mono text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="mapel-input-end-time"
+                    className="block text-xs font-medium text-slate-700 mb-1.5"
+                  >
+                    Jam Selesai Pelajaran
+                  </label>
+                  <input
+                    id="mapel-input-end-time"
+                    type="time"
+                    value={newJamSelesai}
+                    onChange={(e) => setNewJamSelesai(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-mono text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
               </div>
+              <p className="text-[11px] text-slate-500 -mt-2">
+                Kelas &amp; mapel yang ditambahkan otomatis tersinkron ke <strong>Jadwal Pelajaran Guru</strong> Master Admin. Jika jam mulai diisi, siswa yang masuk melewatinya otomatis tercatat Terlambat.
+              </p>
 
               <div className="pt-2 flex items-center justify-end gap-2.5">
                 <button

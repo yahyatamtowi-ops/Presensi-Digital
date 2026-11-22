@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   BookOpen,
   CalendarDays,
+  CalendarRange,
   Clock,
   Pencil,
   Plus,
@@ -64,6 +65,7 @@ interface ScheduleManagementViewProps {
     }
   ) => { ok: boolean; error?: string };
   onDeleteSchedule: (id: string) => void;
+  onNavigateToTimetable?: () => void;
 }
 
 type ScheduleSubMenuId = 'mapel' | 'jadwal';
@@ -110,6 +112,7 @@ export function ScheduleManagementView({
   onAddSchedule,
   onUpdateSchedule,
   onDeleteSchedule,
+  onNavigateToTimetable,
 }: ScheduleManagementViewProps) {
   const [activeSubMenu, setActiveSubMenu] = useState<ScheduleSubMenuId>('mapel');
 
@@ -336,6 +339,16 @@ export function ScheduleManagementView({
             </p>
           </div>
         </div>
+        {onNavigateToTimetable && (
+          <button
+            type="button"
+            onClick={onNavigateToTimetable}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors whitespace-nowrap"
+          >
+            <CalendarRange className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Buka Tabel Pengaturan Jadwal</span>
+          </button>
+        )}
       </div>
 
       {/* Main Sub-Menu Split Layout */}
@@ -510,7 +523,7 @@ export function ScheduleManagementView({
                       Jadwal Pelajaran Guru ({filteredSchedules.length})
                     </h3>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Mata pelajaran yang tampil pada menu Presensi Mapel Guru &amp; Wali Kelas akan otomatis mengikuti jadwal hari yang diatur di sini.
+                      Tersinkron dua arah secara otomatis: jadwal yang diisi Master Admin tampil pada menu Presensi Mapel masing-masing guru, dan kelas &amp; mapel yang ditambahkan guru dari akunnya otomatis masuk ke tabel ini.
                     </p>
                   </div>
 

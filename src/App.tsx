@@ -39,6 +39,7 @@ import type {
   SubjectAttendanceRecord,
   TabId,
   TeacherSchedule,
+  TimetableConfig,
   ToastMessage,
   UserAccount,
 } from './types';
@@ -126,15 +127,24 @@ import {
   loadTeacherSchedules,
   normalizeSemester,
   processSubjectQrScan,
+  reconcileSchedulesAndAssignments,
   saveMasterSubjects,
   saveSubjectAssignments,
   saveSubjectRecords,
   saveTeacherSchedules,
+  syncAssignmentToTeacherSchedules,
+  syncScheduleToSubjectAssignments,
   updateMasterSubject,
   updateTeacherSchedule,
   upsertSubjectAttendanceStatus,
   type SubjectScanOutcome,
 } from './utils/subjectAttendance';
+import {
+  getSchoolDaysForCount,
+  getTimetableConfigKey,
+  loadTimetableConfigs,
+  saveTimetableConfigs,
+} from './utils/timetableLogic';
 import { LayoutShell } from './components/LayoutShell';
 import { OpeningSplash } from './components/OpeningSplash';
 import { AuthLoadingOverlay, type AuthTransitionState } from './components/AuthLoadingOverlay';
@@ -145,6 +155,7 @@ import { StudentsView } from './components/StudentsView';
 import { RecapView } from './components/RecapView';
 import { SubjectAttendanceView } from './components/SubjectAttendanceView';
 import { ScheduleManagementView } from './components/ScheduleManagementView';
+import { TimetableMatrixView } from './components/TimetableMatrixView';
 import { AnalyticsView } from './components/AnalyticsView';
 import { SettingsView } from './components/SettingsView';
 
@@ -155,6 +166,7 @@ const TAB_LABELS: Record<TabId, string> = {
   rekap: 'Rekap & Export',
   mapel: 'Presensi Mata Pelajaran',
   jadwal: 'Mapel & Jadwal Pelajaran',
+  pengaturan_jadwal: 'Pengaturan Jadwal Mata Pelajaran',
   analisis: 'Analisis Kehadiran',
   pengaturan: 'Pengaturan Sistem',
 };
@@ -167,12 +179,22 @@ export default function App() {
   const [masterSubjects, setMasterSubjects] = useState<MasterSubject[]>(() =>
     loadMasterSubjects()
   );
-  const [teacherSchedules, setTeacherSchedules] = useState<TeacherSchedule[]>(() =>
-    loadTeacherSchedules()
+  const [initialReconciledAcademic] = useState(() =>
+    reconcileSchedulesAndAssignments(
+      loadTeacherSchedules(),
+      loadSubjectAssignments(),
+      normalizeSemester(initialCache.settings.semester, 'ganjil')
+    )
   );
-  const [subjectAssignments, setSubjectAssignments] = useState<SubjectAssignment[]>(() =>
-    loadSubjectAssignments()
+  const [teacherSchedules, setTeacherSchedules] = useState<TeacherSchedule[]>(
+    initialReconciledAcademic.schedules
   );
+  const [subjectAssignments, setSubjectAssignments] = useState<SubjectAssignment[]>(
+    initialReconciledAcademic.assignments
+  );
+  const [timetableConfigs, setTimetableConfigs] = useState<
+    Record<string, TimetableConfig>
+  >(() => loadTimetableConfigs());
   const [subjectRecords, setSubjectRecords] = useState<SubjectAttendanceRecord[]>(() =>
     loadSubjectRecords()
   );
@@ -900,15 +922,26 @@ export default function App() {
             setMasterSubjects(remote.masterSubjects);
             saveMasterSubjects(remote.masterSubjects);
           }
-          if (remote.teacherSchedules.length > 0) {
-            latestFullSnapshotRef.current.teacherSchedules = remote.teacherSchedules;
-            setTeacherSchedules(remote.teacherSchedules);
-            saveTeacherSchedules(remote.teacherSchedules);
-          }
-          if (remote.subjectAssignments.length > 0) {
-            latestFullSnapshotRef.current.subjectAssignments = remote.subjectAssignments;
-            setSubjectAssignments(remote.subjectAssignments);
-            saveSubjectAssignments(remote.subjectAssignments);
+          if (remote.teacherSchedules.length > 0 || remote.subjectAssignments.length > 0) {
+            const baseSchedules =
+              remote.teacherSchedules.length > 0
+                ? remote.teacherSchedules
+                : latestFullSnapshotRef.current.teacherSchedules;
+            const baseAssignments =
+              remote.subjectAssignments.length > 0
+                ? remote.subjectAssignments
+                : latestFullSnapshotRef.current.subjectAssignments;
+            const reconciled = reconcileSchedulesAndAssignments(
+              baseSchedules,
+              baseAssignments,
+              normalizeSemester(latestDataRef.current.settings.semester, 'ganjil')
+            );
+            latestFullSnapshotRef.current.teacherSchedules = reconciled.schedules;
+            setTeacherSchedules(reconciled.schedules);
+            saveTeacherSchedules(reconciled.schedules);
+            latestFullSnapshotRef.current.subjectAssignments = reconciled.assignments;
+            setSubjectAssignments(reconciled.assignments);
+            saveSubjectAssignments(reconciled.assignments);
           }
           if (remote.subjectRecords.length > 0) {
             latestFullSnapshotRef.current.subjectRecords = remote.subjectRecords;
@@ -2482,10 +2515,11 @@ export default function App() {
     jam_selesai: string;
     semester?: SemesterKind;
   }): { ok: boolean; error?: string } {
+    const activeSem = input.semester ?? normalizeSemester(settings.semester, 'ganjil');
     const res = addTeacherSchedule(teacherSchedules, {
       ...input,
       tahun_ajaran: settings.tahun_ajaran,
-      semester: input.semester ?? normalizeSemester(settings.semester, 'ganjil'),
+      semester: activeSem,
     });
     if (!res.ok) return res;
     lastLocalAcademicSaveAtRef.current = Date.now();
@@ -2493,10 +2527,27 @@ export default function App() {
     saveTeacherSchedules(res.schedules);
     void syncMutation('upsertJadwalGuru', { ...res.schedule, schedule: res.schedule });
     runCloudWrite((uid) => upsertTeacherScheduleToCloud(uid, res.schedule));
+
+    // Bidirectional sync: automatically populate the teacher's Menu Presensi Mapel
+    const mirrored = syncScheduleToSubjectAssignments(
+      subjectAssignments,
+      res.schedule,
+      activeSem
+    );
+    setSubjectAssignments(mirrored.assignments);
+    saveSubjectAssignments(mirrored.assignments);
+    void syncMutation('upsertMapelKelas', {
+      ...mirrored.upsertedAssignment,
+      assignment: mirrored.upsertedAssignment,
+    });
+    runCloudWrite((uid) =>
+      upsertSubjectAssignmentToCloud(uid, mirrored.upsertedAssignment)
+    );
+
     pushToast({
       type: 'success',
       title: 'Jadwal Guru Ditambahkan',
-      description: `${res.schedule.hari} ${res.schedule.jam_mulai}–${res.schedule.jam_selesai} · ${res.schedule.mata_pelajaran} (${res.schedule.kelas})`,
+      description: `${res.schedule.hari} ${res.schedule.jam_mulai}–${res.schedule.jam_selesai} · ${res.schedule.mata_pelajaran} (${res.schedule.kelas}) — otomatis tampil di Menu Mapel ${res.schedule.teacher_name}.`,
     });
     return { ok: true };
   }
@@ -2514,10 +2565,12 @@ export default function App() {
       semester?: SemesterKind;
     }
   ): { ok: boolean; error?: string } {
+    const previous = teacherSchedules.find((s) => s.id === id);
+    const activeSem = input.semester ?? normalizeSemester(settings.semester, 'ganjil');
     const res = updateTeacherSchedule(teacherSchedules, id, {
       ...input,
       tahun_ajaran: settings.tahun_ajaran,
-      semester: input.semester ?? normalizeSemester(settings.semester, 'ganjil'),
+      semester: activeSem,
     });
     if (!res.ok) return res;
     lastLocalAcademicSaveAtRef.current = Date.now();
@@ -2525,6 +2578,38 @@ export default function App() {
     saveTeacherSchedules(res.schedules);
     void syncMutation('upsertJadwalGuru', { ...res.schedule, schedule: res.schedule });
     runCloudWrite((uid) => upsertTeacherScheduleToCloud(uid, res.schedule));
+
+    // Bidirectional sync: update or replace mirrored assignment for the teacher
+    const cleanedAssignments = previous
+      ? subjectAssignments.filter(
+          (a) =>
+            !(
+              a.id === `asg_from_${previous.id}` ||
+              (a.hari === previous.hari &&
+                a.teacher_user_id === previous.teacher_user_id &&
+                a.kelas.trim().toLowerCase() === previous.kelas.trim().toLowerCase() &&
+                a.mata_pelajaran.trim().toLowerCase() ===
+                  previous.mata_pelajaran.trim().toLowerCase() &&
+                resolveItemAcademicYear(a.tahun_ajaran) ===
+                  resolveItemAcademicYear(previous.tahun_ajaran))
+            )
+        )
+      : subjectAssignments;
+    const mirrored = syncScheduleToSubjectAssignments(
+      cleanedAssignments,
+      res.schedule,
+      activeSem
+    );
+    setSubjectAssignments(mirrored.assignments);
+    saveSubjectAssignments(mirrored.assignments);
+    void syncMutation('upsertMapelKelas', {
+      ...mirrored.upsertedAssignment,
+      assignment: mirrored.upsertedAssignment,
+    });
+    runCloudWrite((uid) =>
+      upsertSubjectAssignmentToCloud(uid, mirrored.upsertedAssignment)
+    );
+
     pushToast({
       type: 'success',
       title: 'Jadwal Guru Diperbarui',
@@ -2541,12 +2626,130 @@ export default function App() {
     saveTeacherSchedules(next);
     void syncMutation('deleteJadwalGuru', { id });
     runCloudWrite((uid) => deleteTeacherScheduleFromCloud(uid, id));
+
+    if (target) {
+      const removedAssignments = subjectAssignments.filter(
+        (a) =>
+          a.id === `asg_from_${target.id}` ||
+          (a.hari === target.hari &&
+            a.teacher_user_id === target.teacher_user_id &&
+            a.kelas.trim().toLowerCase() === target.kelas.trim().toLowerCase() &&
+            a.mata_pelajaran.trim().toLowerCase() ===
+              target.mata_pelajaran.trim().toLowerCase() &&
+            resolveItemAcademicYear(a.tahun_ajaran) ===
+              resolveItemAcademicYear(target.tahun_ajaran))
+      );
+      if (removedAssignments.length > 0) {
+        const removedIds = new Set(removedAssignments.map((a) => a.id));
+        const nextAssignments = subjectAssignments.filter((a) => !removedIds.has(a.id));
+        setSubjectAssignments(nextAssignments);
+        saveSubjectAssignments(nextAssignments);
+        for (const rem of removedAssignments) {
+          void syncMutation('deleteMapelKelas', { id: rem.id });
+          runCloudWrite((uid) => deleteSubjectAssignmentFromCloud(uid, rem.id));
+        }
+      }
+    }
+
     pushToast({
       type: 'info',
       title: 'Jadwal Dihapus',
       description: target
         ? `${target.hari} · ${target.mata_pelajaran} (${target.kelas}) dihapus.`
         : undefined,
+    });
+  }
+
+  function handleSaveTimetable(
+    config: TimetableConfig,
+    syncedSchedules: TeacherSchedule[],
+    activeClasses: string[]
+  ) {
+    const key = getTimetableConfigKey(config.tahun_ajaran, config.semester);
+    const nextConfigs = {
+      ...timetableConfigs,
+      [key]: config,
+    };
+    setTimetableConfigs(nextConfigs);
+    saveTimetableConfigs(nextConfigs);
+
+    const targetYear = resolveItemAcademicYear(config.tahun_ajaran);
+    const targetSem = normalizeSemester(config.semester, 'ganjil');
+    const classSet = new Set(activeClasses.map((c) => c.trim().toLowerCase()));
+    const daySet = new Set(getSchoolDaysForCount(config.jumlah_hari));
+
+    const isInTimetableScope = (item: {
+      tahun_ajaran: string;
+      semester?: SemesterKind;
+      kelas: string;
+      hari?: DayOfWeek;
+    }) =>
+      resolveItemAcademicYear(item.tahun_ajaran) === targetYear &&
+      (!item.semester || normalizeSemester(item.semester, 'ganjil') === targetSem) &&
+      classSet.has(item.kelas.trim().toLowerCase()) &&
+      Boolean(item.hari && daySet.has(item.hari));
+
+    const preservedSchedules = teacherSchedules.filter(
+      (s) => !isInTimetableScope(s)
+    );
+    const removedSchedules = teacherSchedules.filter((s) => isInTimetableScope(s));
+    const nextSchedules = [...preservedSchedules, ...syncedSchedules];
+
+    // Mirror every timetable schedule into SubjectAssignments so teachers see them automatically in Menu Presensi Mapel
+    const preservedAssignments = subjectAssignments.filter(
+      (a) => !(a.source === 'schedule' && isInTimetableScope(a))
+    );
+    const removedAssignments = subjectAssignments.filter(
+      (a) => a.source === 'schedule' && isInTimetableScope(a)
+    );
+
+    let nextAssignments = [...preservedAssignments];
+    const upsertedAssignments: SubjectAssignment[] = [];
+    for (const sch of syncedSchedules) {
+      const mirrored = syncScheduleToSubjectAssignments(
+        nextAssignments,
+        sch,
+        targetSem
+      );
+      nextAssignments = mirrored.assignments;
+      upsertedAssignments.push(mirrored.upsertedAssignment);
+    }
+
+    lastLocalAcademicSaveAtRef.current = Date.now();
+    setTeacherSchedules(nextSchedules);
+    saveTeacherSchedules(nextSchedules);
+    setSubjectAssignments(nextAssignments);
+    saveSubjectAssignments(nextAssignments);
+
+    // Sync removed & upserted schedules/assignments to Cloud & Sheets
+    const nextScheduleIds = new Set(nextSchedules.map((s) => s.id));
+    for (const oldSch of removedSchedules) {
+      if (!nextScheduleIds.has(oldSch.id)) {
+        void syncMutation('deleteJadwalGuru', { id: oldSch.id });
+        runCloudWrite((uid) => deleteTeacherScheduleFromCloud(uid, oldSch.id));
+      }
+    }
+    for (const sch of syncedSchedules) {
+      void syncMutation('upsertJadwalGuru', { ...sch, schedule: sch });
+      runCloudWrite((uid) => upsertTeacherScheduleToCloud(uid, sch));
+    }
+
+    const nextAssignmentIds = new Set(nextAssignments.map((a) => a.id));
+    for (const oldAsg of removedAssignments) {
+      if (!nextAssignmentIds.has(oldAsg.id)) {
+        void syncMutation('deleteMapelKelas', { id: oldAsg.id });
+        runCloudWrite((uid) => deleteSubjectAssignmentFromCloud(uid, oldAsg.id));
+      }
+    }
+    for (const asg of upsertedAssignments) {
+      void syncMutation('upsertMapelKelas', { ...asg, assignment: asg });
+      runCloudWrite((uid) => upsertSubjectAssignmentToCloud(uid, asg));
+    }
+
+    pushToast({
+      type: 'success',
+      title: 'Jadwal Mata Pelajaran Disimpan & Disinkronkan',
+      description: `${syncedSchedules.length} sesi jadwal TA ${targetYear} Semester ${formatSemesterLabel(targetSem)} tersinkron ke Jadwal Pelajaran Guru dan Menu Mapel masing-masing guru.`,
     });
   }
 
@@ -2560,6 +2763,7 @@ export default function App() {
     if (!session) {
       return { ok: false, error: 'Silakan login terlebih dahulu.' };
     }
+    const activeSem = normalizeSemester(settings.semester, 'ganjil');
     const res = addSubjectAssignment(subjectAssignments, {
       teacher_user_id: session.userId,
       teacher_name: session.nama,
@@ -2569,7 +2773,7 @@ export default function App() {
       jam_mulai: input.jam_mulai,
       jam_selesai: input.jam_selesai,
       tahun_ajaran: settings.tahun_ajaran,
-      semester: normalizeSemester(settings.semester, 'ganjil'),
+      semester: activeSem,
     });
     if (!res.ok) return res;
     lastLocalAcademicSaveAtRef.current = Date.now();
@@ -2577,10 +2781,28 @@ export default function App() {
     saveSubjectAssignments(res.assignments);
     void syncMutation('upsertMapelKelas', { ...res.assignment, assignment: res.assignment });
     runCloudWrite((uid) => upsertSubjectAssignmentToCloud(uid, res.assignment));
+
+    // Bidirectional sync: automatically populate Master Admin's Sub Menu Jadwal Pelajaran Guru
+    const mirrored = syncAssignmentToTeacherSchedules(
+      teacherSchedules,
+      res.assignment,
+      activeSem
+    );
+    if (mirrored.upsertedSchedule) {
+      const upsertedSchedule = mirrored.upsertedSchedule;
+      setTeacherSchedules(mirrored.schedules);
+      saveTeacherSchedules(mirrored.schedules);
+      void syncMutation('upsertJadwalGuru', {
+        ...upsertedSchedule,
+        schedule: upsertedSchedule,
+      });
+      runCloudWrite((uid) => upsertTeacherScheduleToCloud(uid, upsertedSchedule));
+    }
+
     pushToast({
       type: 'success',
       title: 'Kelas & Mapel Ditambahkan',
-      description: `${res.assignment.kelas} — ${res.assignment.mata_pelajaran} (${input.hari}) ditambahkan ke sub menu Anda.`,
+      description: `${res.assignment.kelas} — ${res.assignment.mata_pelajaran} (${input.hari}) ditambahkan dan otomatis masuk ke Jadwal Pelajaran Guru.`,
     });
     return { ok: true, assignment: res.assignment };
   }
@@ -2593,6 +2815,33 @@ export default function App() {
     saveSubjectAssignments(nextAssignments);
     void syncMutation('deleteMapelKelas', { id: assignmentId });
     runCloudWrite((uid) => deleteSubjectAssignmentFromCloud(uid, assignmentId));
+
+    // Bidirectional cleanup if a matching TeacherSchedule was created from this assignment
+    if (target) {
+      const matchingSchedules = teacherSchedules.filter(
+        (s) =>
+          s.id === `sch_from_${target.id}` ||
+          (target.hari &&
+            s.hari === target.hari &&
+            s.teacher_user_id === target.teacher_user_id &&
+            s.kelas.trim().toLowerCase() === target.kelas.trim().toLowerCase() &&
+            s.mata_pelajaran.trim().toLowerCase() ===
+              target.mata_pelajaran.trim().toLowerCase() &&
+            resolveItemAcademicYear(s.tahun_ajaran) ===
+              resolveItemAcademicYear(target.tahun_ajaran))
+      );
+      if (matchingSchedules.length > 0) {
+        const removeIds = new Set(matchingSchedules.map((s) => s.id));
+        const nextSchedules = teacherSchedules.filter((s) => !removeIds.has(s.id));
+        setTeacherSchedules(nextSchedules);
+        saveTeacherSchedules(nextSchedules);
+        for (const rem of matchingSchedules) {
+          void syncMutation('deleteJadwalGuru', { id: rem.id });
+          runCloudWrite((uid) => deleteTeacherScheduleFromCloud(uid, rem.id));
+        }
+      }
+    }
+
     pushToast({
       type: 'info',
       title: 'Kelas & Mapel Dihapus',
@@ -3114,6 +3363,20 @@ export default function App() {
             onAddSchedule={handleAddTeacherSchedule}
             onUpdateSchedule={handleUpdateTeacherSchedule}
             onDeleteSchedule={handleDeleteTeacherSchedule}
+            onNavigateToTimetable={() => setActiveTab('pengaturan_jadwal')}
+          />
+        )}
+
+        {effectiveTab === 'pengaturan_jadwal' && session?.role === 'master_admin' && (
+          <TimetableMatrixView
+            settings={settings}
+            accounts={accounts}
+            availableClasses={availableClasses}
+            availableYears={availableAcademicYears}
+            masterSubjects={masterSubjects}
+            schedules={teacherSchedules}
+            timetableConfigs={timetableConfigs}
+            onSaveTimetable={handleSaveTimetable}
           />
         )}
 

@@ -64,7 +64,7 @@ export function canAccessTab(role: UserRole | null, tab: TabId): boolean {
   if (tab === 'scan') return true;
   if (!role) return false;
   if (role === 'master_admin') return true;
-  if (tab === 'jadwal' || tab === 'pengaturan') return false;
+  if (tab === 'jadwal' || tab === 'pengaturan_jadwal' || tab === 'pengaturan') return false;
   if (role === 'wali_kelas') {
     return (
       tab === 'dashboard' ||

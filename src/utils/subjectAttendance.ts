@@ -1121,3 +1121,284 @@ export function computeSubjectSessionSummary(
     persentaseHadir,
   };
 }
+
+// ============================================================
+// Bidirectional Sync: TeacherSchedule <-> SubjectAssignment
+// ============================================================
+
+function formatMinsHHMM(totalMinutes: number): string {
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, Math.round(totalMinutes)));
+  const hh = Math.floor(clamped / 60);
+  const mm = clamped % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+export function computeDefaultEndTime(
+  jamMulai?: string,
+  durationMinutes = 90
+): string {
+  const startNorm = normalizeTimeHHMM(jamMulai || '', '07:30');
+  const startMins = parseTimeToMinutes(startNorm) ?? 450;
+  const endMins = Math.min(23 * 60 + 59, startMins + Math.max(15, durationMinutes));
+  if (endMins <= startMins) {
+    return formatMinsHHMM(Math.min(23 * 60 + 59, startMins + 45));
+  }
+  return formatMinsHHMM(endMins);
+}
+
+function makeSchedulePairKey(item: {
+  hari?: DayOfWeek;
+  teacher_user_id: string;
+  kelas: string;
+  mata_pelajaran: string;
+  tahun_ajaran: string;
+  semester?: SemesterKind;
+}): string {
+  return [
+    (item.hari || '').trim().toLowerCase(),
+    item.teacher_user_id.trim().toLowerCase(),
+    item.kelas.trim().toLowerCase(),
+    item.mata_pelajaran.trim().toLowerCase(),
+    resolveItemAcademicYear(item.tahun_ajaran).toLowerCase(),
+    item.semester ? normalizeSemester(item.semester) : 'any',
+  ].join('|');
+}
+
+function scheduleMatchesAssignment(
+  sch: TeacherSchedule,
+  asg: SubjectAssignment
+): boolean {
+  if (!asg.hari || sch.hari !== asg.hari) return false;
+  if (sch.teacher_user_id.trim().toLowerCase() !== asg.teacher_user_id.trim().toLowerCase()) {
+    return false;
+  }
+  if (sch.kelas.trim().toLowerCase() !== asg.kelas.trim().toLowerCase()) return false;
+  if (sch.mata_pelajaran.trim().toLowerCase() !== asg.mata_pelajaran.trim().toLowerCase()) {
+    return false;
+  }
+  if (
+    resolveItemAcademicYear(sch.tahun_ajaran) !== resolveItemAcademicYear(asg.tahun_ajaran)
+  ) {
+    return false;
+  }
+  if (sch.semester && asg.semester && normalizeSemester(sch.semester) !== normalizeSemester(asg.semester)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Mirrors a teacher-created SubjectAssignment into TeacherSchedules so Master Admin's
+ * "Sub Menu Jadwal Pelajaran Guru" is populated automatically.
+ */
+export function syncAssignmentToTeacherSchedules(
+  existingSchedules: TeacherSchedule[],
+  assignment: SubjectAssignment,
+  defaultSemester: SemesterKind = 'ganjil'
+): { schedules: TeacherSchedule[]; upsertedSchedule: TeacherSchedule | null } {
+  const hari = assignment.hari ? normalizeDayOfWeek(assignment.hari) : undefined;
+  if (!hari) {
+    return { schedules: existingSchedules, upsertedSchedule: null };
+  }
+
+  const jamMulai = normalizeTimeHHMM(assignment.jam_mulai || '', '07:30');
+  const startMins = parseTimeToMinutes(jamMulai) ?? 450;
+  const rawEnd = normalizeTimeHHMM(assignment.jam_selesai || '', '');
+  const endMins = rawEnd ? parseTimeToMinutes(rawEnd) : null;
+  const jamSelesai =
+    rawEnd && endMins !== null && endMins > startMins
+      ? rawEnd
+      : computeDefaultEndTime(jamMulai, 90);
+
+  const semester = assignment.semester
+    ? normalizeSemester(assignment.semester)
+    : normalizeSemester(defaultSemester);
+  const tahunAjaran = resolveItemAcademicYear(assignment.tahun_ajaran);
+
+  const matchIdx = existingSchedules.findIndex((s) =>
+    scheduleMatchesAssignment(s, assignment)
+  );
+
+  if (matchIdx >= 0) {
+    const existing = existingSchedules[matchIdx];
+    const updated: TeacherSchedule = {
+      ...existing,
+      teacher_name: assignment.teacher_name || existing.teacher_name,
+      jam_mulai: assignment.jam_mulai ? jamMulai : existing.jam_mulai,
+      jam_selesai: assignment.jam_selesai ? jamSelesai : existing.jam_selesai,
+      semester: existing.semester ?? semester,
+    };
+    const next = existingSchedules.map((s, idx) => (idx === matchIdx ? updated : s));
+    return { schedules: next, upsertedSchedule: updated };
+  }
+
+  const created: TeacherSchedule = {
+    id: `sch_from_${assignment.id}`,
+    hari,
+    teacher_user_id: assignment.teacher_user_id,
+    teacher_name: assignment.teacher_name,
+    kelas: assignment.kelas,
+    mata_pelajaran: assignment.mata_pelajaran,
+    jam_mulai: jamMulai,
+    jam_selesai: jamSelesai,
+    tahun_ajaran: tahunAjaran,
+    semester,
+  };
+
+  return {
+    schedules: [...existingSchedules, created],
+    upsertedSchedule: created,
+  };
+}
+
+/**
+ * Mirrors a Master Admin TeacherSchedule into SubjectAssignments so each teacher's
+ * "Presensi Mapel" menu is populated automatically and persisted in both sheets/collections.
+ */
+export function syncScheduleToSubjectAssignments(
+  existingAssignments: SubjectAssignment[],
+  schedule: TeacherSchedule,
+  defaultSemester: SemesterKind = 'ganjil'
+): { assignments: SubjectAssignment[]; upsertedAssignment: SubjectAssignment } {
+  const semester = schedule.semester
+    ? normalizeSemester(schedule.semester)
+    : normalizeSemester(defaultSemester);
+  const tahunAjaran = resolveItemAcademicYear(schedule.tahun_ajaran);
+
+  const matchIdx = existingAssignments.findIndex(
+    (a) =>
+      a.id === `asg_from_${schedule.id}` ||
+      scheduleMatchesAssignment(schedule, a)
+  );
+
+  if (matchIdx >= 0) {
+    const existing = existingAssignments[matchIdx];
+    const updated: SubjectAssignment = {
+      ...existing,
+      teacher_user_id: schedule.teacher_user_id,
+      teacher_name: schedule.teacher_name,
+      kelas: schedule.kelas,
+      mata_pelajaran: schedule.mata_pelajaran,
+      hari: schedule.hari,
+      jam_mulai: schedule.jam_mulai,
+      jam_selesai: schedule.jam_selesai,
+      tahun_ajaran: tahunAjaran,
+      semester,
+    };
+    const next = existingAssignments.map((a, idx) => (idx === matchIdx ? updated : a));
+    return { assignments: next, upsertedAssignment: updated };
+  }
+
+  const created: SubjectAssignment = {
+    id: `asg_from_${schedule.id}`,
+    teacher_user_id: schedule.teacher_user_id,
+    teacher_name: schedule.teacher_name,
+    kelas: schedule.kelas,
+    mata_pelajaran: schedule.mata_pelajaran,
+    hari: schedule.hari,
+    jam_mulai: schedule.jam_mulai,
+    jam_selesai: schedule.jam_selesai,
+    tahun_ajaran: tahunAjaran,
+    semester,
+    source: 'schedule',
+  };
+
+  return {
+    assignments: [...existingAssignments, created],
+    upsertedAssignment: created,
+  };
+}
+
+/**
+ * Reconciles existing TeacherSchedules and SubjectAssignments bidirectionally so that
+ * neither side is missing entries created on the other side.
+ */
+export function reconcileSchedulesAndAssignments(
+  schedules: TeacherSchedule[],
+  assignments: SubjectAssignment[],
+  defaultSemester: SemesterKind = 'ganjil'
+): {
+  schedules: TeacherSchedule[];
+  assignments: SubjectAssignment[];
+  addedSchedules: TeacherSchedule[];
+  addedAssignments: SubjectAssignment[];
+} {
+  let nextSchedules = [...schedules];
+  let nextAssignments = [...assignments];
+  const addedSchedules: TeacherSchedule[] = [];
+  const addedAssignments: SubjectAssignment[] = [];
+
+  const existingScheduleKeys = new Set(
+    nextSchedules.map((s) => makeSchedulePairKey(s))
+  );
+  for (const asg of assignments) {
+    if (!asg.hari) continue;
+    const alreadyMatched = nextSchedules.some((s) => scheduleMatchesAssignment(s, asg));
+    if (!alreadyMatched) {
+      const { schedules: updated, upsertedSchedule } = syncAssignmentToTeacherSchedules(
+        nextSchedules,
+        asg,
+        defaultSemester
+      );
+      if (upsertedSchedule && !existingScheduleKeys.has(makeSchedulePairKey(upsertedSchedule))) {
+        nextSchedules = updated;
+        existingScheduleKeys.add(makeSchedulePairKey(upsertedSchedule));
+        addedSchedules.push(upsertedSchedule);
+      }
+    }
+  }
+
+  for (const sch of nextSchedules) {
+    const alreadyMatched = nextAssignments.some((a) => scheduleMatchesAssignment(sch, a));
+    if (!alreadyMatched) {
+      const { assignments: updated, upsertedAssignment } = syncScheduleToSubjectAssignments(
+        nextAssignments,
+        sch,
+        defaultSemester
+      );
+      nextAssignments = updated;
+      addedAssignments.push(upsertedAssignment);
+    }
+  }
+
+  return {
+    schedules: nextSchedules,
+    assignments: nextAssignments,
+    addedSchedules,
+    addedAssignments,
+  };
+}
+
+/**
+ * Finds the YYYY-MM-DD date of `targetDay` inside the Monday–Sunday week containing `referenceDateStr`.
+ */
+export function getDateForDayInSameWeek(
+  referenceDateStr: string,
+  targetDay: DayOfWeek
+): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((referenceDateStr || '').trim());
+  const base = m
+    ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    : new Date();
+  const jsDay = base.getDay(); // 0=Sun..6=Sat
+  const mondayOffset = jsDay === 0 ? -6 : 1 - jsDay;
+  const monday = new Date(base.getFullYear(), base.getMonth(), base.getDate() + mondayOffset);
+  const targetOffsetMap: Record<DayOfWeek, number> = {
+    Senin: 0,
+    Selasa: 1,
+    Rabu: 2,
+    Kamis: 3,
+    Jumat: 4,
+    Sabtu: 5,
+    Minggu: 6,
+  };
+  const targetDate = new Date(
+    monday.getFullYear(),
+    monday.getMonth(),
+    monday.getDate() + (targetOffsetMap[targetDay] ?? 0)
+  );
+  const y = targetDate.getFullYear();
+  const mo = String(targetDate.getMonth() + 1).padStart(2, '0');
+  const d = String(targetDate.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${d}`;
+}

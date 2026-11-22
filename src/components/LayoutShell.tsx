@@ -20,6 +20,7 @@ import {
   ArrowUp,
   BookOpen,
   CalendarDays,
+  CalendarRange,
   Volume2,
   WifiOff,
 } from 'lucide-react';
@@ -79,6 +80,13 @@ const NAV_ITEMS: Array<{
     Icon: CalendarDays,
     masterOnly: true,
   },
+  {
+    id: 'pengaturan_jadwal',
+    label: 'Pengaturan Jadwal',
+    shortLabel: 'Atur Jadwal',
+    Icon: CalendarRange,
+    masterOnly: true,
+  },
   { id: 'analisis', label: 'Analisis', shortLabel: 'Analisis', Icon: BarChart3 },
   { id: 'pengaturan', label: 'Pengaturan', shortLabel: 'Setelan', Icon: Settings },
 ];
@@ -107,6 +115,10 @@ const TAB_TITLES: Record<TabId, { title: string; subtitle: string }> = {
   jadwal: {
     title: 'Mapel & Jadwal Pelajaran',
     subtitle: 'Kelola daftar mata pelajaran sekolah dan jadwal mengajar guru per hari',
+  },
+  pengaturan_jadwal: {
+    title: 'Pengaturan Jadwal Mata Pelajaran',
+    subtitle: 'Atur jadwal pelajaran guru dalam bentuk tabel per hari, jam ke, waktu, istirahat manual, dan kelas',
   },
   analisis: {
     title: 'Analisis Kehadiran Siswa',
@@ -221,11 +233,12 @@ function ConnectionPill({
   return (
     <div
       role="status"
-      className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 whitespace-nowrap shrink-0"
+      title="Mode Lokal"
+      aria-label="Mode Lokal"
+      className="inline-flex items-center gap-1.5 sm:gap-2 rounded-lg border border-slate-200 bg-slate-100 px-2 sm:px-3 py-1.5 text-xs font-medium text-slate-600 whitespace-nowrap shrink-0"
     >
       <CloudOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       <span className="hidden sm:inline">Mode Lokal</span>
-      <span className="sm:hidden">Lokal</span>
     </div>
   );
 }
@@ -436,155 +449,160 @@ export function LayoutShell({
 
       {/* Main Content Area */}
       <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
-        {/* Top Bar */}
-        <header className="sticky top-0 z-20 h-14 lg:h-16 bg-white/95 backdrop-blur-sm border-b border-slate-200/80 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3">
-          <div className="min-w-0 flex items-center gap-3">
-            <div className="lg:hidden h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center shrink-0 overflow-hidden p-0.5">
-              <img
-                src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
-                alt={`Logo ${settings.nama_sekolah}`}
-                className="h-full w-full object-contain rounded-md"
-              />
-            </div>
-            <div className="min-w-0">
-              <h1 className="text-base sm:text-lg font-semibold text-slate-900 truncate">
-                {headerInfo.title}
-              </h1>
-              <p className="hidden md:block text-xs text-slate-500 truncate">
-                {headerInfo.subtitle}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <ConnectionPill
-              status={connectionStatus}
-              isOnline={isOnline}
-              pendingSyncCount={pendingSyncCount}
-              lastSyncedAt={lastSyncedAt}
-              cloudSync={cloudSync}
-            />
-            {cloudSync && !cloudSync.connected ? (
-              <button
-                type="button"
-                onClick={cloudSync.onConnect}
-                disabled={cloudSync.syncing}
-                aria-label="Hubungkan Cloud Firebase untuk sinkronisasi lintas perangkat"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-              >
-                <Cloud className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span className="hidden sm:inline">Hubungkan Cloud</span>
-                <span className="sm:hidden">Cloud</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={onSyncNow}
-                disabled={connectionStatus === 'syncing' || cloudSync?.syncing}
-                aria-label="Sinkronkan data sekarang"
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-              >
-                <RefreshCw
-                  className={`h-3.5 w-3.5 shrink-0 ${
-                    connectionStatus === 'syncing' || cloudSync?.syncing ? 'animate-spin' : ''
-                  }`}
-                  aria-hidden="true"
+        {/* Sticky Top Bar + Mobile/Tablet Top Navigation */}
+        <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-200/80">
+          <header className="h-12 sm:h-14 lg:h-16 px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2 sm:gap-3">
+            <div className="min-w-0 flex items-center gap-2.5 sm:gap-3">
+              <div className="lg:hidden h-7 w-7 sm:h-8 sm:w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center shrink-0 overflow-hidden p-0.5">
+                <img
+                  src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
+                  alt={`Logo ${settings.nama_sekolah}`}
+                  className="h-full w-full object-contain rounded-md"
                 />
-                <span className="hidden sm:inline">Sinkronkan</span>
-              </button>
-            )}
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-sm sm:text-lg font-semibold text-slate-900 truncate">
+                  {headerInfo.title}
+                </h1>
+                <p className="hidden md:block text-xs text-slate-500 truncate">
+                  {headerInfo.subtitle}
+                </p>
+              </div>
+            </div>
 
-            {/* Top-right Voice Activation / Test Button (especially helpful on Tablet & HP) */}
-            {onReplayVoice && (
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              <ConnectionPill
+                status={connectionStatus}
+                isOnline={isOnline}
+                pendingSyncCount={pendingSyncCount}
+                lastSyncedAt={lastSyncedAt}
+                cloudSync={cloudSync}
+              />
+              {cloudSync && !cloudSync.connected ? (
+                <button
+                  type="button"
+                  onClick={cloudSync.onConnect}
+                  disabled={cloudSync.syncing}
+                  title="Hubungkan Cloud Firebase"
+                  aria-label="Hubungkan Cloud Firebase untuk sinkronisasi lintas perangkat"
+                  className="inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                >
+                  <Cloud className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span className="hidden sm:inline">Hubungkan Cloud</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onSyncNow}
+                  disabled={connectionStatus === 'syncing' || cloudSync?.syncing}
+                  aria-label="Sinkronkan data sekarang"
+                  className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                >
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 shrink-0 ${
+                      connectionStatus === 'syncing' || cloudSync?.syncing ? 'animate-spin' : ''
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span className="hidden sm:inline">Sinkronkan</span>
+                </button>
+              )}
+
+              {/* Top-right Voice Activation / Test Button (especially helpful on Tablet & HP) */}
+              {onReplayVoice && (
+                <button
+                  type="button"
+                  onClick={onReplayVoice}
+                  aria-label="Aktifkan atau putar suara sambutan perempuan"
+                  title="Aktifkan / Putar Suara"
+                  className="inline-flex items-center justify-center p-1.5 sm:p-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-indigo-700 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                >
+                  <Volume2 className="h-4 w-4" aria-hidden="true" />
+                </button>
+              )}
+
+              {/* Top-right Fullscreen Button */}
               <button
                 type="button"
-                onClick={onReplayVoice}
-                aria-label="Aktifkan atau putar suara sambutan perempuan"
-                title="Aktifkan / Putar Suara"
-                className="inline-flex items-center justify-center p-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-indigo-700 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                onClick={handleToggleFullscreen}
+                aria-label={isFullscreen ? 'Keluar dari layar penuh' : 'Aktifkan layar penuh'}
+                title={isFullscreen ? 'Keluar Layar Penuh' : 'Layar Penuh'}
+                className="hidden sm:inline-flex items-center justify-center p-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
               >
-                <Volume2 className="h-4 w-4" aria-hidden="true" />
+                {isFullscreen ? (
+                  <Minimize2 className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <Maximize2 className="h-4 w-4" aria-hidden="true" />
+                )}
               </button>
-            )}
 
-            {/* Top-right Fullscreen Button */}
-            <button
-              type="button"
-              onClick={handleToggleFullscreen}
-              aria-label={isFullscreen ? 'Keluar dari layar penuh' : 'Aktifkan layar penuh'}
-              title={isFullscreen ? 'Keluar Layar Penuh' : 'Layar Penuh'}
-              className="inline-flex items-center justify-center p-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-            >
-              {isFullscreen ? (
-                <Minimize2 className="h-4 w-4" aria-hidden="true" />
-              ) : (
-                <Maximize2 className="h-4 w-4" aria-hidden="true" />
-              )}
-            </button>
-          </div>
-        </header>
+              {/* Mobile / Tablet Login & Logout Action (integrated cleanly into top bar) */}
+              <div className="lg:hidden shrink-0">
+                {session ? (
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    aria-label="Keluar dari sesi login"
+                    title={`Keluar (${session.nama})`}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:text-rose-700 hover:border-rose-200 hover:bg-rose-50 transition-colors whitespace-nowrap"
+                  >
+                    <LogOut className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span className="hidden sm:inline">Keluar</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onOpenLogin}
+                    aria-label="Login ke aplikasi"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap"
+                  >
+                    <LogIn className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>Login</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </header>
+
+          {/* Mobile & Tablet Top Navigation Bar (positioned at top for effortless bottom-to-top scrolling) */}
+          <nav
+            aria-label="Navigasi seluler"
+            data-testid="mobile-top-nav"
+            className="lg:hidden border-t border-slate-100 bg-white/95 px-2.5 sm:px-5 py-1.5 flex items-center gap-1 overflow-x-auto"
+          >
+            {visibleNavItems.map(({ id, label, shortLabel, Icon }) => {
+              const isActive = activeTab === id;
+              const allowed = canAccessTab(currentRole, id);
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => onSelectTab(id)}
+                  aria-current={isActive ? 'page' : undefined}
+                  className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 min-h-[34px] rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                    isActive
+                      ? 'text-indigo-700 bg-indigo-50 border border-indigo-200/80'
+                      : allowed
+                        ? 'text-slate-600 border border-transparent hover:bg-slate-50 hover:text-slate-900'
+                        : 'text-slate-400 border border-transparent hover:bg-slate-50'
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span className="sm:hidden">{shortLabel}</span>
+                  <span className="hidden sm:inline">{label}</span>
+                  {!allowed && (
+                    <Lock className="h-3 w-3 text-slate-400 shrink-0" aria-hidden="true" />
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
 
         {/* Page Viewport */}
-        <main className="flex-1 px-4 sm:px-6 lg:px-8 py-6 pb-24 lg:pb-8 max-w-7xl w-full mx-auto">
+        <main className="flex-1 px-4 sm:px-6 lg:px-8 py-5 sm:py-6 pb-10 lg:pb-8 max-w-7xl w-full mx-auto">
           {children}
         </main>
-      </div>
-
-      {/* Mobile Bottom Navigation */}
-      <nav
-        aria-label="Navigasi seluler"
-        className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-slate-200 px-1 py-1 flex items-center gap-0.5 overflow-x-auto"
-      >
-        {visibleNavItems.map(({ id, shortLabel, Icon }) => {
-          const isActive = activeTab === id;
-          const allowed = canAccessTab(currentRole, id);
-          return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => onSelectTab(id)}
-              aria-current={isActive ? 'page' : undefined}
-              className={`relative flex-1 min-w-[52px] flex flex-col items-center justify-center min-h-[46px] rounded-lg text-[10px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
-                isActive
-                  ? 'text-indigo-600 bg-indigo-50/70'
-                  : allowed
-                    ? 'text-slate-500 hover:text-slate-900'
-                    : 'text-slate-400'
-              }`}
-            >
-              <Icon className="h-4 w-4 mb-0.5 shrink-0" aria-hidden="true" />
-              <span className="truncate max-w-full px-0.5">{shortLabel}</span>
-              {!allowed && (
-                <Lock className="h-2.5 w-2.5 absolute top-1.5 right-1.5 text-slate-400" aria-hidden="true" />
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* Mobile Bottom-Left Login / Logout Action */}
-      <div className="lg:hidden fixed bottom-[62px] left-3 z-30">
-        {session ? (
-          <button
-            type="button"
-            onClick={onLogout}
-            aria-label="Keluar dari sesi login"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-white/95 backdrop-blur-sm shadow-md text-xs font-semibold text-slate-700 hover:text-rose-700"
-          >
-            <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>Keluar</span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={onOpenLogin}
-            aria-label="Login ke aplikasi"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 text-white shadow-md text-xs font-semibold hover:bg-indigo-700"
-          >
-            <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>Login</span>
-          </button>
-        )}
       </div>
 
       {/* Auto Scroll-to-Top Button (Bottom Right) */}
@@ -594,7 +612,7 @@ export function LayoutShell({
           onClick={handleScrollToTop}
           aria-label="Gulir ke atas"
           title="Gulir ke atas"
-          className="fixed bottom-[64px] lg:bottom-6 right-4 lg:right-6 z-30 h-11 w-11 rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-600/25 hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+          className="fixed bottom-5 right-4 lg:bottom-6 lg:right-6 z-30 h-11 w-11 rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-600/25 hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
         >
           <ArrowUp className="h-5 w-5" aria-hidden="true" />
         </button>
@@ -605,7 +623,7 @@ export function LayoutShell({
         <div
           aria-live="polite"
           className={`fixed right-4 z-50 flex flex-col gap-2 w-[calc(100%-2rem)] max-w-sm pointer-events-none ${
-            showScrollTop ? 'bottom-32 lg:bottom-20' : 'bottom-20 lg:bottom-6'
+            showScrollTop ? 'bottom-20' : 'bottom-5'
           }`}
         >
           {toasts.map((toast) => {
