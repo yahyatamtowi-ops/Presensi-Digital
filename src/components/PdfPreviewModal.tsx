@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Download, Eye, FileText, Printer, QrCode, X } from 'lucide-react';
 import type { SchoolSettings, Student } from '../types';
+import { getECardNameFontSizeClass } from '../utils/ecardPdf';
 import { DEFAULT_SCHOOL_LOGO } from '../utils/seedData';
 
 interface PdfPreviewModalProps {
@@ -98,7 +99,7 @@ export function PdfPreviewModal({
           </div>
 
           <span className="text-[11px] font-mono tabular-nums text-slate-500">
-            Format A4 · Maks. 8 kartu/halaman
+            Ukuran KTP 8,56 × 5,4 cm · A4 (maks. 8 kartu/halaman)
           </span>
         </div>
 
@@ -124,11 +125,12 @@ export function PdfPreviewModal({
                     {pageStudents.map((student) => (
                       <article
                         key={student.nis}
-                        className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-[0_1px_2px_rgba(15,23,42,0.04)] flex flex-col"
+                        data-testid="ecard-batch-card"
+                        className="ecard-ktp-card aspect-[85.6/54] rounded-xl border border-slate-200 bg-white overflow-hidden shadow-[0_1px_2px_rgba(15,23,42,0.04)] flex flex-col"
                       >
                         {/* Indigo Card Header */}
-                        <div className="bg-indigo-600 px-3.5 py-2.5 text-white flex items-center gap-2.5">
-                          <div className="h-8 w-8 rounded-md bg-white p-0.5 shrink-0 flex items-center justify-center">
+                        <div className="bg-indigo-600 px-3 py-2 text-white flex items-center gap-2 shrink-0">
+                          <div className="h-7 w-7 rounded-md bg-white p-0.5 shrink-0 flex items-center justify-center">
                             <img
                               src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
                               alt={`Logo ${settings.nama_sekolah}`}
@@ -136,35 +138,42 @@ export function PdfPreviewModal({
                             />
                           </div>
                           <div className="min-w-0">
-                            <p className="text-[9px] font-medium tracking-wide uppercase text-indigo-100">
+                            <p className="text-[8.5px] font-medium tracking-wide uppercase text-indigo-100 leading-none">
                               Kartu Tanda Siswa Elektronik
                             </p>
-                            <p className="text-xs font-bold leading-tight truncate">
+                            <p className="text-[11px] font-bold leading-tight truncate mt-0.5">
                               {settings.nama_sekolah}
                             </p>
                           </div>
                         </div>
 
                         {/* Card Body */}
-                        <div className="p-3.5 flex items-start justify-between gap-3 flex-1">
-                          <div className="min-w-0 flex-1 flex flex-col justify-between space-y-2 pt-0.5">
-                            <div className="space-y-0.5">
-                              <p className="text-sm font-bold text-slate-900 leading-snug line-clamp-2">
+                        <div className="px-2.5 py-2 flex items-center justify-between gap-2 flex-1 min-h-0">
+                          <div className="min-w-0 flex-1 flex flex-col justify-between h-full">
+                            <div className="space-y-0.5 min-w-0">
+                              <p
+                                data-testid="ecard-batch-student-name"
+                                title={student.nama}
+                                className={`${getECardNameFontSizeClass(
+                                  student.nama,
+                                  'batch'
+                                )} font-bold text-slate-900 leading-tight whitespace-nowrap truncate`}
+                              >
                                 {student.nama}
                               </p>
-                              <p className="text-xs text-slate-500">
+                              <p className="text-[11px] text-slate-500 leading-tight">
                                 NISN{' '}
                                 <span className="font-mono tabular-nums font-bold text-slate-900">
                                   {student.nis}
                                 </span>
                               </p>
-                              <p className="text-xs text-slate-500">
+                              <p className="text-[11px] text-slate-500 leading-tight">
                                 Kelas{' '}
                                 <span className="font-semibold text-slate-900">
                                   {student.kelas}
                                 </span>
                               </p>
-                              <p className="text-[11px] text-slate-400">
+                              <p className="text-[10px] text-slate-400 leading-tight">
                                 {student.gender === 'L' ? 'Siswa Putra' : 'Siswa Putri'}
                               </p>
                             </div>
@@ -175,18 +184,18 @@ export function PdfPreviewModal({
                               settings.cap_sekolah) && (
                               <div
                                 data-testid="ecard-principal-block"
-                                className="pt-1.5 border-t border-slate-100 text-left flex flex-col items-start"
+                                className="pt-1 border-t border-slate-100 text-left flex flex-col items-start"
                               >
-                                <p className="text-[8px] font-medium text-slate-500 leading-none">
+                                <p className="text-[7.5px] font-medium text-slate-500 leading-none">
                                   Kepala Sekolah
                                 </p>
                                 {(settings.cap_sekolah || settings.ttd_kepala_sekolah) && (
-                                  <div className="relative h-9 w-28 flex items-center justify-start my-0.5">
+                                  <div className="relative h-7 w-24 flex items-center justify-start my-0.5">
                                     {settings.cap_sekolah && (
                                       <img
                                         src={settings.cap_sekolah}
                                         alt="Cap Sekolah"
-                                        className={`h-9 w-9 object-contain pointer-events-none select-none ${
+                                        className={`h-7 w-7 object-contain pointer-events-none select-none ${
                                           settings.ttd_kepala_sekolah
                                             ? 'absolute left-0 opacity-90'
                                             : ''
@@ -197,20 +206,20 @@ export function PdfPreviewModal({
                                       <img
                                         src={settings.ttd_kepala_sekolah}
                                         alt="TTD Kepala Sekolah"
-                                        className={`relative z-10 max-h-8 max-w-[92px] object-contain pointer-events-none select-none ${
-                                          settings.cap_sekolah ? 'ml-3.5' : ''
+                                        className={`relative z-10 max-h-6 max-w-[82px] object-contain pointer-events-none select-none ${
+                                          settings.cap_sekolah ? 'ml-3' : ''
                                         }`}
                                       />
                                     )}
                                   </div>
                                 )}
                                 {settings.nama_kepala_sekolah?.trim() && (
-                                  <p className="text-[8.5px] font-bold text-slate-900 leading-tight underline decoration-slate-400 underline-offset-2 line-clamp-1 max-w-full">
+                                  <p className="text-[8px] font-bold text-slate-900 leading-tight underline decoration-slate-400 underline-offset-2 whitespace-nowrap truncate max-w-full">
                                     {settings.nama_kepala_sekolah.trim()}
                                   </p>
                                 )}
                                 {settings.nip_kepala_sekolah?.trim() && (
-                                  <p className="text-[7.5px] font-mono tabular-nums text-slate-500 leading-tight mt-0.5">
+                                  <p className="text-[7px] font-mono tabular-nums text-slate-500 leading-tight mt-0.5 whitespace-nowrap truncate max-w-full">
                                     NIP. {settings.nip_kepala_sekolah.trim()}
                                   </p>
                                 )}
@@ -218,8 +227,8 @@ export function PdfPreviewModal({
                             )}
                           </div>
 
-                          <div className="shrink-0 flex flex-col items-center pt-0.5">
-                            <div className="h-28 w-28 rounded-lg border border-slate-200 bg-white p-1.5 flex items-center justify-center">
+                          <div className="shrink-0 flex flex-col items-center">
+                            <div className="h-[96px] w-[96px] rounded-lg border border-slate-200 bg-white p-1 flex items-center justify-center">
                               {qrMap[student.nis] ? (
                                 <img
                                   src={qrMap[student.nis]}
@@ -230,7 +239,7 @@ export function PdfPreviewModal({
                                 <QrCode className="h-9 w-9 text-slate-300" aria-hidden="true" />
                               )}
                             </div>
-                            <p className="text-[9px] font-mono tabular-nums text-slate-400 mt-1">
+                            <p className="text-[8.5px] font-mono tabular-nums text-slate-500 mt-1">
                               NISN: {student.nis}
                             </p>
                           </div>

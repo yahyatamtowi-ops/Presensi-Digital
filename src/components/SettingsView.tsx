@@ -1602,12 +1602,12 @@ export function SettingsView({
                     Pratinjau Susunan Kartu Tanda Siswa (E-Card)
                   </p>
                   <p className="text-[11px] text-slate-500">
-                    TTD, Cap, Nama, dan NIP Kepala Sekolah ditempatkan di kiri bawah Siswa Putra/Putri agar QR Code di kanan tetap besar dan mudah dipindai.
+                    Ukuran standar KTP (8,56 × 5,4 cm) dengan nama siswa 1 baris. TTD, Cap, Nama, dan NIP Kepala Sekolah ditempatkan di kiri bawah agar QR Code tetap besar dan mudah dipindai.
                   </p>
                 </div>
-                <div className="bg-white rounded-xl border border-slate-200 px-3.5 py-3 flex items-center justify-between gap-4 min-w-[270px] shrink-0">
+                <div className="bg-white rounded-xl border border-slate-200 px-3.5 py-3 flex items-center justify-between gap-4 w-[280px] aspect-[85.6/54] shrink-0">
                   <div className="min-w-0 flex-1 text-left">
-                    <p className="text-[10px] font-bold text-slate-900 truncate">
+                    <p className="text-[10px] font-bold text-slate-900 whitespace-nowrap truncate">
                       Ahmad Fauzi Pratama
                     </p>
                     <p className="text-[9px] text-slate-500">NISN 2026001 · X IPA 1</p>

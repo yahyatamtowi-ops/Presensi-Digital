@@ -2630,6 +2630,83 @@ export default function App() {
     return { ok: true };
   }
 
+  function handleBulkImportTeacherSchedules(
+    items: Array<{
+      hari: DayOfWeek;
+      teacher_user_id: string;
+      teacher_name: string;
+      kelas: string;
+      mata_pelajaran: string;
+      jam_mulai: string;
+      jam_selesai: string;
+      semester?: SemesterKind;
+    }>
+  ): { addedCount: number; skippedCount: number } {
+    let nextSchedules = [...teacherSchedules];
+    let nextAssignments = [...subjectAssignments];
+    const addedSchedules: TeacherSchedule[] = [];
+    const upsertedAssignments: SubjectAssignment[] = [];
+    let skippedCount = 0;
+
+    for (const item of items) {
+      const activeSem = item.semester ?? normalizeSemester(settings.semester, 'ganjil');
+      const res = addTeacherSchedule(nextSchedules, {
+        ...item,
+        tahun_ajaran: settings.tahun_ajaran,
+        semester: activeSem,
+      });
+      if (!res.ok) {
+        skippedCount += 1;
+        continue;
+      }
+      nextSchedules = res.schedules;
+      addedSchedules.push(res.schedule);
+
+      const mirrored = syncScheduleToSubjectAssignments(
+        nextAssignments,
+        res.schedule,
+        activeSem
+      );
+      nextAssignments = mirrored.assignments;
+      upsertedAssignments.push(mirrored.upsertedAssignment);
+    }
+
+    if (addedSchedules.length > 0) {
+      lastLocalAcademicSaveAtRef.current = Date.now();
+      setTeacherSchedules(nextSchedules);
+      saveTeacherSchedules(nextSchedules);
+      setSubjectAssignments(nextAssignments);
+      saveSubjectAssignments(nextAssignments);
+      syncTimetablesWithSchedules(nextSchedules);
+
+      addedSchedules.forEach((sch) => {
+        void syncMutation('upsertJadwalGuru', { ...sch, schedule: sch });
+        runCloudWrite((uid) => upsertTeacherScheduleToCloud(uid, sch));
+      });
+      upsertedAssignments.forEach((asg) => {
+        void syncMutation('upsertMapelKelas', { ...asg, assignment: asg });
+        runCloudWrite((uid) => upsertSubjectAssignmentToCloud(uid, asg));
+      });
+
+      pushToast({
+        type: 'success',
+        title: `${addedSchedules.length} Jadwal Guru Berhasil Diimpor`,
+        description:
+          skippedCount > 0
+            ? `${skippedCount} baris dilewati (duplikat). Data tersinkron ke Pengaturan Jadwal & menu guru.`
+            : 'Seluruh jadwal tersinkron otomatis ke Pengaturan Jadwal & menu Daftar Pelajaran masing-masing guru.',
+      });
+    } else {
+      pushToast({
+        type: 'info',
+        title: 'Tidak Ada Jadwal Baru Diimpor',
+        description: 'Seluruh baris pada file sudah ada atau dilewati.',
+      });
+    }
+
+    return { addedCount: addedSchedules.length, skippedCount };
+  }
+
   function handleUpdateTeacherSchedule(
     id: string,
     input: {
@@ -3484,6 +3561,7 @@ export default function App() {
             onAddSchedule={handleAddTeacherSchedule}
             onUpdateSchedule={handleUpdateTeacherSchedule}
             onDeleteSchedule={handleDeleteTeacherSchedule}
+            onBulkImportSchedules={handleBulkImportTeacherSchedules}
             onNavigateToTimetable={() => setActiveTab('pengaturan_jadwal')}
           />
         )}

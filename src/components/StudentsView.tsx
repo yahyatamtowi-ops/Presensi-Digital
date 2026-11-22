@@ -22,7 +22,7 @@ import {
   parseStudentsFile,
   type ParsedStudentImportResult,
 } from '../utils/importExport';
-import { generateECardsPdf } from '../utils/ecardPdf';
+import { generateECardsPdf, getECardNameFontSizeClass } from '../utils/ecardPdf';
 import { DEFAULT_SCHOOL_LOGO } from '../utils/seedData';
 import { PdfPreviewModal } from './PdfPreviewModal';
 
@@ -1130,10 +1130,13 @@ export function StudentsView({
               </button>
             </div>
 
-            <div className="p-6 flex flex-col items-center gap-5 bg-slate-50/60">
-              <div className="ecard-print-area w-full max-w-[440px] rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-md">
-                <div className="bg-indigo-600 px-5 py-3.5 text-white flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-lg bg-white p-1 shrink-0 flex items-center justify-center">
+            <div className="p-6 flex flex-col items-center gap-4 bg-slate-50/60">
+              <div
+                data-testid="single-ecard-card"
+                className="ecard-print-area ecard-ktp-card w-full max-w-[428px] aspect-[85.6/54] rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-md flex flex-col"
+              >
+                <div className="bg-indigo-600 px-4 py-2.5 text-white flex items-center gap-3 shrink-0">
+                  <div className="h-9 w-9 rounded-lg bg-white p-1 shrink-0 flex items-center justify-center">
                     <img
                       src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
                       alt={`Logo ${settings.nama_sekolah}`}
@@ -1141,7 +1144,7 @@ export function StudentsView({
                     />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-[10px] font-medium uppercase tracking-wide text-indigo-100">
+                    <p className="text-[9.5px] font-medium uppercase tracking-wide text-indigo-100 leading-none">
                       Kartu Tanda Siswa Elektronik
                     </p>
                     <p className="text-sm font-bold tracking-tight mt-0.5 truncate">
@@ -1150,28 +1153,37 @@ export function StudentsView({
                   </div>
                 </div>
 
-                <div className="p-4 sm:p-5 flex items-start justify-between gap-4">
+                <div className="px-4 py-3 flex items-center justify-between gap-3.5 flex-1 min-h-0">
                   {/* Left Column: Student Info + Principal TTD/Cap/Name/NIP below Siswa Putra/Putri */}
-                  <div className="flex-1 min-w-0 text-left space-y-1">
-                    <p className="text-base font-bold text-slate-900 leading-snug">
-                      {ecardStudent.nama}
-                    </p>
-                    <div className="space-y-0.5 text-xs text-slate-500">
-                      <p>
-                        NISN{' '}
-                        <span className="font-mono tabular-nums font-semibold text-slate-800 ml-1.5">
-                          {ecardStudent.nis}
-                        </span>
+                  <div className="flex-1 min-w-0 h-full flex flex-col justify-between text-left">
+                    <div className="space-y-0.5 min-w-0">
+                      <p
+                        data-testid="ecard-single-student-name"
+                        title={ecardStudent.nama}
+                        className={`${getECardNameFontSizeClass(
+                          ecardStudent.nama,
+                          'single'
+                        )} font-bold text-slate-900 leading-tight whitespace-nowrap truncate`}
+                      >
+                        {ecardStudent.nama}
                       </p>
-                      <p>
-                        Kelas{' '}
-                        <span className="font-semibold text-slate-800 ml-1">
-                          {ecardStudent.kelas}
-                        </span>
-                      </p>
-                      <p className="text-[11px] text-slate-500 pt-0.5">
-                        {ecardStudent.gender === 'L' ? 'Siswa Putra' : 'Siswa Putri'}
-                      </p>
+                      <div className="space-y-0.5 text-xs text-slate-500">
+                        <p className="leading-tight">
+                          NISN{' '}
+                          <span className="font-mono tabular-nums font-semibold text-slate-800 ml-1">
+                            {ecardStudent.nis}
+                          </span>
+                        </p>
+                        <p className="leading-tight">
+                          Kelas{' '}
+                          <span className="font-semibold text-slate-800 ml-1">
+                            {ecardStudent.kelas}
+                          </span>
+                        </p>
+                        <p className="text-[11px] text-slate-500 leading-tight">
+                          {ecardStudent.gender === 'L' ? 'Siswa Putra' : 'Siswa Putri'}
+                        </p>
+                      </div>
                     </div>
 
                     {(settings.nama_kepala_sekolah?.trim() ||
@@ -1180,17 +1192,17 @@ export function StudentsView({
                       settings.cap_sekolah) && (
                       <div
                         data-testid="single-ecard-principal-block"
-                        className="pt-2.5 mt-2 border-t border-slate-100 text-left"
+                        className="pt-1.5 border-t border-slate-100 text-left"
                       >
-                        <p className="text-[10px] font-medium text-slate-500">
+                        <p className="text-[9px] font-medium text-slate-500 leading-none">
                           Kepala Sekolah
                         </p>
-                        <div className="relative h-12 w-40 flex items-center my-0.5">
+                        <div className="relative h-9 w-36 flex items-center my-0.5">
                           {settings.cap_sekolah && (
                             <img
                               src={settings.cap_sekolah}
                               alt="Cap Sekolah"
-                              className={`h-12 w-12 object-contain pointer-events-none select-none ${
+                              className={`h-9 w-9 object-contain pointer-events-none select-none ${
                                 settings.ttd_kepala_sekolah
                                   ? 'absolute left-0 opacity-90'
                                   : ''
@@ -1201,19 +1213,19 @@ export function StudentsView({
                             <img
                               src={settings.ttd_kepala_sekolah}
                               alt="TTD Kepala Sekolah"
-                              className={`relative z-10 max-h-11 max-w-[120px] object-contain pointer-events-none select-none ${
-                                settings.cap_sekolah ? 'ml-5' : ''
+                              className={`relative z-10 max-h-8 max-w-[104px] object-contain pointer-events-none select-none ${
+                                settings.cap_sekolah ? 'ml-4' : ''
                               }`}
                             />
                           )}
                         </div>
                         {settings.nama_kepala_sekolah?.trim() && (
-                          <p className="text-[11px] font-bold text-slate-900 leading-tight underline decoration-slate-400 underline-offset-2 truncate">
+                          <p className="text-[10px] font-bold text-slate-900 leading-tight underline decoration-slate-400 underline-offset-2 whitespace-nowrap truncate">
                             {settings.nama_kepala_sekolah.trim()}
                           </p>
                         )}
                         {settings.nip_kepala_sekolah?.trim() && (
-                          <p className="text-[10px] font-mono text-slate-600 leading-tight mt-0.5 truncate">
+                          <p className="text-[9px] font-mono text-slate-600 leading-tight mt-0.5 whitespace-nowrap truncate">
                             NIP. {settings.nip_kepala_sekolah.trim()}
                           </p>
                         )}
@@ -1221,27 +1233,31 @@ export function StudentsView({
                     )}
                   </div>
 
-                  {/* Right Column: Full-size QR Code (never shrunk) */}
+                  {/* Right Column: Full-size QR Code */}
                   <div className="flex flex-col items-center shrink-0">
-                    <div className="p-2 rounded-xl border border-slate-200 bg-white">
+                    <div className="p-1.5 rounded-xl border border-slate-200 bg-white">
                       {qrDataUrl ? (
                         <img
                           src={qrDataUrl}
                           alt={`QR Code NISN ${ecardStudent.nis}`}
-                          className="h-32 w-32 object-contain"
+                          className="h-[118px] w-[118px] object-contain"
                         />
                       ) : (
-                        <div className="h-32 w-32 flex items-center justify-center text-xs text-slate-400">
+                        <div className="h-[118px] w-[118px] flex items-center justify-center text-xs text-slate-400">
                           Membuat QR...
                         </div>
                       )}
                     </div>
-                    <p className="text-[10px] font-mono font-semibold text-slate-600 mt-1.5">
+                    <p className="text-[10px] font-mono font-semibold text-slate-600 mt-1">
                       NISN: {ecardStudent.nis}
                     </p>
                   </div>
                 </div>
               </div>
+
+              <p className="text-[11px] font-mono tabular-nums text-slate-500 text-center">
+                Ukuran KTP (ISO ID-1): 8,56 × 5,4 cm · Nama siswa 1 baris
+              </p>
 
               <div className="w-full flex items-center gap-2.5">
                 <button

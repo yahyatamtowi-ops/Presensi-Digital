@@ -7,10 +7,12 @@ import {
   Clock,
   Coffee,
   Download,
+  FileSpreadsheet,
   Plus,
   RefreshCw,
   Save,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import type {
@@ -35,6 +37,11 @@ import {
   hydrateTimetableCellsFromSchedules,
   makeTimetableCellKey,
 } from '../utils/timetableLogic';
+import {
+  downloadTimetableMatrixTemplate,
+  parseTimetableMatrixFile,
+  type TimetableMatrixImportResult,
+} from '../utils/scheduleImportExport';
 import { formatSemesterLabel, normalizeSemester } from '../utils/subjectAttendance';
 
 interface TimetableMatrixViewProps {
@@ -81,6 +88,12 @@ export function TimetableMatrixView({
   const [newClassName, setNewClassName] = useState('');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const lastSelfSyncedStampRef = useRef<string | null>(null);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importMode, setImportMode] = useState<'replace' | 'merge'>('replace');
+  const [importFileName, setImportFileName] = useState('');
+  const [importParsing, setImportParsing] = useState(false);
+  const [importPreview, setImportPreview] = useState<TimetableMatrixImportResult | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   const configKey = useMemo(
     () => getTimetableConfigKey(selectedYear, selectedSemester),
@@ -500,6 +513,21 @@ export function TimetableMatrixView({
             >
               <RefreshCw className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
               <span>Muat dari Jadwal Guru</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="btn-import-timetable-excel"
+              onClick={() => {
+                setImportModalOpen(true);
+                setImportFileName('');
+                setImportPreview(null);
+                setImportError(null);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50/70 text-xs font-semibold text-indigo-700 hover:bg-indigo-100/70 transition-colors whitespace-nowrap"
+            >
+              <Upload className="h-3.5 w-3.5 text-indigo-600" aria-hidden="true" />
+              <span>Import Excel / CSV</span>
             </button>
 
             <button
@@ -1050,6 +1078,230 @@ export function TimetableMatrixView({
           </table>
         </div>
       </section>
+
+      {/* Modal: Import Pengaturan Jadwal dari Excel / CSV */}
+      {importModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="import-timetable-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-[1px]"
+        >
+          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-lg shadow-xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                  <FileSpreadsheet className="h-4.5 w-4.5" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h3 id="import-timetable-title" className="text-base font-semibold text-slate-900 truncate">
+                    Import Jadwal Pelajaran (Excel / CSV)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Mendukung file .xlsx, .xls, dan .csv (format matriks kelas atau daftar baris)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setImportModalOpen(false)}
+                aria-label="Tutup modal import jadwal"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="text-xs text-slate-600 leading-relaxed">
+                  <p className="font-semibold text-slate-800">Belum punya format file?</p>
+                  <p className="mt-0.5">
+                    Unduh template Excel yang sudah sesuai kolom kelas &amp; jam pelajaran aktif.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadTimetableMatrixTemplate(activeClasses, teachingAccounts, draft)
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+                >
+                  <Download className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+                  <span>Unduh Template .xlsx</span>
+                </button>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700">
+                  Mode Penggabungan Data
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setImportMode('replace')}
+                    className={`px-3 py-2 rounded-xl border text-xs font-semibold text-left transition-colors ${
+                      importMode === 'replace'
+                        ? 'border-indigo-500 bg-indigo-50/60 text-indigo-800'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    Ganti Isi Tabel Aktif
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImportMode('merge')}
+                    className={`px-3 py-2 rounded-xl border text-xs font-semibold text-left transition-colors ${
+                      importMode === 'merge'
+                        ? 'border-indigo-500 bg-indigo-50/60 text-indigo-800'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    Gabung dengan Data Lama
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="timetable-excel-input"
+                  className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 hover:border-indigo-400 bg-slate-50/50 hover:bg-indigo-50/30 px-4 py-6 cursor-pointer transition-colors text-center"
+                >
+                  <Upload className="h-6 w-6 text-indigo-500" aria-hidden="true" />
+                  <span className="text-xs font-semibold text-slate-800">
+                    {importFileName || 'Pilih file Excel (.xlsx / .xls) atau CSV (.csv)'}
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Format sel matriks: <code className="font-mono text-slate-700">Matematika (Nama Guru)</code> atau <code className="font-mono text-slate-700">Matematika</code>
+                  </span>
+                  <input
+                    id="timetable-excel-input"
+                    data-testid="input-import-timetable-file"
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="sr-only"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (!file) return;
+                      setImportFileName(file.name);
+                      setImportError(null);
+                      setImportParsing(true);
+                      try {
+                        const parsed = await parseTimetableMatrixFile(
+                          file,
+                          teachingAccounts,
+                          draft
+                        );
+                        setImportPreview(parsed);
+                        if (parsed.errors.length > 0) {
+                          setImportError(parsed.errors[0]);
+                        }
+                      } catch {
+                        setImportPreview(null);
+                        setImportError(
+                          'Gagal membaca file. Pastikan file berformat Excel (.xlsx/.xls) atau CSV yang valid.'
+                        );
+                      } finally {
+                        setImportParsing(false);
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+
+              {importParsing && (
+                <p className="text-xs text-indigo-600 font-medium text-center">
+                  Membaca file jadwal...
+                </p>
+              )}
+
+              {importError && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+                  {importError}
+                </div>
+              )}
+
+              {importPreview && importPreview.parsedCount > 0 && (
+                <div
+                  data-testid="timetable-import-preview"
+                  className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5 space-y-2 text-xs"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-semibold text-emerald-900">
+                      Siap diterapkan: {importPreview.parsedCount} slot pelajaran
+                    </span>
+                    <span className="font-mono tabular-nums text-[11px] text-emerald-700">
+                      {importPreview.detectedClasses.length} kelas · Format{' '}
+                      {importPreview.formatDetected === 'matrix' ? 'Matriks' : 'Daftar'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600">
+                    Kelas terdeteksi: {importPreview.detectedClasses.join(', ')}
+                    {importPreview.hasSaturday ? ' · Termasuk hari Sabtu (6 hari)' : ''}
+                  </p>
+                  {importPreview.unmatchedTeachers.length > 0 && (
+                    <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200/80 rounded-lg px-2.5 py-1.5">
+                      Catatan: Guru berikut belum cocok dengan akun Guru terdaftar ({importPreview.unmatchedTeachers.slice(0, 4).join(', ')}). Anda tetap bisa memilih gurunya langsung di tabel.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setImportModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  data-testid="btn-confirm-import-timetable"
+                  disabled={!importPreview || importPreview.parsedCount === 0}
+                  onClick={() => {
+                    if (!importPreview || importPreview.parsedCount === 0) return;
+                    const mergedClassesSet = new Set<string>([
+                      ...(draft.custom_classes || []),
+                      ...importPreview.detectedClasses.filter(
+                        (cls) =>
+                          !availableClasses.some(
+                            (existing) => existing.toLowerCase() === cls.toLowerCase()
+                          )
+                      ),
+                    ]);
+                    const nextClassesList = Array.from(
+                      new Set([...activeClasses, ...importPreview.detectedClasses])
+                    );
+                    const nextCells =
+                      importMode === 'merge'
+                        ? { ...draft.cells, ...importPreview.cells }
+                        : { ...importPreview.cells };
+
+                    const nextDraft: TimetableConfig = {
+                      ...draft,
+                      jumlah_hari: importPreview.hasSaturday ? 6 : draft.jumlah_hari,
+                      jumlah_jp: Math.max(draft.jumlah_jp, Math.min(16, importPreview.maxJp)),
+                      custom_classes: Array.from(mergedClassesSet),
+                      cells: nextCells,
+                      updated_at: new Date().toISOString(),
+                    };
+                    setDraft(nextDraft);
+                    persistAndSyncDraft(nextDraft, nextClassesList, false);
+                    setImportModalOpen(false);
+                    setImportPreview(null);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Terapkan &amp; Sinkronkan</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

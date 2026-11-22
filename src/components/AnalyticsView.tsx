@@ -11,6 +11,7 @@ import {
   GraduationCap,
   Download,
   FileSpreadsheet,
+  Info,
 } from 'lucide-react';
 import type {
   AnalyticsPeriodType,
@@ -24,6 +25,10 @@ import {
   getTodayDateString,
   type PeriodSummaryRow,
 } from '../utils/attendanceLogic';
+import {
+  buildAttendanceComparisonExplanation,
+  buildClassAttendanceExplanation,
+} from '../utils/analyticsExplanation';
 import {
   exportMonthlyAnalyticsExcel,
   generateMonthlyAnalyticsPdf,
@@ -106,6 +111,8 @@ export function AnalyticsView({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('pct_desc');
   const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [showComparisonInfo, setShowComparisonInfo] = useState(true);
+  const [showClassInfo, setShowClassInfo] = useState(true);
 
   const classes = useMemo(() => {
     const set = new Set<string>();
@@ -500,10 +507,60 @@ export function AnalyticsView({
                 </p>
               </div>
             </div>
-            <span className="text-xs font-mono tabular-nums px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-medium">
-              {filteredStudents.length} siswa
-            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs font-mono tabular-nums px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-medium">
+                {filteredStudents.length} siswa
+              </span>
+              <button
+                type="button"
+                data-testid="analytics-comparison-info-btn"
+                onClick={() => setShowComparisonInfo((prev) => !prev)}
+                aria-expanded={showComparisonInfo}
+                aria-label="Penjelasan Perbandingan Persentase Kehadiran"
+                title="Lihat penjelasan hasil analisis Perbandingan Persentase Kehadiran"
+                className={`inline-flex items-center justify-center h-7 w-7 rounded-full border transition-colors ${
+                  showComparisonInfo
+                    ? 'bg-indigo-600 border-indigo-600 text-white'
+                    : 'bg-white border-slate-200 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200'
+                }`}
+              >
+                <Info className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
           </div>
+
+          {showComparisonInfo && (() => {
+            const exp = buildAttendanceComparisonExplanation(
+              analytics.overviews,
+              selectedPeriod
+            );
+            return (
+              <div
+                data-testid="analytics-comparison-info-bar"
+                role="region"
+                aria-label="Informasi Perbandingan Persentase Kehadiran"
+                className="rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-3.5 flex items-start gap-3"
+              >
+                <span
+                  aria-hidden="true"
+                  className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-indigo-600 text-white text-xs font-bold shrink-0 mt-0.5 select-none"
+                >
+                  i
+                </span>
+                <div className="min-w-0 space-y-1 text-xs text-slate-700 leading-relaxed">
+                  <p className="font-semibold text-slate-900">{exp.headline}</p>
+                  <p className="text-slate-700">{exp.dynamicSummary}</p>
+                  <p className="text-[11px] text-slate-600">
+                    <strong className="text-slate-800">Rumus:</strong> {exp.formulaNote}
+                  </p>
+                  <p className="text-[11px] text-slate-600">
+                    <strong className="text-slate-800">Arti Warna:</strong> {exp.colorLegend}
+                  </p>
+                  <p className="text-[11px] text-indigo-700">{exp.interactionHint}</p>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* 5-Period Vertical Bar Chart */}
           <div className="grid grid-cols-5 gap-3 sm:gap-5 items-end pt-2 h-48 border-b border-slate-100 pb-3">
@@ -586,17 +643,62 @@ export function AnalyticsView({
         {/* Right: Class Ranking + Attention & Top Highlights */}
         <div className="lg:col-span-5 space-y-6">
           <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-            <div className="flex items-center gap-2.5">
-              <div className="h-9 w-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-                <BarChart3 className="h-4.5 w-4.5" aria-hidden="true" />
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="h-9 w-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                  <BarChart3 className="h-4.5 w-4.5" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-base font-semibold text-slate-900">
+                    Persentase per Kelas ({selectedOverview.shortLabel})
+                  </h2>
+                  <p className="text-xs text-slate-500">{selectedOverview.subtitle}</p>
+                </div>
               </div>
-              <div>
-                <h2 className="text-base font-semibold text-slate-900">
-                  Persentase per Kelas ({selectedOverview.shortLabel})
-                </h2>
-                <p className="text-xs text-slate-500">{selectedOverview.subtitle}</p>
-              </div>
+              <button
+                type="button"
+                data-testid="analytics-class-info-btn"
+                onClick={() => setShowClassInfo((prev) => !prev)}
+                aria-expanded={showClassInfo}
+                aria-label={`Penjelasan Persentase per Kelas (${selectedOverview.shortLabel})`}
+                title={`Lihat penjelasan hasil analisis Persentase per Kelas (${selectedOverview.shortLabel})`}
+                className={`inline-flex items-center justify-center h-7 w-7 rounded-full border transition-colors shrink-0 ${
+                  showClassInfo
+                    ? 'bg-emerald-600 border-emerald-600 text-white'
+                    : 'bg-white border-slate-200 text-emerald-600 hover:bg-emerald-50 hover:border-emerald-200'
+                }`}
+              >
+                <Info className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
             </div>
+
+            {showClassInfo && (() => {
+              const exp = buildClassAttendanceExplanation(
+                analytics.classAnalytics,
+                selectedOverview
+              );
+              return (
+                <div
+                  data-testid="analytics-class-info-bar"
+                  role="region"
+                  aria-label="Informasi Persentase per Kelas"
+                  className="rounded-xl border border-emerald-200/80 bg-emerald-50/50 p-3.5 flex items-start gap-3"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-emerald-600 text-white text-xs font-bold shrink-0 mt-0.5 select-none"
+                  >
+                    i
+                  </span>
+                  <div className="min-w-0 space-y-1 text-xs text-slate-700 leading-relaxed">
+                    <p className="font-semibold text-slate-900">{exp.headline}</p>
+                    <p className="text-slate-700">{exp.dynamicSummary}</p>
+                    <p className="text-[11px] text-slate-600">{exp.legendNote}</p>
+                    <p className="text-[11px] text-emerald-800">{exp.actionNote}</p>
+                  </div>
+                </div>
+              );
+            })()}
 
             {analytics.classAnalytics.length === 0 ? (
               <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200/70 rounded-xl px-4 py-5 text-center">

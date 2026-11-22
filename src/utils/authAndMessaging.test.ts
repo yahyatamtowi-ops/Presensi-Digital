@@ -430,10 +430,11 @@ test('RECAP_PDF_F4_CONFIG and getRecapPdfColumns enforce F4 portrait 215x330mm p
   assert.ok(monthlyCols.some((c) => c.header === '% Hadir'));
 });
 
-test('getECardLayoutMetrics keeps compact 56mm height without footer, full-size 29mm QR on right, and principal at bottom-left', () => {
+test('getECardLayoutMetrics enforces exact KTP 85.6x54mm dimensions, scannable QR on right, and principal at bottom-left', () => {
   const metrics = getECardLayoutMetrics();
-  assert.equal(metrics.cardH, 56);
-  assert.equal(metrics.qrSize, 29);
+  assert.equal(metrics.cardW, 85.6);
+  assert.equal(metrics.cardH, 54);
+  assert.equal(metrics.qrSize, 27.5);
   assert.equal(metrics.principalBlockPosition, 'bottom-left');
 });
 

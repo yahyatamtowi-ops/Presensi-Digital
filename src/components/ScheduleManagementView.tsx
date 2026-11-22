@@ -4,10 +4,13 @@ import {
   CalendarDays,
   CalendarRange,
   Clock,
+  Download,
+  FileSpreadsheet,
   Pencil,
   Plus,
   Search,
   Trash2,
+  Upload,
   UserCheck,
   X,
 } from 'lucide-react';
@@ -32,6 +35,12 @@ import {
   generateDailyTimeSlots,
   getSchoolDaysForCount,
 } from '../utils/timetableLogic';
+import {
+  downloadTeacherScheduleTemplate,
+  parseTeacherSchedulesFile,
+  type ParsedTeacherScheduleInput,
+  type TeacherScheduleImportResult,
+} from '../utils/scheduleImportExport';
 
 interface ScheduleManagementViewProps {
   settings: SchoolSettings;
@@ -73,6 +82,10 @@ interface ScheduleManagementViewProps {
     }
   ) => { ok: boolean; error?: string };
   onDeleteSchedule: (id: string) => void;
+  onBulkImportSchedules?: (items: ParsedTeacherScheduleInput[]) => {
+    addedCount: number;
+    skippedCount: number;
+  };
   activeTimetableConfig?: TimetableConfig;
   onNavigateToTimetable?: () => void;
 }
@@ -121,6 +134,7 @@ export function ScheduleManagementView({
   onAddSchedule,
   onUpdateSchedule,
   onDeleteSchedule,
+  onBulkImportSchedules,
   activeTimetableConfig,
   onNavigateToTimetable,
 }: ScheduleManagementViewProps) {
@@ -152,6 +166,12 @@ export function ScheduleManagementView({
   const [schEndJp, setSchEndJp] = useState<string>('');
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [confirmDeleteScheduleId, setConfirmDeleteScheduleId] = useState<string | null>(null);
+  const [importScheduleOpen, setImportScheduleOpen] = useState(false);
+  const [importScheduleFileName, setImportScheduleFileName] = useState('');
+  const [importScheduleParsing, setImportScheduleParsing] = useState(false);
+  const [importSchedulePreview, setImportSchedulePreview] =
+    useState<TeacherScheduleImportResult | null>(null);
+  const [importScheduleError, setImportScheduleError] = useState<string | null>(null);
 
   const activeSemester = normalizeSemester(settings.semester, 'ganjil');
 
@@ -589,8 +609,8 @@ export function ScheduleManagementView({
           {activeSubMenu === 'jadwal' && (
             <section className="bg-white rounded-2xl border border-slate-200/80 shadow-[0_1px_3px_rgba(15,23,42,0.04)] overflow-hidden">
               <div className="p-5 sm:p-6 border-b border-slate-100 space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1">
                     <h3 className="text-base font-semibold text-slate-900">
                       Jadwal Pelajaran Guru ({filteredSchedules.length})
                     </h3>
@@ -599,15 +619,31 @@ export function ScheduleManagementView({
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    data-testid="btn-add-teacher-schedule"
-                    onClick={openAddScheduleModal}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap self-start sm:self-auto"
-                  >
-                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Tambah Jadwal Guru</span>
-                  </button>
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0 self-start lg:self-auto">
+                    <button
+                      type="button"
+                      data-testid="btn-import-teacher-schedule-excel"
+                      onClick={() => {
+                        setImportScheduleOpen(true);
+                        setImportScheduleFileName('');
+                        setImportSchedulePreview(null);
+                        setImportScheduleError(null);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50/70 text-indigo-700 text-xs font-semibold hover:bg-indigo-100/70 transition-colors whitespace-nowrap"
+                    >
+                      <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Import Excel / CSV</span>
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="btn-add-teacher-schedule"
+                      onClick={openAddScheduleModal}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap"
+                    >
+                      <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Tambah Jadwal Guru</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Filters */}
@@ -1163,6 +1199,213 @@ export function ScheduleManagementView({
               >
                 Ya, Hapus
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Import Jadwal Pelajaran Guru dari Excel / CSV */}
+      {importScheduleOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="import-teacher-schedule-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-[1px]"
+        >
+          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-lg shadow-xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                  <FileSpreadsheet className="h-4.5 w-4.5" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h3
+                    id="import-teacher-schedule-title"
+                    className="text-base font-semibold text-slate-900 truncate"
+                  >
+                    Import Jadwal Pelajaran Guru (Excel / CSV)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Otomatis sinkron ke Pengaturan Jadwal &amp; menu Daftar Pelajaran masing-masing guru
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setImportScheduleOpen(false)}
+                aria-label="Tutup modal import jadwal guru"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="text-xs text-slate-600 leading-relaxed">
+                  <p className="font-semibold text-slate-800">Template Excel siap isi</p>
+                  <p className="mt-0.5">
+                    Kolom: Hari, Jam Mulai, Jam Selesai (atau Waktu / Jam ke), Kelas, Mata Pelajaran, Guru.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadTeacherScheduleTemplate(
+                      scheduleClasses,
+                      teachingAccounts,
+                      masterSubjects,
+                      normalizeSemester(settings.semester, 'ganjil')
+                    )
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+                >
+                  <Download className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+                  <span>Unduh Template .xlsx</span>
+                </button>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="teacher-schedule-excel-input"
+                  className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 hover:border-indigo-400 bg-slate-50/50 hover:bg-indigo-50/30 px-4 py-6 cursor-pointer transition-colors text-center"
+                >
+                  <Upload className="h-6 w-6 text-indigo-500" aria-hidden="true" />
+                  <span className="text-xs font-semibold text-slate-800">
+                    {importScheduleFileName || 'Pilih file Excel (.xlsx / .xls) atau CSV (.csv)'}
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Nama/Username Guru akan dicocokkan otomatis dengan daftar akun Guru &amp; Wali Kelas
+                  </span>
+                  <input
+                    id="teacher-schedule-excel-input"
+                    data-testid="input-import-teacher-schedule-file"
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="sr-only"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (!file) return;
+                      setImportScheduleFileName(file.name);
+                      setImportScheduleError(null);
+                      setImportScheduleParsing(true);
+                      try {
+                        const parsed = await parseTeacherSchedulesFile(file, {
+                          teachingAccounts,
+                          existingSchedules: schedules,
+                          tahunAjaran: settings.tahun_ajaran,
+                          defaultSemester: normalizeSemester(settings.semester, 'ganjil'),
+                          activeTimetableConfig: effectiveTimetable,
+                        });
+                        setImportSchedulePreview(parsed);
+                        if (parsed.totalRows === 0) {
+                          setImportScheduleError(
+                            'File tidak memiliki baris data jadwal pelajaran guru.'
+                          );
+                        }
+                      } catch {
+                        setImportSchedulePreview(null);
+                        setImportScheduleError(
+                          'Gagal membaca file. Pastikan file berformat Excel (.xlsx/.xls) atau CSV yang valid.'
+                        );
+                      } finally {
+                        setImportScheduleParsing(false);
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+
+              {importScheduleParsing && (
+                <p className="text-xs text-indigo-600 font-medium text-center">
+                  Memvalidasi baris jadwal guru...
+                </p>
+              )}
+
+              {importScheduleError && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">
+                  {importScheduleError}
+                </div>
+              )}
+
+              {importSchedulePreview && importSchedulePreview.totalRows > 0 && (
+                <div
+                  data-testid="teacher-schedule-import-preview"
+                  className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-2.5 text-xs"
+                >
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="rounded-lg bg-emerald-50 border border-emerald-200/80 py-2 px-2">
+                      <p className="text-base font-bold font-mono tabular-nums text-emerald-700">
+                        {importSchedulePreview.validItems.length}
+                      </p>
+                      <p className="text-[11px] text-emerald-800">Siap diimpor</p>
+                    </div>
+                    <div className="rounded-lg bg-amber-50 border border-amber-200/80 py-2 px-2">
+                      <p className="text-base font-bold font-mono tabular-nums text-amber-700">
+                        {importSchedulePreview.duplicateCount}
+                      </p>
+                      <p className="text-[11px] text-amber-800">Duplikat</p>
+                    </div>
+                    <div className="rounded-lg bg-rose-50 border border-rose-200/80 py-2 px-2">
+                      <p className="text-base font-bold font-mono tabular-nums text-rose-700">
+                        {importSchedulePreview.invalidRows.length}
+                      </p>
+                      <p className="text-[11px] text-rose-800">Tidak valid</p>
+                    </div>
+                  </div>
+
+                  {importSchedulePreview.invalidRows.length > 0 && (
+                    <div className="rounded-lg border border-rose-200/80 bg-rose-50/70 p-2.5 space-y-1 max-h-28 overflow-y-auto">
+                      <p className="text-[11px] font-semibold text-rose-800">
+                        Rincian baris yang dilewati:
+                      </p>
+                      {importSchedulePreview.invalidRows.slice(0, 6).map((err) => (
+                        <p key={`${err.rowNumber}-${err.reason}`} className="text-[11px] text-rose-700">
+                          Baris {err.rowNumber}: {err.reason}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setImportScheduleOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  data-testid="btn-confirm-import-teacher-schedule"
+                  disabled={
+                    !importSchedulePreview || importSchedulePreview.validItems.length === 0
+                  }
+                  onClick={() => {
+                    if (!importSchedulePreview || importSchedulePreview.validItems.length === 0) {
+                      return;
+                    }
+                    if (onBulkImportSchedules) {
+                      onBulkImportSchedules(importSchedulePreview.validItems);
+                    } else {
+                      importSchedulePreview.validItems.forEach((item) => {
+                        onAddSchedule(item);
+                      });
+                    }
+                    setImportScheduleOpen(false);
+                    setImportSchedulePreview(null);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>
+                    Import {importSchedulePreview?.validItems.length || 0} Jadwal
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

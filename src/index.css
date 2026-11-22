@@ -508,9 +508,19 @@ html[data-theme^="dark"] .ecard-print-area .text-slate-500 {
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
+    width: 85.6mm !important;
+    height: 54mm !important;
+    max-width: 85.6mm !important;
     box-shadow: none !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+  }
+
+  .ecard-ktp-card {
+    width: 85.6mm !important;
+    height: 54mm !important;
+    min-height: 54mm !important;
+    max-height: 54mm !important;
   }
 
   .ecard-batch-print-area {

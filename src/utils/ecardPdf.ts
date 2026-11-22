@@ -83,15 +83,76 @@ export interface ECardLayoutMetrics {
 }
 
 export function getECardLayoutMetrics(): ECardLayoutMetrics {
-  // Compact 86x56mm E-Card without bottom footer strip; QR Code stays full-size (29mm)
-  // on the right while Principal TTD/Cap/Name/NIP sits on the bottom-left.
+  // Standard KTP / ISO-IEC 7810 ID-1 size: 8.56 cm x 5.4 cm (85.6 mm x 54.0 mm)
+  // Full-size scannable QR Code (27.5 mm) on the right while Principal TTD/Cap/Name/NIP
+  // sits cleanly on the bottom-left beneath Siswa Putra/Putri.
   return {
-    cardW: 86,
-    cardH: 56,
-    qrSize: 29,
-    rightColWidth: 32,
+    cardW: 85.6,
+    cardH: 54,
+    qrSize: 27.5,
+    rightColWidth: 30.5,
     principalBlockPosition: 'bottom-left',
   };
+}
+
+/**
+ * Fits any text onto strictly ONE line within maxWidthMm by shrinking font size down to
+ * minFontSize first, and truncating with an ellipsis only if it still exceeds maxWidthMm.
+ */
+export function fitSingleLineText(
+  text: string,
+  maxWidthMm: number,
+  initialFontSize: number,
+  minFontSize: number,
+  measureWidth: (str: string, fontSize: number) => number
+): { text: string; fontSize: number } {
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  if (!cleaned) {
+    return { text: '', fontSize: initialFontSize };
+  }
+
+  let fontSize = initialFontSize;
+  while (fontSize > minFontSize && measureWidth(cleaned, fontSize) > maxWidthMm) {
+    fontSize = Math.max(minFontSize, Math.round((fontSize - 0.2) * 10) / 10);
+  }
+
+  if (measureWidth(cleaned, fontSize) <= maxWidthMm) {
+    return { text: cleaned, fontSize };
+  }
+
+  // Still slightly too wide at minimum font size -> trim cleanly with ellipsis on 1 line
+  const ellipsis = '…';
+  let end = cleaned.length;
+  while (end > 1 && measureWidth(`${cleaned.slice(0, end).trimEnd()}${ellipsis}`, fontSize) > maxWidthMm) {
+    end -= 1;
+  }
+  return {
+    text: `${cleaned.slice(0, Math.max(1, end)).trimEnd()}${ellipsis}`,
+    fontSize,
+  };
+}
+
+/**
+ * Adaptive Tailwind typography class ensuring student names fit cleanly on 1 line
+ * inside KTP-proportioned E-Card previews without ever wrapping to 2 lines.
+ */
+export function getECardNameFontSizeClass(
+  name: string,
+  variant: 'batch' | 'single'
+): string {
+  const len = name.trim().length;
+  if (variant === 'single') {
+    if (len > 36) return 'text-[10.5px]';
+    if (len > 30) return 'text-[11px]';
+    if (len > 24) return 'text-xs';
+    if (len > 19) return 'text-[13px]';
+    return 'text-sm';
+  }
+  if (len > 35) return 'text-[8.5px] tracking-tight';
+  if (len > 28) return 'text-[9.5px] tracking-tight';
+  if (len > 22) return 'text-[11px]';
+  if (len > 18) return 'text-xs';
+  return 'text-[13px]';
 }
 
 export async function generateECardsPdf(
@@ -105,13 +166,13 @@ export async function generateECardsPdf(
   });
 
   const pageWidth = 210;
-  const marginX = 14;
-  const marginY = 10;
   const colGap = 10;
-  const rowGap = 6;
   const layout = getECardLayoutMetrics();
-  const cardW = (pageWidth - marginX * 2 - colGap) / 2; // 86mm
-  const effectiveCardH = layout.cardH; // 56mm -> compact 8 cards per A4 page
+  const cardW = layout.cardW; // Exact 85.6 mm (8.56 cm)
+  const effectiveCardH = layout.cardH; // Exact 54.0 mm (5.4 cm)
+  const marginX = (pageWidth - cardW * 2 - colGap) / 2; // 14.4 mm centered on A4
+  const marginY = 12;
+  const rowGap = 8; // 12*2 + 54*4 + 8*3 = 264 mm <= 297 mm A4 portrait (8 cards/page)
   const [r, g, b] = getThemeAccentRgb(settings.tema);
 
   const [logoImg, ttdImg, capImg] = await Promise.all([
@@ -140,13 +201,13 @@ export async function generateECardsPdf(
     const x = marginX + col * (cardW + colGap);
     const y = marginY + row * (effectiveCardH + rowGap);
 
-    // Outer card border
+    // Outer card border (exact ISO/ID-1 KTP radius ~3.18mm -> 3mm)
     doc.setDrawColor(203, 213, 225);
     doc.setFillColor(255, 255, 255);
     doc.roundedRect(x, y, cardW, effectiveCardH, 3, 3, 'FD');
 
     // Top themed header banner
-    const headerH = 12.5;
+    const headerH = 11.8;
     doc.setFillColor(r, g, b);
     doc.roundedRect(x, y, cardW, headerH, 3, 3, 'F');
     doc.rect(x, y + headerH - 3, cardW, 3, 'F');
@@ -154,33 +215,40 @@ export async function generateECardsPdf(
     let textStartX = x + 4;
     if (logoImg) {
       doc.setFillColor(255, 255, 255);
-      doc.roundedRect(x + 3.5, y + 1.8, 8.8, 8.8, 1.5, 1.5, 'F');
-      const logoFit = fitWithinBox(logoImg.width, logoImg.height, 7.4, 7.4);
+      doc.roundedRect(x + 3.4, y + 1.6, 8.4, 8.4, 1.4, 1.4, 'F');
+      const logoFit = fitWithinBox(logoImg.width, logoImg.height, 7.0, 7.0);
       doc.addImage(
         logoImg.dataUrl,
         logoImg.format,
-        x + 3.5 + (8.8 - logoFit.w) / 2,
-        y + 1.8 + (8.8 - logoFit.h) / 2,
+        x + 3.4 + (8.4 - logoFit.w) / 2,
+        y + 1.6 + (8.4 - logoFit.h) / 2,
         logoFit.w,
         logoFit.h
       );
-      textStartX = x + 14.2;
+      textStartX = x + 13.6;
     }
 
     doc.setTextColor(241, 245, 249);
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6);
-    doc.text('KARTU TANDA SISWA ELEKTRONIK', textStartX, y + 4.7);
+    doc.setFontSize(5.8);
+    doc.text('KARTU TANDA SISWA ELEKTRONIK', textStartX, y + 4.4);
 
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
-    const schoolTitle =
-      doc.splitTextToSize(settings.nama_sekolah, cardW - (textStartX - x) - 3)[0] ||
-      settings.nama_sekolah;
-    doc.text(schoolTitle, textStartX, y + 9.6);
+    const fittedSchool = fitSingleLineText(
+      settings.nama_sekolah,
+      cardW - (textStartX - x) - 3,
+      7.8,
+      5.8,
+      (str, size) => {
+        doc.setFontSize(size);
+        return doc.getTextWidth(str);
+      }
+    );
+    doc.setFontSize(fittedSchool.fontSize);
+    doc.text(fittedSchool.text, textStartX, y + 9.2);
 
-    // Full-size QR Code on the right side of card body (never shrunk!)
+    // Full-size QR Code on the right side of card body
     const qrDataUrl = await QRCode.toDataURL(student.nis, {
       width: 280,
       margin: 1,
@@ -188,75 +256,83 @@ export async function generateECardsPdf(
     });
     qrMap[student.nis] = qrDataUrl;
 
-    const qrSize = layout.qrSize; // 29mm constant full size
-    const rightColWidth = layout.rightColWidth; // 32mm
-    const rightColCenterX = x + cardW - rightColWidth / 2 - 2.5;
+    const qrSize = layout.qrSize; // 27.5 mm
+    const rightColWidth = layout.rightColWidth; // 30.5 mm
+    const rightColCenterX = x + cardW - rightColWidth / 2 - 2.4;
     const qrX = rightColCenterX - qrSize / 2;
-    const qrY = y + headerH + 4.8;
+    const qrY = y + headerH + 4.2;
 
     doc.setDrawColor(226, 232, 240);
     doc.setLineWidth(0.25);
-    doc.roundedRect(qrX - 1.2, qrY - 1.2, qrSize + 2.4, qrSize + 2.4, 1.8, 1.8, 'S');
+    doc.roundedRect(qrX - 1.1, qrY - 1.1, qrSize + 2.2, qrSize + 2.2, 1.6, 1.6, 'S');
     doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
 
     doc.setFont('courier', 'bold');
-    doc.setFontSize(6.2);
+    doc.setFontSize(6.0);
     doc.setTextColor(71, 85, 105);
-    doc.text(`NISN: ${student.nis}`, rightColCenterX, qrY + qrSize + 4.2, { align: 'center' });
+    doc.text(`NISN: ${student.nis}`, rightColCenterX, qrY + qrSize + 3.9, { align: 'center' });
 
-    // Student details on the left side of card body
-    const infoX = x + 4.2;
-    const infoMaxW = cardW - rightColWidth - 9.2; // ~44.6mm
+    // Student details on the left side of card body — GUARANTEED 1-LINE NAME
+    const infoX = x + 4.0;
+    const infoMaxW = cardW - rightColWidth - 8.2; // ~46.9 mm
     doc.setTextColor(15, 23, 42);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(hasPrincipalSection ? 8.4 : 9.4);
-    const nameLines = doc.splitTextToSize(student.nama, infoMaxW).slice(0, 2);
-    const nameStartY = hasPrincipalSection ? y + headerH + 4.2 : y + headerH + 8.0;
-    const nameLineH = hasPrincipalSection ? 3.4 : 4.2;
-    doc.text(nameLines, infoX, nameStartY);
+    const fittedStudentName = fitSingleLineText(
+      student.nama,
+      infoMaxW,
+      hasPrincipalSection ? 8.4 : 9.4,
+      5.6,
+      (str, size) => {
+        doc.setFontSize(size);
+        return doc.getTextWidth(str);
+      }
+    );
+    doc.setFontSize(fittedStudentName.fontSize);
+    const nameStartY = hasPrincipalSection ? y + headerH + 4.4 : y + headerH + 8.6;
+    doc.text(fittedStudentName.text, infoX, nameStartY);
 
-    const afterNameY = nameStartY + nameLines.length * nameLineH + (hasPrincipalSection ? 0.9 : 2.2);
-    const detailStep = hasPrincipalSection ? 3.4 : 5.0;
+    const afterNameY = nameStartY + (hasPrincipalSection ? 3.9 : 5.4);
+    const detailStep = hasPrincipalSection ? 3.3 : 4.8;
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(hasPrincipalSection ? 6.8 : 7.5);
+    doc.setFontSize(hasPrincipalSection ? 6.6 : 7.4);
     doc.setTextColor(100, 116, 139);
     doc.text('NISN', infoX, afterNameY);
     doc.setFont('courier', 'bold');
     doc.setTextColor(15, 23, 42);
-    doc.text(student.nis, infoX + 9.5, afterNameY);
+    doc.text(student.nis, infoX + 9.2, afterNameY);
 
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(100, 116, 139);
     doc.text('Kelas', infoX, afterNameY + detailStep);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(15, 23, 42);
-    doc.text(student.kelas, infoX + 8.8, afterNameY + detailStep);
+    doc.text(student.kelas, infoX + 9.2, afterNameY + detailStep);
 
     const genderY = afterNameY + detailStep * 2;
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(hasPrincipalSection ? 6.5 : 7.2);
+    doc.setFontSize(hasPrincipalSection ? 6.3 : 7.0);
     doc.setTextColor(100, 116, 139);
     doc.text(student.gender === 'L' ? 'Siswa Putra' : 'Siswa Putri', infoX, genderY);
 
     // Principal Authorization Block on the LEFT directly beneath Siswa Putra / Siswa Putri
     if (hasPrincipalSection) {
-      const cardBottomLimitY = y + effectiveCardH - 2.6;
-      const authTopY = Math.min(Math.max(genderY + 1.8, y + headerH + 18.6), cardBottomLimitY - 19.6);
+      const cardBottomLimitY = y + effectiveCardH - 2.2;
+      const authTopY = Math.min(Math.max(genderY + 1.7, y + headerH + 17.6), cardBottomLimitY - 18.8);
       const authMaxW = infoMaxW;
       const authCenterX = infoX + authMaxW / 2;
 
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(5.2);
+      doc.setFontSize(5.0);
       doc.setTextColor(100, 116, 139);
-      doc.text('Kepala Sekolah', infoX, authTopY + 1.8);
+      doc.text('Kepala Sekolah', infoX, authTopY + 1.6);
 
-      const mediaTopY = authTopY + 2.2;
-      const mediaH = 9.0;
+      const mediaTopY = authTopY + 2.0;
+      const mediaH = 8.4;
 
       // Transparent School Stamp (layered slightly left)
       if (capImg) {
-        const capFit = fitWithinBox(capImg.width, capImg.height, 11.2, 11.2);
-        const capX = ttdImg ? infoX + 2.2 : infoX + 6;
+        const capFit = fitWithinBox(capImg.width, capImg.height, 10.4, 10.4);
+        const capX = ttdImg ? infoX + 2.0 : infoX + 5.5;
         doc.addImage(
           capImg.dataUrl,
           capImg.format,
@@ -269,8 +345,8 @@ export async function generateECardsPdf(
 
       // Transparent Principal Signature layered cleanly over/beside stamp
       if (ttdImg) {
-        const ttdFit = fitWithinBox(ttdImg.width, ttdImg.height, 26, 9.4);
-        const ttdX = capImg ? infoX + 7.5 : infoX + 2;
+        const ttdFit = fitWithinBox(ttdImg.width, ttdImg.height, 24.5, 8.8);
+        const ttdX = capImg ? infoX + 7.0 : infoX + 2;
         doc.addImage(
           ttdImg.dataUrl,
           ttdImg.format,
@@ -281,10 +357,10 @@ export async function generateECardsPdf(
         );
       }
 
-      let labelY = mediaTopY + mediaH + 2.4;
+      let labelY = mediaTopY + mediaH + 2.2;
       if (principalName) {
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(5.5);
+        doc.setFontSize(5.4);
         doc.setTextColor(15, 23, 42);
         const fittedName = doc.splitTextToSize(principalName, authMaxW)[0] || principalName;
         doc.text(fittedName, infoX, labelY);
@@ -292,12 +368,12 @@ export async function generateECardsPdf(
         doc.setDrawColor(15, 23, 42);
         doc.setLineWidth(0.18);
         doc.line(infoX, labelY + 0.8, infoX + nameW, labelY + 0.8);
-        labelY += 3.0;
+        labelY += 2.8;
       }
 
       if (principalNip) {
         doc.setFont('helvetica', 'normal');
-        doc.setFontSize(4.9);
+        doc.setFontSize(4.8);
         doc.setTextColor(71, 85, 105);
         const fittedNip =
           doc.splitTextToSize(`NIP. ${principalNip}`, authMaxW)[0] || `NIP. ${principalNip}`;
