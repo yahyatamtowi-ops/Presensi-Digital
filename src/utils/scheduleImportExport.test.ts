@@ -100,24 +100,29 @@ test('buildAttendanceComparisonExplanation and buildClassAttendanceExplanation g
     hadir: number,
     terlambat: number,
     alpa: number
-  ): PeriodAnalyticsOverview => ({
-    period,
-    label: `Rekap ${shortLabel}`,
-    shortLabel,
-    subtitle: 'Periode aktif',
-    startDate: '2026-11-01',
-    endDate: '2026-11-30',
-    totalSiswa: 30,
-    activeDays: 10,
-    totalTercatat: hadir + terlambat + alpa,
-    hadir,
-    terlambat,
-    sakit: 0,
-    izin: 0,
-    alpa,
-    belumAbsen: 0,
-    kehadiranPct: pct,
-  });
+  ): PeriodAnalyticsOverview => {
+    const total = hadir + terlambat + alpa;
+    return {
+      period,
+      label: `Rekap ${shortLabel}`,
+      shortLabel,
+      subtitle: 'Periode aktif',
+      startDate: '2026-11-01',
+      endDate: '2026-11-30',
+      totalSiswa: 30,
+      activeDays: 10,
+      totalTercatat: total,
+      hadir,
+      terlambat,
+      sakit: 0,
+      izin: 0,
+      alpa,
+      belumAbsen: 0,
+      kehadiranPct: pct,
+      tepatWaktuPct: total > 0 ? Math.round((hadir / total) * 100) : 0,
+      skorKehadiranPct: pct,
+    };
+  };
 
   const overviews: Record<AnalyticsPeriodType, PeriodAnalyticsOverview> = {
     harian: makeOverview('harian', 'Harian', 95, 19, 0, 1),
@@ -128,8 +133,10 @@ test('buildAttendanceComparisonExplanation and buildClassAttendanceExplanation g
   };
 
   const comp = buildAttendanceComparisonExplanation(overviews, 'bulanan');
-  assert.ok(comp.formulaNote.includes('Hadir tepat waktu'));
-  assert.ok(comp.colorLegend.includes('Hijau ≥ 90%'));
+  assert.ok(comp.formulaNote.includes('Hadir Tepat Waktu'));
+  assert.ok(comp.formulaNote.includes('Terlambat bernilai 50%'));
+  assert.ok(comp.colorLegend.includes('Sangat Baik'));
+  assert.ok(comp.colorLegend.includes('Kurang Baik'));
   assert.ok(comp.dynamicSummary.includes('Bulanan'));
   assert.ok(comp.dynamicSummary.includes('82%'));
   assert.ok(comp.dynamicSummary.includes('Harian (95%)'));
@@ -145,26 +152,30 @@ test('buildAttendanceComparisonExplanation and buildClassAttendanceExplanation g
       izin: 2,
       alpa: 2,
       kehadiranPct: 94,
+      tepatWaktuPct: 90,
+      skorKehadiranPct: 93,
     },
     {
       kelas: 'XI IPS 2',
       totalSiswa: 28,
       totalTercatat: 100,
-      hadir: 62,
-      terlambat: 6,
+      hadir: 40,
+      terlambat: 20,
       sakit: 8,
       izin: 4,
-      alpa: 20,
-      kehadiranPct: 68,
+      alpa: 28,
+      kehadiranPct: 60,
+      tepatWaktuPct: 40,
+      skorKehadiranPct: 53,
     },
   ];
 
   const clsExp = buildClassAttendanceExplanation(classes, overviews.bulanan);
   assert.ok(clsExp.headline.includes('Bulanan'));
-  assert.ok(clsExp.legendNote.includes('H = Hadir'));
-  assert.ok(clsExp.dynamicSummary.includes('X IPA 1 (94%)'));
-  assert.ok(clsExp.dynamicSummary.includes('XI IPS 2 (68%)'));
-  assert.ok(clsExp.actionNote.includes('di bawah 75%'));
+  assert.ok(clsExp.legendNote.includes('H = Hadir tepat waktu 100%'));
+  assert.ok(clsExp.dynamicSummary.includes('X IPA 1 (93%'));
+  assert.ok(clsExp.dynamicSummary.includes('XI IPS 2 (53%)'));
+  assert.ok(clsExp.actionNote.includes('Kurang Baik / Perlu Perhatian'));
 });
 
 test('schedule time and day normalizers handle Indonesian aliases, dot separators, and Excel numeric serial times', () => {

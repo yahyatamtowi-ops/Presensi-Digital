@@ -7,7 +7,11 @@ import type {
   SubjectAttendanceRecord,
   UserAccount,
 } from '../types';
-import type { PeriodAnalyticsOverview, PeriodSummaryRow } from './attendanceLogic';
+import {
+  evaluateAttendanceCategory,
+  type PeriodAnalyticsOverview,
+  type PeriodSummaryRow,
+} from './attendanceLogic';
 import { getThemeAccentRgb, loadImageAsDataUrlAndDims } from './ecardPdf';
 import { RECAP_PDF_F4_CONFIG, type RecapPdfColumnSpec } from './recapPdf';
 import { DEFAULT_APP_NAME, DEFAULT_SCHOOL_LOGO } from './seedData';
@@ -78,10 +82,7 @@ function getStatusTextColor(status: string): [number, number, number] {
 }
 
 function getAnalyticsCategory(row: PeriodSummaryRow): string {
-  if (row.totalTercatat === 0) return 'Belum Ada Data';
-  if (row.kehadiranPct >= 90) return 'Sangat Baik';
-  if (row.kehadiranPct >= 75) return 'Baik';
-  return 'Perlu Perhatian';
+  return evaluateAttendanceCategory(row).label;
 }
 
 function slugifyFilePart(value: string): string {
@@ -523,8 +524,8 @@ export async function generateMonthlyAnalyticsPdf(params: {
   let y = 43;
   const kpis = [
     { label: 'Total Siswa', value: String(rows.length), color: [15, 23, 42] as [number, number, number] },
-    { label: 'Rata-rata Hadir', value: `${overview.kehadiranPct}%`, color: [accentR, accentG, accentB] as [number, number, number] },
-    { label: 'Hadir', value: String(overview.hadir), color: [4, 120, 87] as [number, number, number] },
+    { label: 'Skor Kehadiran', value: `${overview.skorKehadiranPct ?? overview.kehadiranPct}%`, color: [accentR, accentG, accentB] as [number, number, number] },
+    { label: 'Tepat Waktu', value: String(overview.hadir), color: [4, 120, 87] as [number, number, number] },
     { label: 'Terlambat', value: String(overview.terlambat), color: [180, 83, 9] as [number, number, number] },
     { label: 'Sakit / Izin', value: `${overview.sakit} / ${overview.izin}`, color: [3, 105, 161] as [number, number, number] },
     { label: 'Alpa', value: String(overview.alpa), color: [190, 18, 60] as [number, number, number] },
@@ -604,6 +605,7 @@ export async function generateMonthlyAnalyticsPdf(params: {
       doc.setLineWidth(0.18);
       doc.rect(marginX, y, contentWidth, rowH, 'S');
 
+      const scorePct = row.skorKehadiranPct ?? row.kehadiranPct;
       const category = getAnalyticsCategory(row);
       const cells = [
         String(idx + 1),
@@ -616,7 +618,7 @@ export async function generateMonthlyAnalyticsPdf(params: {
         String(row.izin),
         String(row.alpa),
         String(row.totalTercatat),
-        `${row.kehadiranPct}%`,
+        `${scorePct}%`,
         category,
       ];
 
@@ -628,6 +630,8 @@ export async function generateMonthlyAnalyticsPdf(params: {
         if (cIdx === 11) {
           if (category === 'Sangat Baik') doc.setTextColor(4, 120, 87);
           else if (category === 'Baik') doc.setTextColor(3, 105, 161);
+          else if (category === 'Cukup') doc.setTextColor(180, 83, 9);
+          else if (category === 'Kurang Baik') doc.setTextColor(194, 65, 12);
           else if (category === 'Perlu Perhatian') doc.setTextColor(190, 18, 60);
           else doc.setTextColor(100, 116, 139);
         } else if (cIdx === 8 && row.alpa > 0) {
@@ -722,7 +726,8 @@ export function exportMonthlyAnalyticsExcel(params: {
     Izin: r.izin,
     Alpa: r.alpa,
     Total: r.totalTercatat,
-    '% Kehadiran': `${r.kehadiranPct}%`,
+    '% Tepat Waktu': `${r.tepatWaktuPct ?? 0}%`,
+    'Skor Kehadiran': `${r.skorKehadiranPct ?? r.kehadiranPct}%`,
     Kategori: getAnalyticsCategory(r),
   }));
 

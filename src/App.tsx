@@ -103,6 +103,7 @@ import {
   playWarningBeep,
   speakCheckoutSuccessNotification,
   speakDuplicateRejectedNotification,
+  speakOfflineAttendanceNotification,
   speakSuccessNotification,
   speakWaliKelasReminder,
   speakWelcomeGreeting,
@@ -1745,7 +1746,12 @@ export default function App() {
     });
 
     if (outcome.ok) {
-      if (outcome.scanType === 'pulang') {
+      const offlineNow = !isBrowserOnline();
+      if (offlineNow) {
+        const speechStatus =
+          outcome.record.status === 'Terlambat' ? 'Terlambat' : 'Hadir';
+        speakOfflineAttendanceNotification(outcome.scanType, speechStatus);
+      } else if (outcome.scanType === 'pulang') {
         speakCheckoutSuccessNotification();
       } else {
         speakSuccessNotification('Presensi Berhasil');

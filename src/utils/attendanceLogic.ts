@@ -760,6 +760,144 @@ export interface PeriodSummaryRow {
   alpa: number;
   totalTercatat: number;
   kehadiranPct: number;
+  tepatWaktuPct: number;
+  skorKehadiranPct: number;
+}
+
+export const ATTENDANCE_SCORE_WEIGHTS = {
+  hadir: 1.0,
+  terlambat: 0.5,
+  sakit: 0.25,
+  izin: 0.25,
+  alpa: 0.0,
+} as const;
+
+export type AttendanceCategoryTier =
+  | 'belum_ada_data'
+  | 'sangat_baik'
+  | 'baik'
+  | 'cukup'
+  | 'kurang_baik'
+  | 'perlu_perhatian';
+
+export interface AttendanceCategoryResult {
+  tier: AttendanceCategoryTier;
+  label: string;
+  shortReason: string;
+}
+
+export interface AttendanceCountsInput {
+  hadir: number;
+  terlambat: number;
+  sakit: number;
+  izin: number;
+  alpa: number;
+  totalTercatat: number;
+  denom?: number;
+}
+
+/**
+ * Computes fair attendance metrics where:
+ * - Hadir tepat waktu = 100% (full credit, required for Sangat Baik)
+ * - Terlambat = 50% (counts as Kurang Baik when late arrivals dominate)
+ * - Sakit / Izin = 25% (fair partial consideration vs unexcused absence)
+ * - Alpa = 0% (unexcused absence)
+ */
+export function computeFairAttendanceScore(input: AttendanceCountsInput): {
+  skorKehadiranPct: number;
+  tepatWaktuPct: number;
+} {
+  const denom = input.denom !== undefined ? input.denom : input.totalTercatat;
+  if (denom <= 0) {
+    return { skorKehadiranPct: 0, tepatWaktuPct: 0 };
+  }
+  const weighted =
+    input.hadir * ATTENDANCE_SCORE_WEIGHTS.hadir +
+    input.terlambat * ATTENDANCE_SCORE_WEIGHTS.terlambat +
+    input.sakit * ATTENDANCE_SCORE_WEIGHTS.sakit +
+    input.izin * ATTENDANCE_SCORE_WEIGHTS.izin +
+    input.alpa * ATTENDANCE_SCORE_WEIGHTS.alpa;
+  const skorKehadiranPct = Math.min(100, Math.max(0, Math.round((weighted / denom) * 100)));
+  const tepatWaktuPct = Math.min(100, Math.max(0, Math.round((input.hadir / denom) * 100)));
+  return { skorKehadiranPct, tepatWaktuPct };
+}
+
+/**
+ * Evaluates a fair 5-tier attendance category:
+ * - Sangat Baik: Hadir tepat waktu >= 90%, skor >= 90%, tanpa Alpa
+ * - Baik: Skor >= 75%, tepat waktu >= 75%, tanpa Alpa, tepat waktu > terlambat
+ * - Cukup: Skor >= 60%, hadir tepat waktu > terlambat, Alpa <= 20%
+ * - Kurang Baik: Hadir namun dominan/sering terlambat (terlambat >= hadir) atau skor 40-59% dengan Alpa < 30%
+ * - Perlu Perhatian: Skor < 40% atau Alpa >= 30%
+ */
+export function evaluateAttendanceCategory(
+  input: AttendanceCountsInput & {
+    skorKehadiranPct?: number;
+    tepatWaktuPct?: number;
+  }
+): AttendanceCategoryResult {
+  if (input.totalTercatat <= 0) {
+    return {
+      tier: 'belum_ada_data',
+      label: 'Belum Ada Data',
+      shortReason: 'Belum ada catatan presensi pada periode ini',
+    };
+  }
+
+  const computed = computeFairAttendanceScore(input);
+  const skorPct = input.skorKehadiranPct ?? computed.skorKehadiranPct;
+  const tepatWaktuPct = input.tepatWaktuPct ?? computed.tepatWaktuPct;
+  const denom = input.denom !== undefined && input.denom > 0 ? input.denom : input.totalTercatat;
+  const alpaPct = Math.round((input.alpa / denom) * 100);
+
+  if (tepatWaktuPct >= 90 && skorPct >= 90 && input.alpa === 0) {
+    return {
+      tier: 'sangat_baik',
+      label: 'Sangat Baik',
+      shortReason: 'Hadir tepat waktu ≥ 90% tanpa alpa',
+    };
+  }
+
+  if (
+    skorPct >= 75 &&
+    tepatWaktuPct >= 75 &&
+    input.alpa === 0 &&
+    input.hadir > input.terlambat
+  ) {
+    return {
+      tier: 'baik',
+      label: 'Baik',
+      shortReason: 'Mayoritas hadir tepat waktu tanpa alpa',
+    };
+  }
+
+  if (skorPct >= 60 && input.hadir > input.terlambat && alpaPct <= 20) {
+    return {
+      tier: 'cukup',
+      label: 'Cukup',
+      shortReason: 'Hadir tepat waktu lebih banyak, namun masih ada keterlambatan/izin/alpa',
+    };
+  }
+
+  if (alpaPct >= 30 || skorPct < 40 || (input.alpa > 0 && skorPct < 55)) {
+    return {
+      tier: 'perlu_perhatian',
+      label: 'Perlu Perhatian',
+      shortReason:
+        input.alpa > 0
+          ? 'Ketidakhadiran tanpa keterangan (Alpa) tinggi'
+          : 'Skor kehadiran rendah, perlu pembinaan',
+    };
+  }
+
+  return {
+    tier: 'kurang_baik',
+    label: 'Kurang Baik',
+    shortReason:
+      input.terlambat > 0 && input.terlambat >= input.hadir
+        ? 'Hadir namun terlambat — kedisiplinan waktu kurang baik'
+        : 'Skor kehadiran masih di bawah standar baik',
+  };
 }
 
 export function buildPeriodSummaryRows(
@@ -789,6 +927,8 @@ export function buildPeriodSummaryRows(
       alpa: 0,
       totalTercatat: 0,
       kehadiranPct: 0,
+      tepatWaktuPct: 0,
+      skorKehadiranPct: 0,
     });
   }
 
@@ -807,6 +947,8 @@ export function buildPeriodSummaryRows(
         alpa: 0,
         totalTercatat: 0,
         kehadiranPct: 0,
+        tepatWaktuPct: 0,
+        skorKehadiranPct: 0,
       };
       map.set(key, row);
     }
@@ -823,7 +965,8 @@ export function buildPeriodSummaryRows(
     const attended = row.hadir + row.terlambat;
     const kehadiranPct =
       row.totalTercatat > 0 ? Math.round((attended / row.totalTercatat) * 100) : 0;
-    return { ...row, kehadiranPct };
+    const { skorKehadiranPct, tepatWaktuPct } = computeFairAttendanceScore(row);
+    return { ...row, kehadiranPct, tepatWaktuPct, skorKehadiranPct };
   });
 
   return rows.sort((a, b) => a.kelas.localeCompare(b.kelas) || a.nama.localeCompare(b.nama));
@@ -977,6 +1120,8 @@ export interface PeriodAnalyticsOverview {
   totalTercatat: number;
   activeDays: number;
   kehadiranPct: number;
+  tepatWaktuPct: number;
+  skorKehadiranPct: number;
 }
 
 export interface ClassAnalyticsRow {
@@ -989,6 +1134,8 @@ export interface ClassAnalyticsRow {
   alpa: number;
   totalTercatat: number;
   kehadiranPct: number;
+  tepatWaktuPct: number;
+  skorKehadiranPct: number;
 }
 
 export interface AttendanceAnalyticsResult {
@@ -1042,13 +1189,22 @@ function summarizePeriodRecords(params: {
   const belumAbsen =
     period === 'harian' ? Math.max(0, students.length - totalTercatat) : 0;
 
-  let kehadiranPct = 0;
-  if (period === 'harian') {
-    const denom = students.length > 0 ? students.length : totalTercatat;
-    kehadiranPct = denom > 0 ? Math.round((attended / denom) * 100) : 0;
-  } else {
-    kehadiranPct = totalTercatat > 0 ? Math.round((attended / totalTercatat) * 100) : 0;
-  }
+  const denom =
+    period === 'harian'
+      ? students.length > 0
+        ? students.length
+        : totalTercatat
+      : totalTercatat;
+  const kehadiranPct = denom > 0 ? Math.round((attended / denom) * 100) : 0;
+  const { skorKehadiranPct, tepatWaktuPct } = computeFairAttendanceScore({
+    hadir,
+    terlambat,
+    sakit,
+    izin,
+    alpa,
+    totalTercatat,
+    denom,
+  });
 
   return {
     period,
@@ -1067,6 +1223,8 @@ function summarizePeriodRecords(params: {
     totalTercatat,
     activeDays: activeDateSet.size,
     kehadiranPct,
+    tepatWaktuPct,
+    skorKehadiranPct,
   };
 }
 
@@ -1179,6 +1337,8 @@ export function computeAttendanceAnalytics(params: {
         alpa: 0,
         totalTercatat: 0,
         kehadiranPct: 0,
+        tepatWaktuPct: 0,
+        skorKehadiranPct: 0,
       });
     }
     classMap.get(cls)!.totalSiswa++;
@@ -1197,6 +1357,8 @@ export function computeAttendanceAnalytics(params: {
         alpa: 0,
         totalTercatat: 0,
         kehadiranPct: 0,
+        tepatWaktuPct: 0,
+        skorKehadiranPct: 0,
       });
     }
     const target = classMap.get(cls)!;
@@ -1217,21 +1379,53 @@ export function computeAttendanceAnalytics(params: {
             ? c.totalSiswa
             : c.totalTercatat
           : c.totalTercatat;
+      const { skorKehadiranPct, tepatWaktuPct } = computeFairAttendanceScore({
+        hadir: c.hadir,
+        terlambat: c.terlambat,
+        sakit: c.sakit,
+        izin: c.izin,
+        alpa: c.alpa,
+        totalTercatat: c.totalTercatat,
+        denom,
+      });
       return {
         ...c,
         kehadiranPct: denom > 0 ? Math.round((attended / denom) * 100) : 0,
+        tepatWaktuPct,
+        skorKehadiranPct,
       };
     })
-    .sort((a, b) => b.kehadiranPct - a.kehadiranPct || a.kelas.localeCompare(b.kelas));
+    .sort(
+      (a, b) =>
+        b.skorKehadiranPct - a.skorKehadiranPct ||
+        b.tepatWaktuPct - a.tepatWaktuPct ||
+        a.kelas.localeCompare(b.kelas)
+    );
 
   const attentionStudents = studentRows
-    .filter((r) => (r.totalTercatat > 0 && r.kehadiranPct < 80) || r.alpa > 0)
-    .sort((a, b) => a.kehadiranPct - b.kehadiranPct || b.alpa - a.alpa || a.nama.localeCompare(b.nama))
+    .filter((r) => {
+      if (r.totalTercatat <= 0) return false;
+      const cat = evaluateAttendanceCategory(r);
+      return cat.tier === 'kurang_baik' || cat.tier === 'perlu_perhatian' || r.alpa > 0;
+    })
+    .sort(
+      (a, b) =>
+        a.skorKehadiranPct - b.skorKehadiranPct ||
+        b.alpa - a.alpa ||
+        b.terlambat - a.terlambat ||
+        a.nama.localeCompare(b.nama)
+    )
     .slice(0, 6);
 
   const topStudents = studentRows
-    .filter((r) => r.totalTercatat > 0 && r.kehadiranPct >= 90)
-    .sort((a, b) => b.kehadiranPct - a.kehadiranPct || b.hadir - a.hadir || a.nama.localeCompare(b.nama))
+    .filter((r) => evaluateAttendanceCategory(r).tier === 'sangat_baik')
+    .sort(
+      (a, b) =>
+        b.tepatWaktuPct - a.tepatWaktuPct ||
+        b.skorKehadiranPct - a.skorKehadiranPct ||
+        b.hadir - a.hadir ||
+        a.nama.localeCompare(b.nama)
+    )
     .slice(0, 5);
 
   return {

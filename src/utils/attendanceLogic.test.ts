@@ -15,6 +15,8 @@ import {
   normalizeScheduleMode,
   getAcademicYearDateRange,
   computeAttendanceAnalytics,
+  computeFairAttendanceScore,
+  evaluateAttendanceCategory,
   isBeforeCheckoutTime,
 } from './attendanceLogic';
 import type { AttendanceRecord, Student } from '../types';
@@ -616,6 +618,180 @@ test('determineAttendanceStatus handles dot-separated & AM/PM cutoff formats and
   assert.equal(lateEarlyOut.record.status, 'Terlambat');
   assert.equal(lateEarlyOut.record.alasan_pulang_cepat, 'Izin keperluan keluarga');
 });
+
+test('computeFairAttendanceScore & evaluateAttendanceCategory reward on-time Hadir as Sangat Baik and penalize Terlambat as Kurang Baik fairly across all categories', () => {
+  // 1. 100% Hadir Tepat Waktu => 100% score, Sangat Baik
+  const onTimeOnly = computeFairAttendanceScore({
+    hadir: 10,
+    terlambat: 0,
+    sakit: 0,
+    izin: 0,
+    alpa: 0,
+    totalTercatat: 10,
+  });
+  assert.equal(onTimeOnly.skorKehadiranPct, 100);
+  assert.equal(onTimeOnly.tepatWaktuPct, 100);
+  assert.equal(
+    evaluateAttendanceCategory({
+      hadir: 10,
+      terlambat: 0,
+      sakit: 0,
+      izin: 0,
+      alpa: 0,
+      totalTercatat: 10,
+    }).label,
+    'Sangat Baik'
+  );
+
+  // 2. 100% Hadir tapi Terlambat => 50% score, Kurang Baik (NEVER Sangat Baik!)
+  const lateOnly = computeFairAttendanceScore({
+    hadir: 0,
+    terlambat: 5,
+    sakit: 0,
+    izin: 0,
+    alpa: 0,
+    totalTercatat: 5,
+  });
+  assert.equal(lateOnly.skorKehadiranPct, 50);
+  assert.equal(lateOnly.tepatWaktuPct, 0);
+  assert.equal(
+    evaluateAttendanceCategory({
+      hadir: 0,
+      terlambat: 5,
+      sakit: 0,
+      izin: 0,
+      alpa: 0,
+      totalTercatat: 5,
+    }).label,
+    'Kurang Baik'
+  );
+
+  // 3. Single day Terlambat => Kurang Baik
+  assert.equal(
+    evaluateAttendanceCategory({
+      hadir: 0,
+      terlambat: 1,
+      sakit: 0,
+      izin: 0,
+      alpa: 0,
+      totalTercatat: 1,
+    }).label,
+    'Kurang Baik'
+  );
+
+  // 4. More late than on-time (2 Hadir, 3 Terlambat) => Kurang Baik
+  assert.equal(
+    evaluateAttendanceCategory({
+      hadir: 2,
+      terlambat: 3,
+      sakit: 0,
+      izin: 0,
+      alpa: 0,
+      totalTercatat: 5,
+    }).label,
+    'Kurang Baik'
+  );
+
+  // 5. 80% on-time + 20% Terlambat (8H, 2T) => Baik (NOT Sangat Baik, since on-time < 90%)
+  assert.equal(
+    evaluateAttendanceCategory({
+      hadir: 8,
+      terlambat: 2,
+      sakit: 0,
+      izin: 0,
+      alpa: 0,
+      totalTercatat: 10,
+    }).label,
+    'Baik'
+  );
+
+  // 6. Fair distinction between Sakit/Izin vs Alpa:
+  //    8H + 2S (0 Alpa) => 85% score, Baik
+  //    8H + 2A (20% Alpa) => 80% score, Cukup (cannot be Baik with Alpa!)
+  const sickCase = computeFairAttendanceScore({
+    hadir: 8,
+    terlambat: 0,
+    sakit: 2,
+    izin: 0,
+    alpa: 0,
+    totalTercatat: 10,
+  });
+  const alpaCase = computeFairAttendanceScore({
+    hadir: 8,
+    terlambat: 0,
+    sakit: 0,
+    izin: 0,
+    alpa: 2,
+    totalTercatat: 10,
+  });
+  assert.ok(sickCase.skorKehadiranPct > alpaCase.skorKehadiranPct);
+  assert.equal(
+    evaluateAttendanceCategory({
+      hadir: 8,
+      terlambat: 0,
+      sakit: 2,
+      izin: 0,
+      alpa: 0,
+      totalTercatat: 10,
+    }).label,
+    'Baik'
+  );
+  assert.equal(
+    evaluateAttendanceCategory({
+      hadir: 8,
+      terlambat: 0,
+      sakit: 0,
+      izin: 0,
+      alpa: 2,
+      totalTercatat: 10,
+    }).label,
+    'Cukup'
+  );
+
+  // 7. Heavy Alpa => Perlu Perhatian
+  assert.equal(
+    evaluateAttendanceCategory({
+      hadir: 2,
+      terlambat: 0,
+      sakit: 0,
+      izin: 0,
+      alpa: 8,
+      totalTercatat: 10,
+    }).label,
+    'Perlu Perhatian'
+  );
+
+  // 8. computeAttendanceAnalytics excludes late-only students from topStudents and includes them in attentionStudents
+  const analytics = computeAttendanceAnalytics({
+    students: sampleStudents,
+    records: [
+      { id: 'f1', tanggal: '2026-11-20', nis: '2026001', nama: 'Ahmad Fauzi', kelas: 'X IPA 1', jam_masuk: '07:00:00', status: 'Hadir' },
+      { id: 'f2', tanggal: '2026-11-20', nis: '2026002', nama: 'Siti Rahma', kelas: 'X IPA 1', jam_masuk: '07:35:00', status: 'Terlambat' },
+      { id: 'f3', tanggal: '2026-11-20', nis: '2026003', nama: 'Budi Santoso', kelas: 'XI IPS 2', jam_masuk: '-', status: 'Alpa' },
+    ],
+    selectedPeriod: 'bulanan',
+    date: '2026-11-20',
+    month: '2026-11',
+    semester: 'ganjil',
+    semesterYear: 2026,
+    academicYear: '2026/2027',
+  });
+
+  // Ahmad (100% Hadir) is in topStudents; Siti (100% Terlambat) is NOT in topStudents, IS in attentionStudents!
+  assert.deepEqual(
+    analytics.topStudents.map((s) => s.nis),
+    ['2026001']
+  );
+  assert.ok(analytics.attentionStudents.some((s) => s.nis === '2026002'));
+  assert.ok(analytics.attentionStudents.some((s) => s.nis === '2026003'));
+
+  const sitiRow = analytics.studentRows.find((r) => r.nis === '2026002');
+  assert.ok(sitiRow);
+  assert.equal(sitiRow.skorKehadiranPct, 50);
+  assert.equal(sitiRow.tepatWaktuPct, 0);
+  assert.equal(evaluateAttendanceCategory(sitiRow).label, 'Kurang Baik');
+});
+
 
 
 

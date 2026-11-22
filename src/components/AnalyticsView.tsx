@@ -22,7 +22,9 @@ import type {
 } from '../types';
 import {
   computeAttendanceAnalytics,
+  evaluateAttendanceCategory,
   getTodayDateString,
+  type AttendanceCategoryTier,
   type PeriodSummaryRow,
 } from '../utils/attendanceLogic';
 import {
@@ -58,36 +60,53 @@ const PERIOD_ORDER: AnalyticsPeriodType[] = [
   'tahunan',
 ];
 
-function getPctBadge(row: PeriodSummaryRow): { label: string; className: string } {
-  if (row.totalTercatat === 0) {
-    return {
-      label: 'Belum Ada Data',
-      className: 'bg-slate-100 text-slate-600 border-slate-200',
-    };
+function getTierBadgeStyle(tier: AttendanceCategoryTier): string {
+  switch (tier) {
+    case 'sangat_baik':
+      return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    case 'baik':
+      return 'bg-sky-50 text-sky-700 border-sky-200';
+    case 'cukup':
+      return 'bg-amber-50 text-amber-700 border-amber-200';
+    case 'kurang_baik':
+      return 'bg-orange-50 text-orange-700 border-orange-200';
+    case 'perlu_perhatian':
+      return 'bg-rose-50 text-rose-700 border-rose-200';
+    default:
+      return 'bg-slate-100 text-slate-600 border-slate-200';
   }
-  if (row.kehadiranPct >= 90) {
-    return {
-      label: 'Sangat Baik',
-      className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    };
-  }
-  if (row.kehadiranPct >= 75) {
-    return {
-      label: 'Baik',
-      className: 'bg-sky-50 text-sky-700 border-sky-200',
-    };
-  }
-  return {
-    label: 'Perlu Perhatian',
-    className: 'bg-rose-50 text-rose-700 border-rose-200',
-  };
 }
 
-function getBarColorClass(pct: number): string {
-  if (pct >= 90) return 'bg-emerald-500';
-  if (pct >= 75) return 'bg-indigo-500';
-  if (pct >= 50) return 'bg-amber-500';
-  return 'bg-rose-500';
+function getTierBarColorClass(tier: AttendanceCategoryTier): string {
+  switch (tier) {
+    case 'sangat_baik':
+      return 'bg-emerald-500';
+    case 'baik':
+      return 'bg-sky-500';
+    case 'cukup':
+      return 'bg-amber-400';
+    case 'kurang_baik':
+      return 'bg-orange-500';
+    case 'perlu_perhatian':
+      return 'bg-rose-500';
+    default:
+      return 'bg-slate-300';
+  }
+}
+
+function getPctBadge(row: PeriodSummaryRow): {
+  label: string;
+  className: string;
+  tier: AttendanceCategoryTier;
+  shortReason: string;
+} {
+  const result = evaluateAttendanceCategory(row);
+  return {
+    label: result.label,
+    tier: result.tier,
+    shortReason: result.shortReason,
+    className: getTierBadgeStyle(result.tier),
+  };
 }
 
 export function AnalyticsView({
@@ -181,14 +200,16 @@ export function AnalyticsView({
     list.sort((a, b) => {
       if (sortBy === 'pct_desc') {
         return (
-          b.kehadiranPct - a.kehadiranPct ||
+          b.skorKehadiranPct - a.skorKehadiranPct ||
+          b.tepatWaktuPct - a.tepatWaktuPct ||
           b.totalTercatat - a.totalTercatat ||
           a.nama.localeCompare(b.nama)
         );
       }
       if (sortBy === 'pct_asc') {
         return (
-          a.kehadiranPct - b.kehadiranPct ||
+          a.skorKehadiranPct - b.skorKehadiranPct ||
+          a.tepatWaktuPct - b.tepatWaktuPct ||
           b.alpa - a.alpa ||
           a.nama.localeCompare(b.nama)
         );
@@ -197,7 +218,7 @@ export function AnalyticsView({
         return (
           b.alpa - a.alpa ||
           b.terlambat - a.terlambat ||
-          a.kehadiranPct - b.kehadiranPct ||
+          a.skorKehadiranPct - b.skorKehadiranPct ||
           a.nama.localeCompare(b.nama)
         );
       }
@@ -335,6 +356,20 @@ export function AnalyticsView({
           {PERIOD_ORDER.map((periodKey) => {
             const ov = analytics.overviews[periodKey];
             const isSelected = selectedPeriod === periodKey;
+            const ovCategory = evaluateAttendanceCategory({
+              hadir: ov.hadir,
+              terlambat: ov.terlambat,
+              sakit: ov.sakit,
+              izin: ov.izin,
+              alpa: ov.alpa,
+              totalTercatat: ov.totalTercatat,
+              denom:
+                ov.period === 'harian' && ov.totalSiswa > 0
+                  ? ov.totalSiswa
+                  : ov.totalTercatat,
+              skorKehadiranPct: ov.skorKehadiranPct,
+              tepatWaktuPct: ov.tepatWaktuPct,
+            });
             return (
               <button
                 key={periodKey}
@@ -363,19 +398,28 @@ export function AnalyticsView({
                   </span>
                 </div>
 
-                <div className="mt-2.5 flex items-baseline gap-1.5">
-                  <span className="text-3xl font-bold tracking-tight font-mono tabular-nums text-slate-900">
-                    {ov.kehadiranPct}%
+                <div className="mt-2.5 flex items-baseline justify-between gap-1.5">
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-3xl font-bold tracking-tight font-mono tabular-nums text-slate-900">
+                      {ov.skorKehadiranPct}%
+                    </span>
+                    <span className="text-[11px] text-slate-500">skor</span>
+                  </div>
+                  <span
+                    className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-md border ${getTierBadgeStyle(
+                      ovCategory.tier
+                    )}`}
+                  >
+                    {ovCategory.label}
                   </span>
-                  <span className="text-[11px] text-slate-500">hadir</span>
                 </div>
 
                 <div className="mt-2.5 h-1.5 w-full rounded-full bg-slate-200/70 overflow-hidden">
                   <div
-                    className={`h-full rounded-full transition-all duration-300 ${getBarColorClass(
-                      ov.kehadiranPct
+                    className={`h-full rounded-full transition-all duration-300 ${getTierBarColorClass(
+                      ovCategory.tier
                     )}`}
-                    style={{ width: `${Math.min(100, Math.max(0, ov.kehadiranPct))}%` }}
+                    style={{ width: `${Math.min(100, Math.max(0, ov.skorKehadiranPct))}%` }}
                   />
                 </div>
 
@@ -383,7 +427,8 @@ export function AnalyticsView({
                   {ov.subtitle}
                 </p>
                 <p className="mt-0.5 text-[11px] font-mono tabular-nums text-slate-600">
-                  H:{ov.hadir} · T:{ov.terlambat} · S/I/A:{ov.sakit + ov.izin + ov.alpa}
+                  H:{ov.hadir} ({ov.tepatWaktuPct}%) · T:{ov.terlambat} · S/I/A:
+                  {ov.sakit + ov.izin + ov.alpa}
                 </p>
               </button>
             );
@@ -503,7 +548,7 @@ export function AnalyticsView({
                   Perbandingan Persentase Kehadiran
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Grafik persentase hadir (tepat waktu + terlambat) dari Harian hingga Tahunan
+                  Skor adil berbasis ketepatan waktu (Hadir 100%, Terlambat 50%, Sakit/Izin 25%, Alpa 0%)
                 </p>
               </div>
             </div>
@@ -551,10 +596,11 @@ export function AnalyticsView({
                   <p className="font-semibold text-slate-900">{exp.headline}</p>
                   <p className="text-slate-700">{exp.dynamicSummary}</p>
                   <p className="text-[11px] text-slate-600">
-                    <strong className="text-slate-800">Rumus:</strong> {exp.formulaNote}
+                    <strong className="text-slate-800">Penilaian Adil:</strong> {exp.formulaNote}
                   </p>
                   <p className="text-[11px] text-slate-600">
-                    <strong className="text-slate-800">Arti Warna:</strong> {exp.colorLegend}
+                    <strong className="text-slate-800">Kategori &amp; Warna:</strong>{' '}
+                    {exp.colorLegend}
                   </p>
                   <p className="text-[11px] text-indigo-700">{exp.interactionHint}</p>
                 </div>
@@ -567,7 +613,21 @@ export function AnalyticsView({
             {PERIOD_ORDER.map((periodKey) => {
               const ov = analytics.overviews[periodKey];
               const isSelected = selectedPeriod === periodKey;
-              const barHeightPct = Math.max(6, ov.kehadiranPct);
+              const ovCategory = evaluateAttendanceCategory({
+                hadir: ov.hadir,
+                terlambat: ov.terlambat,
+                sakit: ov.sakit,
+                izin: ov.izin,
+                alpa: ov.alpa,
+                totalTercatat: ov.totalTercatat,
+                denom:
+                  ov.period === 'harian' && ov.totalSiswa > 0
+                    ? ov.totalSiswa
+                    : ov.totalTercatat,
+                skorKehadiranPct: ov.skorKehadiranPct,
+                tepatWaktuPct: ov.tepatWaktuPct,
+              });
+              const barHeightPct = Math.max(6, ov.skorKehadiranPct);
               return (
                 <button
                   key={periodKey}
@@ -580,12 +640,14 @@ export function AnalyticsView({
                       isSelected ? 'text-indigo-700' : 'text-slate-700'
                     }`}
                   >
-                    {ov.kehadiranPct}%
+                    {ov.skorKehadiranPct}%
                   </span>
                   <div className="w-full max-w-[54px] h-28 rounded-xl bg-slate-100 flex items-end overflow-hidden p-1">
                     <div
                       className={`w-full rounded-lg transition-all duration-300 ${
-                        isSelected ? 'bg-indigo-600' : getBarColorClass(ov.kehadiranPct)
+                        isSelected
+                          ? 'bg-indigo-600'
+                          : getTierBarColorClass(ovCategory.tier)
                       }`}
                       style={{ height: `${barHeightPct}%` }}
                     />
@@ -706,32 +768,58 @@ export function AnalyticsView({
               </p>
             ) : (
               <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
-                {analytics.classAnalytics.map((cls) => (
-                  <div key={cls.kelas} className="space-y-1.5">
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="font-semibold text-slate-900 truncate">
-                        {cls.kelas}{' '}
-                        <span className="font-normal text-slate-500">
-                          ({cls.totalSiswa} siswa)
+                {analytics.classAnalytics.map((cls) => {
+                  const clsCategory = evaluateAttendanceCategory({
+                    hadir: cls.hadir,
+                    terlambat: cls.terlambat,
+                    sakit: cls.sakit,
+                    izin: cls.izin,
+                    alpa: cls.alpa,
+                    totalTercatat: cls.totalTercatat,
+                    denom:
+                      selectedPeriod === 'harian' && cls.totalSiswa > 0
+                        ? cls.totalSiswa
+                        : cls.totalTercatat,
+                    skorKehadiranPct: cls.skorKehadiranPct,
+                    tepatWaktuPct: cls.tepatWaktuPct,
+                  });
+                  return (
+                    <div key={cls.kelas} className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span className="font-semibold text-slate-900 truncate">
+                          {cls.kelas}{' '}
+                          <span className="font-normal text-slate-500">
+                            ({cls.totalSiswa} siswa)
+                          </span>
                         </span>
-                      </span>
-                      <span className="font-mono tabular-nums font-bold text-slate-800">
-                        {cls.kehadiranPct}%
-                      </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span
+                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-md border ${getTierBadgeStyle(
+                              clsCategory.tier
+                            )}`}
+                          >
+                            {clsCategory.label}
+                          </span>
+                          <span className="font-mono tabular-nums font-bold text-slate-800">
+                            {cls.skorKehadiranPct}%
+                          </span>
+                        </div>
+                      </div>
+                      <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${getTierBarColorClass(
+                            clsCategory.tier
+                          )}`}
+                          style={{ width: `${Math.min(100, cls.skorKehadiranPct)}%` }}
+                        />
+                      </div>
+                      <p className="text-[11px] font-mono tabular-nums text-slate-500">
+                        H:{cls.hadir} ({cls.tepatWaktuPct}%) · T:{cls.terlambat} · S:{cls.sakit} · I:
+                        {cls.izin} · A:{cls.alpa}
+                      </p>
                     </div>
-                    <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-300 ${getBarColorClass(
-                          cls.kehadiranPct
-                        )}`}
-                        style={{ width: `${Math.min(100, cls.kehadiranPct)}%` }}
-                      />
-                    </div>
-                    <p className="text-[11px] font-mono tabular-nums text-slate-500">
-                      H:{cls.hadir} · T:{cls.terlambat} · S:{cls.sakit} · I:{cls.izin} · A:{cls.alpa}
-                    </p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>
@@ -755,35 +843,45 @@ export function AnalyticsView({
               <div>
                 <h2 className="text-sm font-semibold text-slate-900">
                   {analytics.attentionStudents.length > 0
-                    ? `Siswa Perlu Perhatian (${analytics.attentionStudents.length})`
-                    : 'Kehadiran Siswa Terbaik'}
+                    ? `Siswa Kurang Baik / Perlu Perhatian (${analytics.attentionStudents.length})`
+                    : 'Kehadiran Tepat Waktu Terbaik'}
                 </h2>
                 <p className="text-xs text-slate-500">
                   {analytics.attentionStudents.length > 0
-                    ? 'Kehadiran di bawah 80% atau memiliki catatan Alpa pada periode ini'
-                    : 'Siswa dengan tingkat kehadiran tertinggi pada periode terpilih'}
+                    ? 'Siswa yang sering terlambat, memiliki catatan Alpa, atau skor kehadiran rendah'
+                    : 'Siswa kategori Sangat Baik (hadir tepat waktu ≥ 90% tanpa Alpa)'}
                 </p>
               </div>
             </div>
 
             {analytics.attentionStudents.length > 0 ? (
               <ul className="divide-y divide-slate-100">
-                {analytics.attentionStudents.map((s) => (
-                  <li
-                    key={s.nis}
-                    className="py-2.5 flex items-center justify-between gap-3 text-xs"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-semibold text-slate-900 truncate">{s.nama}</p>
-                      <p className="text-[11px] text-slate-500 font-mono">
-                        {s.nis} · {s.kelas} · Alpa: {s.alpa}
-                      </p>
-                    </div>
-                    <span className="px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 font-mono tabular-nums font-bold shrink-0">
-                      {s.kehadiranPct}%
-                    </span>
-                  </li>
-                ))}
+                {analytics.attentionStudents.map((s) => {
+                  const badge = getPctBadge(s);
+                  return (
+                    <li
+                      key={s.nis}
+                      className="py-2.5 flex items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-900 truncate">{s.nama}</p>
+                        <p className="text-[11px] text-slate-500 font-mono">
+                          {s.nis} · {s.kelas} · Telat: {s.terlambat} · Alpa: {s.alpa}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className={`px-2 py-0.5 rounded-lg border text-[10px] font-semibold ${badge.className}`}
+                        >
+                          {badge.label}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 font-mono tabular-nums font-bold">
+                          {s.skorKehadiranPct}%
+                        </span>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             ) : analytics.topStudents.length > 0 ? (
               <ul className="divide-y divide-slate-100">
@@ -795,11 +893,11 @@ export function AnalyticsView({
                     <div className="min-w-0">
                       <p className="font-semibold text-slate-900 truncate">{s.nama}</p>
                       <p className="text-[11px] text-slate-500 font-mono">
-                        {s.nis} · {s.kelas} · Hadir: {s.hadir}
+                        {s.nis} · {s.kelas} · Tepat Waktu: {s.hadir} ({s.tepatWaktuPct}%)
                       </p>
                     </div>
                     <span className="px-2.5 py-1 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 font-mono tabular-nums font-bold shrink-0">
-                      {s.kehadiranPct}%
+                      {s.skorKehadiranPct}%
                     </span>
                   </li>
                 ))}
@@ -852,9 +950,9 @@ export function AnalyticsView({
               aria-label="Urutkan tabel analisis siswa"
               className="rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 focus:border-indigo-500 focus:outline-none"
             >
-              <option value="pct_desc">% Kehadiran Tertinggi</option>
-              <option value="pct_asc">% Kehadiran Terendah</option>
-              <option value="alpa_desc">Alpa Terbanyak</option>
+              <option value="pct_desc">Skor Kehadiran Tertinggi</option>
+              <option value="pct_asc">Skor Kehadiran Terendah</option>
+              <option value="alpa_desc">Alpa &amp; Terlambat Terbanyak</option>
               <option value="nama_asc">Nama Siswa (A–Z)</option>
             </select>
 
@@ -898,7 +996,7 @@ export function AnalyticsView({
                 <th className="py-3 px-3 text-center">Izin</th>
                 <th className="py-3 px-3 text-center">Alpa</th>
                 <th className="py-3 px-3 text-center">Total</th>
-                <th className="py-3 px-4 min-w-[140px]">% Kehadiran</th>
+                <th className="py-3 px-4 min-w-[150px]">Skor Kehadiran</th>
                 <th className="py-3 px-4">Kategori</th>
               </tr>
             </thead>
@@ -945,22 +1043,30 @@ export function AnalyticsView({
                         {row.totalTercatat}
                       </td>
                       <td className="py-3 px-4">
-                        <div className="flex items-center gap-2.5">
-                          <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${getBarColorClass(
-                                row.kehadiranPct
-                              )}`}
-                              style={{ width: `${Math.min(100, row.kehadiranPct)}%` }}
-                            />
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${getTierBarColorClass(
+                                  badge.tier
+                                )}`}
+                                style={{ width: `${Math.min(100, row.skorKehadiranPct)}%` }}
+                              />
+                            </div>
+                            <span className="font-mono tabular-nums text-xs font-bold text-slate-800 w-10 text-right">
+                              {row.skorKehadiranPct}%
+                            </span>
                           </div>
-                          <span className="font-mono tabular-nums text-xs font-bold text-slate-800 w-10 text-right">
-                            {row.kehadiranPct}%
-                          </span>
+                          {row.totalTercatat > 0 && (
+                            <p className="text-[10px] font-mono tabular-nums text-slate-500">
+                              Tepat waktu: {row.tepatWaktuPct}%
+                            </p>
+                          )}
                         </div>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
                         <span
+                          title={badge.shortReason}
                           className={`inline-flex items-center px-2.5 py-0.5 rounded-lg border text-[11px] font-semibold ${badge.className}`}
                         >
                           {badge.label}

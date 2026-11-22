@@ -16,43 +16,88 @@ const INDONESIAN_LANG_REGEX = /^(id|in|ind)($|[-_])/i;
 const MALAY_LANG_REGEX = /^(ms|msa)($|[-_])/i;
 
 const FEMALE_VOICE_HINT =
-  /female|woman|wanita|perempuan|gadis|damayanti|siti|ayu|putri|melati|lina|dewi|id[-_]id[-_]x[-_]id[cef]|google bahasa indonesia/i;
+  /female|woman|wanita|perempuan|gadis|damayanti|siti|ayu|putri|melati|lina|dewi|nisa|intan|maya|kartini|yasmin|id[-_]id[-_]x[-_]id[cef]|id[-_]id[-_]x[-_]dfz|wavenet[-_][ad]|standard[-_][ad]|neural2[-_][ad]|google bahasa indonesia/i;
 
 const MALE_VOICE_HINT =
-  /\bmale\b|\bman\b|pria|laki|ardi|andika|budi|id[-_]id[-_]x[-_]id[dg]/i;
+  /\bmale\b|\bman\b|pria|laki|ardi|andika|budi|osman|david|mark|george|daniel|alex|fred|rishi|aaron|arthur|james|id[-_]id[-_]x[-_]id[dg]|wavenet[-_][bc]|standard[-_][bc]|neural2[-_][bc]/i;
 
 export function isIndonesianLangTag(lang: string): boolean {
   return INDONESIAN_LANG_REGEX.test((lang || '').trim());
 }
 
+export function isVoiceOfflineContext(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return navigator.onLine === false;
+}
+
+export interface PickVoiceOptions {
+  isOffline?: boolean;
+}
+
 /**
  * Selects the best female Indonesian voice across Desktop, Android (Chrome/Samsung TTS),
- * and iOS/iPadOS (Safari Damayanti). Never hijacks Indonesian text with an English voice.
+ * and iOS/iPadOS (Safari Damayanti).
+ *
+ * When offline (`isOffline: true`), strictly avoids cloud-only (`localService: false`)
+ * voices such as "Google Bahasa Indonesia" that fail offline and cause browsers to
+ * silently fall back to an English/male OS default voice (e.g. Microsoft David).
+ * Never hijacks Indonesian text with an English voice.
  */
 export function pickFemaleIndonesianVoice<T extends VoiceLike>(
-  voices: T[]
+  voices: T[],
+  options?: PickVoiceOptions
 ): { voice: T | null; isExplicitFemale: boolean } {
   if (!voices || voices.length === 0) {
     return { voice: null, isExplicitFemale: false };
   }
 
+  const isOffline = options?.isOffline ?? false;
   const indonesianVoices = voices.filter((v) => isIndonesianLangTag(v.lang));
+  const localIndonesianVoices = indonesianVoices.filter((v) => v.localService !== false);
 
-  // 1. Explicit Indonesian female voice (prefer localService on mobile for reliability, then any)
-  const idFemaleLocal = indonesianVoices.find(
-    (v) =>
-      v.localService !== false &&
-      FEMALE_VOICE_HINT.test(v.name) &&
-      !MALE_VOICE_HINT.test(v.name)
+  // 1. Explicit Indonesian female local voice (always #1 for both online & offline reliability)
+  const idFemaleLocal = localIndonesianVoices.find(
+    (v) => FEMALE_VOICE_HINT.test(v.name) && !MALE_VOICE_HINT.test(v.name)
   );
   if (idFemaleLocal) return { voice: idFemaleLocal, isExplicitFemale: true };
 
+  if (isOffline) {
+    // 2 (Offline). Non-male local Indonesian voice (e.g. Android/Samsung/Windows local id-ID)
+    const idNonMaleLocal = localIndonesianVoices.find((v) => !MALE_VOICE_HINT.test(v.name));
+    if (idNonMaleLocal) return { voice: idNonMaleLocal, isExplicitFemale: false };
+
+    // 3 (Offline). Local Malay female/non-male voice (pronounces Indonesian cleanly offline)
+    const localMalayVoices = voices.filter(
+      (v) => v.localService !== false && MALAY_LANG_REGEX.test((v.lang || '').trim())
+    );
+    const msFemaleLocal = localMalayVoices.find(
+      (v) => FEMALE_VOICE_HINT.test(v.name) && !MALE_VOICE_HINT.test(v.name)
+    );
+    if (msFemaleLocal) return { voice: msFemaleLocal, isExplicitFemale: true };
+
+    const msNonMaleLocal = localMalayVoices.find((v) => !MALE_VOICE_HINT.test(v.name));
+    if (msNonMaleLocal) return { voice: msNonMaleLocal, isExplicitFemale: false };
+
+    // 4 (Offline). Any local Indonesian voice (will be pitch-adjusted upward for female contour)
+    if (localIndonesianVoices.length > 0) {
+      return { voice: localIndonesianVoices[0], isExplicitFemale: false };
+    }
+
+    // 5 (Offline). Never choose a cloud-only voice or English voice when offline;
+    // return null so utterance.lang = 'id-ID' lets the OS native Indonesian engine handle it.
+    return { voice: null, isExplicitFemale: false };
+  }
+
+  // Online priority: explicit Indonesian female voice (including Google Bahasa Indonesia cloud)
   const idFemaleAny = indonesianVoices.find(
     (v) => FEMALE_VOICE_HINT.test(v.name) && !MALE_VOICE_HINT.test(v.name)
   );
   if (idFemaleAny) return { voice: idFemaleAny, isExplicitFemale: true };
 
-  // 2. Non-male Indonesian voice (Android default Indonesian voice is typically female)
+  // 2. Non-male Indonesian voice (prefer local first, then any)
+  const idNonMaleLocal = localIndonesianVoices.find((v) => !MALE_VOICE_HINT.test(v.name));
+  if (idNonMaleLocal) return { voice: idNonMaleLocal, isExplicitFemale: false };
+
   const idNonMale = indonesianVoices.find((v) => !MALE_VOICE_HINT.test(v.name));
   if (idNonMale) return { voice: idNonMale, isExplicitFemale: false };
 
@@ -103,22 +148,34 @@ function refreshVoices(): SpeechSynthesisVoice[] {
 
 function createIndonesianFemaleUtterance(
   text: string,
-  rate = 0.96
-): SpeechSynthesisUtterance {
+  rate = 0.96,
+  options?: { forceOfflineLocal?: boolean }
+): { utterance: SpeechSynthesisUtterance; isLocalVoice: boolean } {
   const utterance = new SpeechSynthesisUtterance(text);
   const voices = refreshVoices();
-  const { voice, isExplicitFemale } = pickFemaleIndonesianVoice(voices);
+  const useOfflineMode = options?.forceOfflineLocal ?? isVoiceOfflineContext();
+  const { voice, isExplicitFemale } = pickFemaleIndonesianVoice(voices, {
+    isOffline: useOfflineMode,
+  });
 
   utterance.lang = voice?.lang || 'id-ID';
-  utterance.rate = rate;
+  // Slightly calmer rate offline so local OS Indonesian TTS articulates every syllable clearly
+  utterance.rate = useOfflineMode ? Math.min(rate, 0.95) : rate;
   // Use natural female pitch when an explicit female voice (e.g. Damayanti/Gadis/idc) is active,
-  // and slightly elevated female contour on generic voices so mobile engines stay clear.
-  utterance.pitch = isExplicitFemale ? 1.08 : 1.22;
+  // and elevated female contour on generic/local fallback voices so it stays unmistakably female.
+  utterance.pitch = isExplicitFemale ? 1.1 : 1.26;
   utterance.volume = 1;
   if (voice) {
-    utterance.voice = voice;
+    try {
+      utterance.voice = voice;
+    } catch {
+      // Some embedded WebViews throw when assigning voice proxies; keep lang = 'id-ID'
+    }
   }
-  return utterance;
+  return {
+    utterance,
+    isLocalVoice: !voice || voice.localService !== false,
+  };
 }
 
 function retainAndSpeak(
@@ -164,6 +221,7 @@ function queueSpeakCleanly(
   opts?: {
     rate?: number;
     fromUserGesture?: boolean;
+    forceOfflineLocal?: boolean;
     onStart?: () => void;
     onError?: () => void;
   }
@@ -174,12 +232,23 @@ function queueSpeakCleanly(
 
   const rate = opts?.rate ?? 0.97;
   const fromGesture = Boolean(opts?.fromUserGesture);
+  const forceOfflineLocal = opts?.forceOfflineLocal;
 
-  const runSpeak = () => {
-    const utterance = createIndonesianFemaleUtterance(text, rate);
+  const runSpeak = (retryWithLocal = false) => {
+    const { utterance, isLocalVoice } = createIndonesianFemaleUtterance(text, rate, {
+      forceOfflineLocal: retryWithLocal ? true : forceOfflineLocal,
+    });
     retainAndSpeak(synth, utterance, {
       onStart: opts?.onStart,
-      onError: opts?.onError,
+      onError: () => {
+        // If a cloud voice failed (e.g. sudden internet drop before navigator.onLine updated),
+        // automatically retry once with a strictly local Indonesian female voice.
+        if (!retryWithLocal && !isLocalVoice) {
+          runSpeak(true);
+          return;
+        }
+        opts?.onError?.();
+      },
     });
   };
 
@@ -195,7 +264,7 @@ function queueSpeakCleanly(
     if (fromGesture) {
       runSpeak();
     } else {
-      setTimeout(runSpeak, 60);
+      setTimeout(() => runSpeak(), 60);
     }
     return;
   }
@@ -307,7 +376,11 @@ export function playSuccessBeep(): void {
   }
 }
 
-export function speakFemaleIndonesian(text: string, fromUserGesture = false): void {
+export function speakFemaleIndonesian(
+  text: string,
+  fromUserGesture = false,
+  options?: { forceOfflineLocal?: boolean }
+): void {
   try {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       return;
@@ -317,9 +390,15 @@ export function speakFemaleIndonesian(text: string, fromUserGesture = false): vo
     const synth = window.speechSynthesis;
     if (!synth) return;
 
+    const forceOfflineLocal = options?.forceOfflineLocal;
+
     // Inside a real user tap (tablet/HP), speak immediately without waiting for async voiceschanged
     if (fromUserGesture) {
-      queueSpeakCleanly(text, { rate: 0.98, fromUserGesture: true });
+      queueSpeakCleanly(text, {
+        rate: forceOfflineLocal ? 0.95 : 0.98,
+        fromUserGesture: true,
+        forceOfflineLocal,
+      });
       return;
     }
 
@@ -330,20 +409,29 @@ export function speakFemaleIndonesian(text: string, fromUserGesture = false): vo
         if (triggered) return;
         triggered = true;
         synth.removeEventListener?.('voiceschanged', handleVoices);
-        queueSpeakCleanly(text, { rate: 0.98 });
+        queueSpeakCleanly(text, {
+          rate: forceOfflineLocal ? 0.95 : 0.98,
+          forceOfflineLocal,
+        });
       };
       synth.addEventListener?.('voiceschanged', handleVoices);
       setTimeout(() => {
         if (!triggered) {
           triggered = true;
           synth.removeEventListener?.('voiceschanged', handleVoices);
-          queueSpeakCleanly(text, { rate: 0.98 });
+          queueSpeakCleanly(text, {
+            rate: forceOfflineLocal ? 0.95 : 0.98,
+            forceOfflineLocal,
+          });
         }
       }, 220);
       return;
     }
 
-    queueSpeakCleanly(text, { rate: 0.98 });
+    queueSpeakCleanly(text, {
+      rate: forceOfflineLocal ? 0.95 : 0.98,
+      forceOfflineLocal,
+    });
   } catch {
     // Ignore speech synthesis errors
   }
@@ -356,6 +444,23 @@ export function buildCheckoutSuccessText(): string {
   return CHECKOUT_FAREWELL_TEXT;
 }
 
+/**
+ * Pure Bahasa Indonesia speech copy for offline attendance so local Indonesian
+ * female TTS articulates every word clearly without English loanword glitches.
+ */
+export function buildOfflineAttendanceSpeechText(
+  scanType: 'masuk' | 'pulang',
+  status?: 'Hadir' | 'Terlambat'
+): string {
+  if (scanType === 'pulang') {
+    return 'Presensi pulang berhasil, data disimpan sementara di perangkat. Sampai jumpa, hati-hati di jalan, semoga selamat sampai di tujuan';
+  }
+  if (status === 'Terlambat') {
+    return 'Presensi masuk tercatat terlambat, data disimpan sementara di perangkat';
+  }
+  return 'Presensi berhasil, data disimpan sementara di perangkat';
+}
+
 export function speakSuccessNotification(text = 'Presensi Berhasil'): void {
   playSuccessBeep();
   speakFemaleIndonesian(text, true);
@@ -364,6 +469,16 @@ export function speakSuccessNotification(text = 'Presensi Berhasil'): void {
 export function speakCheckoutSuccessNotification(): string {
   const text = buildCheckoutSuccessText();
   speakSuccessNotification(text);
+  return text;
+}
+
+export function speakOfflineAttendanceNotification(
+  scanType: 'masuk' | 'pulang',
+  status?: 'Hadir' | 'Terlambat'
+): string {
+  const text = buildOfflineAttendanceSpeechText(scanType, status);
+  playSuccessBeep();
+  speakFemaleIndonesian(text, true, { forceOfflineLocal: true });
   return text;
 }
 
@@ -412,7 +527,7 @@ export function speakFemaleIndonesianMessages(messages: string[]): void {
         }
         const runQueue = () => {
           for (const msg of cleanMessages) {
-            const utterance = createIndonesianFemaleUtterance(msg, 0.96);
+            const { utterance } = createIndonesianFemaleUtterance(msg, 0.96);
             retainAndSpeak(synth, utterance);
           }
         };
