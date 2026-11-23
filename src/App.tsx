@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, type User as FirebaseUser } from 'firebase/auth';
+import firebaseConfig from '../firebase-applet-config.json';
 import { auth, signInWithGoogle, signOutFirebase } from './firebase';
+import {
+  parseFirebaseAuthError,
+  type FirebaseAuthErrorDetail,
+} from './utils/firebaseAuthErrors';
+import { FirebaseDomainHelpModal } from './components/FirebaseDomainHelpModal';
 import {
   bulkDeleteAttendanceFromCloud,
   bulkDeleteSubjectRecordsFromCloud,
@@ -302,6 +308,9 @@ export default function App() {
   const [firebaseAuthReady, setFirebaseAuthReady] = useState(false);
   const [cloudSyncing, setCloudSyncing] = useState(false);
   const [cloudConnected, setCloudConnected] = useState(false);
+  const [cloudAuthError, setCloudAuthError] =
+    useState<FirebaseAuthErrorDetail | null>(null);
+  const [domainHelpModalOpen, setDomainHelpModalOpen] = useState(false);
   const [firestoreDailyUsage, setFirestoreDailyUsage] = useState(() =>
     loadFirestoreDailyUsage()
   );
@@ -838,8 +847,10 @@ export default function App() {
 
   const handleConnectCloud = useCallback(async () => {
     setCloudSyncing(true);
+    setCloudAuthError(null);
     try {
       const user = await signInWithGoogle();
+      setDomainHelpModalOpen(false);
       pushToast({
         type: 'success',
         title: 'Terhubung ke Cloud Firebase',
@@ -847,17 +858,20 @@ export default function App() {
       });
     } catch (err) {
       setCloudSyncing(false);
-      const code = (err as { code?: string })?.code || '';
-      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      const hostname =
+        typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const parsed = parseFirebaseAuthError(err, hostname, firebaseConfig.projectId);
+      if (parsed.isUserCancelled) {
         return;
+      }
+      setCloudAuthError(parsed);
+      if (parsed.isUnauthorizedDomain) {
+        setDomainHelpModalOpen(true);
       }
       pushToast({
         type: 'error',
-        title: 'Gagal Masuk dengan Google',
-        description:
-          err instanceof Error
-            ? err.message
-            : 'Pastikan popup login Google diizinkan oleh browser.',
+        title: parsed.title,
+        description: parsed.description,
       });
     }
   }, [pushToast]);
@@ -4249,6 +4263,8 @@ export default function App() {
               displayName: firebaseUser?.displayName ?? null,
               lastSyncedAt,
               quota: firestoreQuota,
+              authError: cloudAuthError,
+              onDismissAuthError: () => setCloudAuthError(null),
               onResetLocalQuota: handleResetLocalQuota,
               onConnect: handleConnectCloud,
               onDisconnect: handleDisconnectCloud,
@@ -4287,6 +4303,14 @@ export default function App() {
         }}
         onSubmit={handleLoginSubmit}
         onResetPassword={handleResetPasswordWithNip}
+      />
+
+      <FirebaseDomainHelpModal
+        open={domainHelpModalOpen}
+        error={cloudAuthError}
+        retrying={cloudSyncing}
+        onClose={() => setDomainHelpModalOpen(false)}
+        onRetry={handleConnectCloud}
       />
     </>
   );
