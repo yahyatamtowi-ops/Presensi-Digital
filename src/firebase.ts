@@ -108,7 +108,17 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
-export async function signInWithGoogle(): Promise<User> {
+export async function signInWithGoogle(loginHintEmail?: string): Promise<User> {
+  const hint = (loginHintEmail || '').trim();
+  if (hint) {
+    const hintedProvider = new GoogleAuthProvider();
+    hintedProvider.setCustomParameters({
+      prompt: 'select_account',
+      login_hint: hint,
+    });
+    const result = await signInWithPopup(auth, hintedProvider);
+    return result.user;
+  }
   const result = await signInWithPopup(auth, googleProvider);
   return result.user;
 }

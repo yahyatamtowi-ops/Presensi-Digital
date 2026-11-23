@@ -6,7 +6,13 @@ import {
   parseFirebaseAuthError,
   type FirebaseAuthErrorDetail,
 } from './utils/firebaseAuthErrors';
+import {
+  resolveInitialStartupSyncStep,
+  resolveNextStartupSyncStep,
+  type StartupSyncStep,
+} from './utils/startupSyncPrompt';
 import { FirebaseDomainHelpModal } from './components/FirebaseDomainHelpModal';
+import { StartupSyncModal } from './components/StartupSyncModal';
 import {
   bulkDeleteAttendanceFromCloud,
   bulkDeleteSubjectRecordsFromCloud,
@@ -311,6 +317,9 @@ export default function App() {
   const [cloudAuthError, setCloudAuthError] =
     useState<FirebaseAuthErrorDetail | null>(null);
   const [domainHelpModalOpen, setDomainHelpModalOpen] = useState(false);
+  const [startupSyncStep, setStartupSyncStep] = useState<StartupSyncStep>('done');
+  const [startupSyncInitialized, setStartupSyncInitialized] = useState(false);
+  const [startupSheetsSyncing, setStartupSheetsSyncing] = useState(false);
   const [firestoreDailyUsage, setFirestoreDailyUsage] = useState(() =>
     loadFirestoreDailyUsage()
   );
@@ -845,36 +854,41 @@ export default function App() {
     [firebaseUser, pushToast]
   );
 
-  const handleConnectCloud = useCallback(async () => {
-    setCloudSyncing(true);
-    setCloudAuthError(null);
-    try {
-      const user = await signInWithGoogle();
-      setDomainHelpModalOpen(false);
-      pushToast({
-        type: 'success',
-        title: 'Terhubung ke Cloud Firebase',
-        description: `Masuk sebagai ${user.email || user.displayName || 'Google'}. Data disinkronkan secara real-time lintas perangkat.`,
-      });
-    } catch (err) {
-      setCloudSyncing(false);
-      const hostname =
-        typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const parsed = parseFirebaseAuthError(err, hostname, firebaseConfig.projectId);
-      if (parsed.isUserCancelled) {
-        return;
+  const handleConnectCloud = useCallback(
+    async (loginHintEmail?: string): Promise<boolean> => {
+      setCloudSyncing(true);
+      setCloudAuthError(null);
+      try {
+        const user = await signInWithGoogle(loginHintEmail);
+        setDomainHelpModalOpen(false);
+        pushToast({
+          type: 'success',
+          title: 'Terhubung ke Cloud Firebase',
+          description: `Masuk sebagai ${user.email || user.displayName || 'Google'}. Data disinkronkan secara real-time lintas perangkat.`,
+        });
+        return true;
+      } catch (err) {
+        setCloudSyncing(false);
+        const hostname =
+          typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+        const parsed = parseFirebaseAuthError(err, hostname, firebaseConfig.projectId);
+        if (parsed.isUserCancelled) {
+          return false;
+        }
+        setCloudAuthError(parsed);
+        if (parsed.isUnauthorizedDomain) {
+          setDomainHelpModalOpen(true);
+        }
+        pushToast({
+          type: 'error',
+          title: parsed.title,
+          description: parsed.description,
+        });
+        return false;
       }
-      setCloudAuthError(parsed);
-      if (parsed.isUnauthorizedDomain) {
-        setDomainHelpModalOpen(true);
-      }
-      pushToast({
-        type: 'error',
-        title: parsed.title,
-        description: parsed.description,
-      });
-    }
-  }, [pushToast]);
+    },
+    [pushToast]
+  );
 
   const handleDisconnectCloud = useCallback(async () => {
     setCloudSyncing(true);
@@ -1665,7 +1679,7 @@ export default function App() {
   }, [pushToast, syncFromGas]);
 
   const handleTestAndSyncSheets = useCallback(
-    async (urlInput: string) => {
+    async (urlInput: string): Promise<boolean> => {
       const trimmed = urlInput.trim();
       if (!trimmed) {
         pushToast({
@@ -1674,9 +1688,9 @@ export default function App() {
           description:
             'Tempelkan Web App URL Google Apps Script (berakhiran /exec) terlebih dahulu.',
         });
-        return;
+        return false;
       }
-      // Persist the entered URL locally so this device stays linked after reload
+      // Persist the entered URL locally (and mirror to Cloud Firebase if connected)
       if (latestFullSnapshotRef.current.settings.script_url.trim() !== trimmed) {
         const linkedSettings: SchoolSettings = {
           ...latestFullSnapshotRef.current.settings,
@@ -1686,15 +1700,79 @@ export default function App() {
         latestFullSnapshotRef.current.settings = linkedSettings;
         setSettings(linkedSettings);
         saveLocalSettings(linkedSettings);
+        const uid = firebaseUser?.uid;
+        if (uid && firebaseUser?.emailVerified) {
+          void saveSchoolSettingsToCloud(uid, linkedSettings).catch(() => {});
+        }
       }
       lastLocalSettingsSaveAtRef.current = 0;
       lastLocalAccountsSaveAtRef.current = 0;
       lastLocalStudentsSaveAtRef.current = 0;
       lastLocalRecordsSaveAtRef.current = 0;
       lastLocalAcademicSaveAtRef.current = 0;
-      await syncFromGas(trimmed, false, { forcePullRemote: true });
+      const syncResult = await syncFromGas(trimmed, false, { forcePullRemote: true });
+      return syncResult.ok;
     },
-    [pushToast, syncFromGas]
+    [firebaseUser, pushToast, syncFromGas]
+  );
+
+  // Trigger two-step first-open sync prompt once splash finishes and Firebase Auth state is known
+  useEffect(() => {
+    if (showSplash || !firebaseAuthReady || startupSyncInitialized) return;
+    const isFirebaseLinked = cloudConnected || Boolean(firebaseUser);
+    const nextStep = resolveInitialStartupSyncStep({
+      firebaseConnected: isFirebaseLinked,
+      sheetsUrl: settings.script_url,
+      dismissed: false,
+    });
+    setStartupSyncStep(nextStep);
+    setStartupSyncInitialized(true);
+  }, [
+    showSplash,
+    firebaseAuthReady,
+    startupSyncInitialized,
+    cloudConnected,
+    firebaseUser,
+    settings.script_url,
+  ]);
+
+  // Automatically advance from Step 1 (Firebase) to Step 2 (Google Apps Script) once Firebase is verified
+  useEffect(() => {
+    if (startupSyncStep !== 'firebase') return;
+    if (!cloudConnected && !firebaseUser) return;
+    setStartupSyncStep((prev) =>
+      resolveNextStartupSyncStep(prev, {
+        firebaseConnected: true,
+        sheetsConnected: false,
+      })
+    );
+  }, [startupSyncStep, cloudConnected, firebaseUser]);
+
+  const handleStartupConfirmFirebase = useCallback(
+    async (loginHintEmail: string): Promise<boolean> => {
+      const ok = await handleConnectCloud(loginHintEmail);
+      if (ok) {
+        setStartupSyncStep('sheets');
+      }
+      return ok;
+    },
+    [handleConnectCloud]
+  );
+
+  const handleStartupConfirmSheets = useCallback(
+    async (scriptUrl: string): Promise<boolean> => {
+      setStartupSheetsSyncing(true);
+      try {
+        const ok = await handleTestAndSyncSheets(scriptUrl);
+        if (ok) {
+          setStartupSyncStep('done');
+        }
+        return ok;
+      } finally {
+        setStartupSheetsSyncing(false);
+      }
+    },
+    [handleTestAndSyncSheets]
   );
 
   const isMasterAdmin = session?.role === 'master_admin';
@@ -4266,7 +4344,9 @@ export default function App() {
               authError: cloudAuthError,
               onDismissAuthError: () => setCloudAuthError(null),
               onResetLocalQuota: handleResetLocalQuota,
-              onConnect: handleConnectCloud,
+              onConnect: async () => {
+                await handleConnectCloud();
+              },
               onDisconnect: handleDisconnectCloud,
               onPushLocalToCloud: handlePushLocalToCloud,
             }}
@@ -4283,7 +4363,9 @@ export default function App() {
             onUpdateAccounts={handleUpdateAccounts}
             onPushAccountsToSheets={handlePushAccountsToSheets}
             onPullAccountsFromSheets={handlePullAccountsFromSheets}
-            onTestAndSync={handleTestAndSyncSheets}
+            onTestAndSync={async (url) => {
+              await handleTestAndSyncSheets(url);
+            }}
             onPushAllToSheets={handlePushAllToSheets}
             onSaveBackupToComputer={handleSaveBackupToComputer}
             onExportExcelArchive={handleExportExcelArchive}
@@ -4305,12 +4387,27 @@ export default function App() {
         onResetPassword={handleResetPasswordWithNip}
       />
 
+      <StartupSyncModal
+        open={!showSplash && startupSyncStep !== 'done'}
+        step={startupSyncStep}
+        firebaseConnected={cloudConnected || Boolean(firebaseUser)}
+        firebaseSyncing={cloudSyncing}
+        sheetsSyncing={startupSheetsSyncing}
+        initialSheetsUrl={settings.script_url}
+        errorMessage={cloudAuthError && !cloudAuthError.isUnauthorizedDomain ? cloudAuthError.description : null}
+        onConfirmFirebase={handleStartupConfirmFirebase}
+        onConfirmSheets={handleStartupConfirmSheets}
+        onDismiss={() => setStartupSyncStep('done')}
+      />
+
       <FirebaseDomainHelpModal
         open={domainHelpModalOpen}
         error={cloudAuthError}
         retrying={cloudSyncing}
         onClose={() => setDomainHelpModalOpen(false)}
-        onRetry={handleConnectCloud}
+        onRetry={async () => {
+          await handleConnectCloud();
+        }}
       />
     </>
   );
