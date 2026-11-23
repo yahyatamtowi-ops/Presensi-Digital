@@ -87,7 +87,7 @@ service cloud.firestore {
           'ownerId', 'nama_sekolah', 'nama_kepala_sekolah', 'nip_kepala_sekolah',
           'ttd_kepala_sekolah', 'cap_sekolah', 'logo_sekolah', 'batas_jam_masuk',
           'mode_presensi', 'jam_pulang_standar', 'tahun_ajaran', 'semester',
-          'tema', 'script_url', 'createdAt', 'updatedAt'
+          'tema', 'script_url', 'no_wa_admin', 'show_creator_credit', 'createdAt', 'updatedAt'
         ]) &&
         data.ownerId == schoolId &&
         isValidId(data.ownerId) &&
@@ -104,6 +104,8 @@ service cloud.firestore {
         isValidSemester(data.semester) &&
         isValidString(data.tema, 1, 32) &&
         isValidOptionalHttpsUrl(data.script_url, 500) &&
+        (!('no_wa_admin' in data) || isValidString(data.no_wa_admin, 0, 32)) &&
+        (!('show_creator_credit' in data) || data.show_creator_credit is bool) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -277,6 +279,39 @@ service cloud.firestore {
         data.updatedAt == request.time;
     }
 
+    function isValidLateCorrectionRequest(data, schoolId) {
+      return data.keys().hasAll([
+          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk_asal',
+          'alasan', 'requested_by_user_id', 'requested_by_name', 'requested_at',
+          'status', 'resolved_by_name', 'resolved_at', 'catatan_admin',
+          'tahun_ajaran', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk_asal',
+          'alasan', 'requested_by_user_id', 'requested_by_name', 'requested_at',
+          'status', 'resolved_by_name', 'resolved_at', 'catatan_admin',
+          'tahun_ajaran', 'updatedAt'
+        ]) &&
+        data.ownerId == schoolId &&
+        isValidId(data.ownerId) &&
+        isValidString(data.id, 1, 128) &&
+        isValidDateYMD(data.tanggal) &&
+        isValidString(data.nis, 1, 64) &&
+        isValidString(data.nama, 1, 160) &&
+        isValidString(data.kelas, 1, 64) &&
+        isValidString(data.jam_masuk_asal, 1, 16) &&
+        isValidString(data.alasan, 3, 400) &&
+        isValidString(data.requested_by_user_id, 1, 128) &&
+        isValidString(data.requested_by_name, 1, 160) &&
+        isValidString(data.requested_at, 1, 64) &&
+        data.status in ['pending', 'approved', 'rejected'] &&
+        isValidString(data.resolved_by_name, 0, 160) &&
+        isValidString(data.resolved_at, 0, 64) &&
+        isValidString(data.catatan_admin, 0, 300) &&
+        isValidString(data.tahun_ajaran, 4, 32) &&
+        data.updatedAt == request.time;
+    }
+
     function isValidAdminRole(data) {
       return data.keys().hasAll(['role', 'email', 'createdAt']) &&
         data.keys().hasOnly(['role', 'email', 'createdAt']) &&
@@ -320,7 +355,7 @@ service cloud.firestore {
           'nama_sekolah', 'nama_kepala_sekolah', 'nip_kepala_sekolah',
           'ttd_kepala_sekolah', 'cap_sekolah', 'logo_sekolah', 'batas_jam_masuk',
           'mode_presensi', 'jam_pulang_standar', 'tahun_ajaran', 'semester',
-          'tema', 'script_url', 'updatedAt'
+          'tema', 'script_url', 'no_wa_admin', 'show_creator_credit', 'updatedAt'
         ]) &&
         isValidSchoolConfig(request.resource.data, schoolId);
       allow delete: if isValidId(schoolId) && isAdmin();
@@ -450,6 +485,26 @@ service cloud.firestore {
           ]) &&
           isValidAppUserAccount(request.resource.data, schoolId);
         allow delete: if isValidId(schoolId) && isValidId(accountId) && (isSchoolOwner(schoolId) || isAdmin());
+      }
+
+      // Late Correction Requests (Wali Kelas -> Master Admin approval)
+      match /lateCorrectionRequests/{requestId} {
+        allow get: if isValidId(schoolId) && isValidId(requestId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
+        allow create: if isValidId(schoolId) && isValidId(requestId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          isValidLateCorrectionRequest(request.resource.data, schoolId);
+        allow update: if isValidId(schoolId) && isValidId(requestId) &&
+          (isSchoolOwner(schoolId) || isAdmin()) &&
+          request.resource.data.ownerId == resource.data.ownerId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk_asal',
+            'alasan', 'requested_by_user_id', 'requested_by_name',
+            'requested_at', 'status', 'resolved_by_name', 'resolved_at',
+            'catatan_admin', 'tahun_ajaran', 'updatedAt'
+          ]) &&
+          isValidLateCorrectionRequest(request.resource.data, schoolId);
+        allow delete: if isValidId(schoolId) && isValidId(requestId) && (isSchoolOwner(schoolId) || isAdmin());
       }
     }
   }

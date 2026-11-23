@@ -54,6 +54,7 @@ import {
   generateSubjectAttendancePdf,
   resolveTeacherNip,
 } from '../utils/subjectAttendancePdf';
+import { buildLetterheadExcelSheet } from '../utils/excelLetterhead';
 
 interface SubjectAttendanceViewProps {
   session: AuthSession;
@@ -482,26 +483,55 @@ export function SubjectAttendanceView({
     targetStudents: Student[],
     targetRecordMap: Map<string, SubjectAttendanceRecord>
   ) {
-    const rows = targetStudents.map((s, idx) => {
+    const headers = [
+      'No',
+      'Tanggal',
+      'Hari',
+      'Kelas',
+      'Mata Pelajaran',
+      'Guru',
+      'NISN',
+      'Nama Siswa',
+      'Jam Masuk',
+      'Status',
+      'Keterangan',
+    ];
+    const dataRows: Array<Array<string | number>> = targetStudents.map((s, idx) => {
       const rec = targetRecordMap.get(s.nis.trim().toLowerCase());
-      return {
-        No: idx + 1,
-        Tanggal: selectedDate,
-        Hari: selectedDayName,
-        Kelas: assignment.kelas,
-        'Mata Pelajaran': assignment.mata_pelajaran,
-        Guru: assignment.teacher_name,
-        NISN: s.nis,
-        'Nama Siswa': s.nama,
-        'Jam Masuk': rec?.jam_masuk || '-',
-        Status: rec?.status || 'Belum Presensi',
-        Keterangan: rec?.keterangan || '-',
-      };
+      return [
+        idx + 1,
+        selectedDate,
+        selectedDayName,
+        assignment.kelas,
+        assignment.mata_pelajaran,
+        assignment.teacher_name,
+        s.nis,
+        s.nama,
+        rec?.jam_masuk || '-',
+        rec?.status || 'Belum Presensi',
+        rec?.keterangan || '-',
+      ];
     });
 
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const timeRange =
+      assignment.jam_mulai && assignment.jam_selesai
+        ? ` · Pukul ${assignment.jam_mulai}–${assignment.jam_selesai}`
+        : '';
+
+    const { sheet } = buildLetterheadExcelSheet({
+      settings,
+      documentTitle: 'DAFTAR PRESENSI MATA PELAJARAN',
+      subtitleLines: [
+        `Mata Pelajaran: ${assignment.mata_pelajaran} · Kelas: ${assignment.kelas} · Guru Pengampu: ${assignment.teacher_name}`,
+        `Hari / Tanggal: ${formatIndonesianDateWithDay(selectedDate)}${timeRange} · Tahun Ajaran: ${settings.tahun_ajaran} · Semester: ${formatSemesterLabel(settings.semester)}`,
+      ],
+      headers,
+      rows: dataRows,
+      includeSignature: true,
+    });
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Presensi_Mapel');
+    XLSX.utils.book_append_sheet(wb, sheet, 'Presensi_Mapel');
     const safeMapel = assignment.mata_pelajaran.replace(/[^a-zA-Z0-9]+/g, '_');
     const safeKelas = assignment.kelas.replace(/[^a-zA-Z0-9]+/g, '_');
     XLSX.writeFile(wb, `Presensi_Mapel_${safeMapel}_${safeKelas}_${selectedDate}.xlsx`);

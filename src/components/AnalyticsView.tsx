@@ -130,8 +130,8 @@ export function AnalyticsView({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('pct_desc');
   const [downloadingPdf, setDownloadingPdf] = useState(false);
-  const [showComparisonInfo, setShowComparisonInfo] = useState(true);
-  const [showClassInfo, setShowClassInfo] = useState(true);
+  const [showComparisonInfo, setShowComparisonInfo] = useState(false);
+  const [showClassInfo, setShowClassInfo] = useState(false);
 
   const classes = useMemo(() => {
     const set = new Set<string>();
@@ -259,9 +259,12 @@ export function AnalyticsView({
 
   function handleDownloadMonthlyExcel() {
     const classLabel =
-      effectiveClass === 'ALL' ? 'Semua_Kelas' : effectiveClass;
+      effectiveClass === 'ALL' ? 'Semua Kelas' : `Kelas ${effectiveClass}`;
     exportMonthlyAnalyticsExcel({
+      settings,
+      monthLabel: analytics.overviews.bulanan.subtitle,
       monthKey: selectedMonth,
+      academicYearLabel: effectiveAcademicYear,
       classLabel,
       rows: visibleStudentRows,
     });
@@ -362,6 +365,8 @@ export function AnalyticsView({
               sakit: ov.sakit,
               izin: ov.izin,
               alpa: ov.alpa,
+              penalizedIzinDays: ov.penalizedIzinDays,
+              penalizedSakitDays: ov.penalizedSakitDays,
               totalTercatat: ov.totalTercatat,
               denom:
                 ov.period === 'harian' && ov.totalSiswa > 0
@@ -548,7 +553,7 @@ export function AnalyticsView({
                   Perbandingan Persentase Kehadiran
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Skor adil berbasis ketepatan waktu (Hadir 100%, Terlambat 50%, Sakit/Izin 25%, Alpa 0%)
+                  Hadir tepat waktu bernilai penuh; nilai kurang baik untuk Terlambat, Alpa, Izin &gt; 7×/bulan, &amp; Sakit &gt; 7 hari berturut-turut
                 </p>
               </div>
             </div>
@@ -619,6 +624,8 @@ export function AnalyticsView({
                 sakit: ov.sakit,
                 izin: ov.izin,
                 alpa: ov.alpa,
+                penalizedIzinDays: ov.penalizedIzinDays,
+                penalizedSakitDays: ov.penalizedSakitDays,
                 totalTercatat: ov.totalTercatat,
                 denom:
                   ov.period === 'harian' && ov.totalSiswa > 0
@@ -775,6 +782,8 @@ export function AnalyticsView({
                     sakit: cls.sakit,
                     izin: cls.izin,
                     alpa: cls.alpa,
+                    penalizedIzinDays: cls.penalizedIzinDays,
+                    penalizedSakitDays: cls.penalizedSakitDays,
                     totalTercatat: cls.totalTercatat,
                     denom:
                       selectedPeriod === 'harian' && cls.totalSiswa > 0
@@ -848,8 +857,8 @@ export function AnalyticsView({
                 </h2>
                 <p className="text-xs text-slate-500">
                   {analytics.attentionStudents.length > 0
-                    ? 'Siswa yang sering terlambat, memiliki catatan Alpa, atau skor kehadiran rendah'
-                    : 'Siswa kategori Sangat Baik (hadir tepat waktu ≥ 90% tanpa Alpa)'}
+                    ? 'Siswa dengan catatan Terlambat, Alpa, Izin > 7×/bulan, atau Sakit > 7 hari berturut-turut'
+                    : 'Siswa kategori Sangat Baik (hadir tepat waktu ≥ 90% tanpa Alpa maupun pelanggaran batas Izin/Sakit)'}
                 </p>
               </div>
             </div>
@@ -867,6 +876,12 @@ export function AnalyticsView({
                         <p className="font-semibold text-slate-900 truncate">{s.nama}</p>
                         <p className="text-[11px] text-slate-500 font-mono">
                           {s.nis} · {s.kelas} · Telat: {s.terlambat} · Alpa: {s.alpa}
+                          {(s.penalizedIzinDays ?? 0) > 0
+                            ? ` · Izin: ${s.maxMonthlyIzin ?? s.izin}×/bln`
+                            : ''}
+                          {(s.penalizedSakitDays ?? 0) > 0
+                            ? ` · Sakit: ${s.maxConsecutiveSakitDays ?? s.sakit} hr beruntun`
+                            : ''}
                         </p>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -1060,6 +1075,18 @@ export function AnalyticsView({
                           {row.totalTercatat > 0 && (
                             <p className="text-[10px] font-mono tabular-nums text-slate-500">
                               Tepat waktu: {row.tepatWaktuPct}%
+                              {(row.penalizedIzinDays ?? 0) > 0 ? (
+                                <span className="text-orange-600 font-semibold">
+                                  {' '}
+                                  · Izin {row.maxMonthlyIzin ?? row.izin}×/bln
+                                </span>
+                              ) : null}
+                              {(row.penalizedSakitDays ?? 0) > 0 ? (
+                                <span className="text-orange-600 font-semibold">
+                                  {' '}
+                                  · Sakit {row.maxConsecutiveSakitDays ?? row.sakit} hr beruntun
+                                </span>
+                              ) : null}
                             </p>
                           )}
                         </div>

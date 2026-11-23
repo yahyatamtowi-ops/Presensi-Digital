@@ -35,6 +35,7 @@ import {
   Stamp,
   Database,
   ExternalLink,
+  Info,
 } from 'lucide-react';
 import type {
   AppThemeId,
@@ -63,6 +64,11 @@ import {
   type FirestoreQuotaSnapshot,
   type QuotaMetricSummary,
 } from '../utils/firestoreUsage';
+import type {
+  AcademicYearAttendanceStat,
+  ClearStorageScope,
+  ExternalStorageSnapshot,
+} from '../utils/storageHealth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 interface CloudSyncSettingsProps {
@@ -91,6 +97,13 @@ interface SettingsViewProps {
   onFlushOfflineQueue?: () => Promise<void> | void;
   sheetsSupportsAkun?: boolean | null;
   cloudSync?: CloudSyncSettingsProps;
+  initialSubMenu?: SettingsSubMenuId;
+  initialSubMenuNonce?: number;
+  academicYearAttendanceStats?: AcademicYearAttendanceStat[];
+  externalStorage?: ExternalStorageSnapshot;
+  onRefreshStorageEstimate?: () => void;
+  onClearStorage?: (scope: ClearStorageScope) => Promise<void> | void;
+  onDeleteAttendanceByAcademicYear?: (tahunAjaran: string) => void;
   onSaveSettings: (newSettings: SchoolSettings) => Promise<void>;
   onSetDefaultIdentity: (namaSekolah: string, logoSekolah?: string) => void;
   onPreviewTheme: (tema: AppThemeId) => void;
@@ -109,7 +122,7 @@ interface SettingsViewProps {
 const LIGHT_THEMES = THEME_PRESETS.filter((t) => t.mode === 'light');
 const DARK_THEMES = THEME_PRESETS.filter((t) => t.mode === 'dark');
 
-type SettingsSubMenuId =
+export type SettingsSubMenuId =
   | 'profil'
   | 'jadwal'
   | 'tema'
@@ -281,7 +294,9 @@ function areSettingsEqual(a: SchoolSettings, b: SchoolSettings): boolean {
     (a.tahun_ajaran || '2026/2027').trim() === (b.tahun_ajaran || '2026/2027').trim() &&
     normalizeSemester(a.semester, 'ganjil') === normalizeSemester(b.semester, 'ganjil') &&
     normalizeThemeId(a.tema, 'indigo') === normalizeThemeId(b.tema, 'indigo') &&
-    (a.script_url || '').trim() === (b.script_url || '').trim()
+    (a.script_url || '').trim() === (b.script_url || '').trim() &&
+    (a.no_wa_admin || '').trim() === (b.no_wa_admin || '').trim() &&
+    (a.show_creator_credit !== false) === (b.show_creator_credit !== false)
   );
 }
 
@@ -418,6 +433,13 @@ export function SettingsView({
   onFlushOfflineQueue,
   sheetsSupportsAkun = null,
   cloudSync,
+  initialSubMenu,
+  initialSubMenuNonce,
+  academicYearAttendanceStats = [],
+  externalStorage,
+  onRefreshStorageEstimate,
+  onClearStorage,
+  onDeleteAttendanceByAcademicYear,
   onSaveSettings,
   onSetDefaultIdentity,
   onPreviewTheme,
@@ -440,6 +462,7 @@ export function SettingsView({
     tahun_ajaran: settings.tahun_ajaran || '2026/2027',
     semester: normalizeSemester(settings.semester, 'ganjil'),
     tema: normalizeThemeId(settings.tema, 'indigo'),
+    show_creator_credit: settings.show_creator_credit !== false,
   });
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -461,9 +484,41 @@ export function SettingsView({
   const [capError, setCapError] = useState<string | null>(null);
   const [showScriptGuide, setShowScriptGuide] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
-  const [activeSubMenu, setActiveSubMenu] = useState<SettingsSubMenuId>('profil');
+  const [activeSubMenu, setActiveSubMenu] = useState<SettingsSubMenuId>(
+    initialSubMenu || 'profil'
+  );
   const [confirmResetDemo, setConfirmResetDemo] = useState(false);
   const [confirmResetAttendance, setConfirmResetAttendance] = useState(false);
+  const [selectedDeleteYear, setSelectedDeleteYear] = useState<string>(
+    () => academicYearAttendanceStats[0]?.tahun_ajaran || ''
+  );
+  const [confirmDeleteYearModal, setConfirmDeleteYearModal] =
+    useState<AcademicYearAttendanceStat | null>(null);
+  const [showDeviceStorageInfo, setShowDeviceStorageInfo] = useState(false);
+  const [showLocalStorageInfo, setShowLocalStorageInfo] = useState(false);
+  const [showCloudStorageInfo, setShowCloudStorageInfo] = useState(false);
+  const [confirmClearStorageScope, setConfirmClearStorageScope] =
+    useState<ClearStorageScope | null>(null);
+  const [clearingStorage, setClearingStorage] = useState(false);
+
+  useEffect(() => {
+    if (initialSubMenu) {
+      setActiveSubMenu(initialSubMenu);
+    }
+  }, [initialSubMenu, initialSubMenuNonce]);
+
+  useEffect(() => {
+    if (academicYearAttendanceStats.length === 0) {
+      setSelectedDeleteYear('');
+      return;
+    }
+    const stillExists = academicYearAttendanceStats.some(
+      (item) => item.tahun_ajaran === selectedDeleteYear
+    );
+    if (!stillExists) {
+      setSelectedDeleteYear(academicYearAttendanceStats[0].tahun_ajaran);
+    }
+  }, [academicYearAttendanceStats, selectedDeleteYear]);
 
   // Sync external settings updates (e.g. cloud sync / backup restore) ONLY when user has no unsaved edits
   useEffect(() => {
@@ -481,6 +536,8 @@ export function SettingsView({
       tahun_ajaran: settings.tahun_ajaran || '2026/2027',
       semester: normalizeSemester(settings.semester, 'ganjil'),
       tema: normalizeThemeId(settings.tema, 'indigo'),
+      no_wa_admin: settings.no_wa_admin || '',
+      show_creator_credit: settings.show_creator_credit !== false,
     });
   }, [settings, hasUnsavedChanges]);
 
@@ -597,6 +654,8 @@ export function SettingsView({
         tema: normalizeThemeId(formState.tema, 'indigo'),
         script_url: formState.script_url.trim(),
         logo_sekolah: formState.logo_sekolah || DEFAULT_SCHOOL_LOGO,
+        no_wa_admin: (formState.no_wa_admin || '').trim(),
+        show_creator_credit: formState.show_creator_credit !== false,
       };
       setFormState(normalizedPayload);
       await onSaveSettings(normalizedPayload);
@@ -1446,6 +1505,29 @@ export function SettingsView({
                   className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                 />
               </div>
+
+              <div className="md:col-span-2">
+                <label
+                  htmlFor="setting-admin-wa"
+                  className="block text-xs font-medium text-slate-700 mb-1.5"
+                >
+                  Nomor WhatsApp Master Admin (Tujuan Permohonan Wali Kelas)
+                </label>
+                <input
+                  id="setting-admin-wa"
+                  data-testid="setting-admin-wa-input"
+                  type="tel"
+                  value={formState.no_wa_admin || ''}
+                  onChange={(e) =>
+                    updateFormField({ no_wa_admin: e.target.value })
+                  }
+                  placeholder="Contoh: 081234567890 atau 6281234567890"
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Digunakan otomatis saat Wali Kelas mengirim permohonan ubah status terlambat menjadi tepat waktu melalui WhatsApp.
+                </p>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1914,6 +1996,62 @@ export function SettingsView({
               </div>
             </div>
 
+            {/* Tampilan Identitas Pembuat Aplikasi di Bagian Bawah Menu Bar */}
+            <div className="pt-4 border-t border-slate-200/80">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl border border-slate-200/80 bg-slate-50/70">
+                <div className="space-y-1 min-w-0">
+                  <p className="text-sm font-semibold text-slate-900">
+                    Tampilkan Kredit Pembuat di Bagian Bawah Menu Bar
+                  </p>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Menampilkan tulisan{' '}
+                    <span className="font-semibold text-slate-800">
+                      &ldquo;Application Created By: Tamtowi Yahya&rdquo;
+                    </span>{' '}
+                    pada bagian bawah Menu Bar. Nonaktifkan tombol di samping jika ingin menghilangkannya, lalu tekan Simpan Pengaturan.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3 shrink-0">
+                  <span
+                    className={`text-xs font-semibold ${
+                      formState.show_creator_credit !== false
+                        ? 'text-indigo-700'
+                        : 'text-slate-500'
+                    }`}
+                  >
+                    {formState.show_creator_credit !== false ? 'Aktif' : 'Nonaktif'}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={formState.show_creator_credit !== false}
+                    aria-label="Aktifkan atau nonaktifkan tulisan Application Created By: Tamtowi Yahya di bagian bawah Menu Bar"
+                    data-testid="toggle-creator-credit"
+                    onClick={() =>
+                      updateFormField({
+                        show_creator_credit: !(formState.show_creator_credit !== false),
+                      })
+                    }
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 ${
+                      formState.show_creator_credit !== false
+                        ? 'bg-indigo-600'
+                        : 'bg-slate-300'
+                    }`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-xs transition-transform ${
+                        formState.show_creator_credit !== false
+                          ? 'translate-x-5'
+                          : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
+
                   {renderSaveFooter()}
                 </section>
               )}
@@ -1970,6 +2108,372 @@ export function SettingsView({
             className="p-3 rounded-xl border border-rose-200 bg-rose-50 text-xs font-medium text-rose-700"
           >
             {backupError}
+          </div>
+        )}
+
+        {externalStorage && (
+          <div
+            data-testid="external-storage-summary"
+            className="p-4 rounded-xl border border-slate-200/80 bg-slate-50/60 space-y-3.5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Database className="h-4 w-4 text-indigo-600 shrink-0" aria-hidden="true" />
+                <div>
+                  <p className="text-xs font-semibold text-slate-900">
+                    Kapasitas Penyimpanan (Storage Terpakai &amp; Tersisa)
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Klik tombol ikon <strong className="font-mono text-slate-700">i</strong> pada tiap bagian untuk melihat penjelasan atau gunakan tombol bersihkan storage.
+                  </p>
+                </div>
+              </div>
+              {onRefreshStorageEstimate && (
+                <button
+                  type="button"
+                  data-testid="btn-refresh-storage"
+                  onClick={onRefreshStorageEstimate}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-[11px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  <RefreshCw className="h-3 w-3" aria-hidden="true" />
+                  <span>Perbarui Info</span>
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* Penyimpanan Perangkat / Eksternal (Browser Storage Quota) */}
+              {(() => {
+                const dev = externalStorage.device;
+                const barClass =
+                  dev.level === 'critical'
+                    ? 'bg-rose-600'
+                    : dev.level === 'warning'
+                      ? 'bg-amber-500'
+                      : 'bg-emerald-600';
+                const badgeClass =
+                  dev.level === 'critical'
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : dev.level === 'warning'
+                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                      : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                return (
+                  <div className="p-3.5 rounded-xl border border-slate-200/80 bg-white space-y-2.5 flex flex-col justify-between">
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-xs font-semibold text-slate-900 truncate">
+                            Penyimpanan Perangkat / Eksternal
+                          </span>
+                          <button
+                            type="button"
+                            data-testid="btn-info-storage-device"
+                            aria-expanded={showDeviceStorageInfo}
+                            aria-label="Informasi Penyimpanan Perangkat / Eksternal"
+                            title="Klik untuk melihat penjelasan Penyimpanan Perangkat / Eksternal"
+                            onClick={() => setShowDeviceStorageInfo((prev) => !prev)}
+                            className={`inline-flex items-center justify-center h-6 w-6 rounded-full border transition-colors shrink-0 ${
+                              showDeviceStorageInfo
+                                ? 'bg-indigo-600 border-indigo-600 text-white'
+                                : 'bg-white border-slate-200 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200'
+                            }`}
+                          >
+                            <Info className="h-3 w-3" aria-hidden="true" />
+                          </button>
+                        </div>
+                        <span
+                          className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold font-mono tabular-nums shrink-0 ${badgeClass}`}
+                        >
+                          {dev.percent}%
+                        </span>
+                      </div>
+
+                      {showDeviceStorageInfo && (
+                        <div
+                          data-testid="info-panel-storage-device"
+                          role="region"
+                          aria-label="Penjelasan Penyimpanan Perangkat / Eksternal"
+                          className="rounded-lg border border-indigo-200/80 bg-indigo-50/50 p-2.5 flex items-start justify-between gap-2 text-[11px] text-slate-700 leading-relaxed"
+                        >
+                          <div className="space-y-1 min-w-0">
+                            <p className="font-semibold text-slate-900">
+                              Tentang Penyimpanan Perangkat / Eksternal
+                            </p>
+                            <p>
+                              Menampilkan total ruang penyimpanan yang dialokasikan browser pada perangkat ini (mencakup database <strong>IndexedDB</strong>, cache offline, dan penyimpanan lokal aplikasi). Kapasitas maksimal menyesuaikan ruang kosong disk perangkat secara otomatis
+                              {dev.persisted
+                                ? ' dengan mode Persistent Storage aktif.'
+                                : '.'}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setShowDeviceStorageInfo(false)}
+                            aria-label="Tutup informasi penyimpanan perangkat"
+                            className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-indigo-100/60 shrink-0"
+                          >
+                            <X className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        </div>
+                      )}
+
+                      <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${barClass}`}
+                          style={{ width: `${Math.min(100, Math.max(2, dev.percent))}%` }}
+                        />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 pt-0.5 text-[11px]">
+                        <div>
+                          <p className="text-slate-500">Terpakai</p>
+                          <p
+                            data-testid="external-storage-used"
+                            className="font-mono tabular-nums font-semibold text-slate-900"
+                          >
+                            {formatBytesReadable(dev.usedBytes)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500">Tersisa</p>
+                          <p
+                            data-testid="external-storage-remaining"
+                            className="font-mono tabular-nums font-semibold text-emerald-700"
+                          >
+                            {formatBytesReadable(dev.remainingBytes)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500">Kuota Maksimal</p>
+                          <p
+                            data-testid="external-storage-limit"
+                            className="font-mono tabular-nums font-semibold text-slate-700"
+                          >
+                            {formatBytesReadable(dev.limitBytes)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {onClearStorage && (
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-slate-500">
+                          Cache offline &amp; antrean sementara
+                        </span>
+                        <button
+                          type="button"
+                          data-testid="btn-clear-device-storage"
+                          onClick={() => setConfirmClearStorageScope('device_cache')}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 transition-colors shrink-0"
+                        >
+                          <Trash2 className="h-3 w-3" aria-hidden="true" />
+                          <span>Bersihkan Cache</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Storage Lokal Aplikasi (IndexedDB Kapasitas Maksimal Browser) */}
+              {(() => {
+                const loc = externalStorage.appLocal;
+                const barClass =
+                  loc.level === 'critical'
+                    ? 'bg-rose-600'
+                    : loc.level === 'warning'
+                      ? 'bg-amber-500'
+                      : 'bg-indigo-600';
+                const badgeClass =
+                  loc.level === 'critical'
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : loc.level === 'warning'
+                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                      : 'bg-indigo-50 text-indigo-700 border-indigo-200';
+                return (
+                  <div className="p-3.5 rounded-xl border border-slate-200/80 bg-white space-y-2.5 flex flex-col justify-between">
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-xs font-semibold text-slate-900 truncate">
+                            Storage Lokal Aplikasi (IndexedDB Maksimal)
+                          </span>
+                          <button
+                            type="button"
+                            data-testid="btn-info-storage-local"
+                            aria-expanded={showLocalStorageInfo}
+                            aria-label="Informasi Storage Lokal Aplikasi"
+                            title="Klik untuk melihat penjelasan Storage Lokal Aplikasi"
+                            onClick={() => setShowLocalStorageInfo((prev) => !prev)}
+                            className={`inline-flex items-center justify-center h-6 w-6 rounded-full border transition-colors shrink-0 ${
+                              showLocalStorageInfo
+                                ? 'bg-indigo-600 border-indigo-600 text-white'
+                                : 'bg-white border-slate-200 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200'
+                            }`}
+                          >
+                            <Info className="h-3 w-3" aria-hidden="true" />
+                          </button>
+                        </div>
+                        <span
+                          className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold font-mono tabular-nums shrink-0 ${badgeClass}`}
+                        >
+                          {loc.percent}%
+                        </span>
+                      </div>
+
+                      {showLocalStorageInfo && (
+                        <div
+                          data-testid="info-panel-storage-local"
+                          role="region"
+                          aria-label="Penjelasan Storage Lokal Aplikasi"
+                          className="rounded-lg border border-indigo-200/80 bg-indigo-50/50 p-2.5 flex items-start justify-between gap-2 text-[11px] text-slate-700 leading-relaxed"
+                        >
+                          <div className="space-y-1 min-w-0">
+                            <p className="font-semibold text-slate-900">
+                              Tentang Storage Lokal Aplikasi (Kapasitas Maksimal)
+                            </p>
+                            <p>
+                              Menyimpan data Siswa, Presensi Harian &amp; Mapel, Jadwal, serta Pengaturan/Logo di perangkat ini. Batas <strong>5.00 MB</strong> sebelumnya adalah ketentuan standar <span className="font-mono">localStorage</span> browser, namun kini aplikasi menggunakan <strong>IndexedDB</strong> hingga batas maksimal kuota browser (<strong>{formatBytesReadable(loc.limitBytes)}</strong>). Cache cepat <span className="font-mono">localStorage</span> saat ini terpakai{' '}
+                              <span className="font-mono font-semibold">
+                                {formatBytesReadable(loc.quickCache.usedBytes)} / {formatBytesReadable(loc.quickCache.limitBytes)}
+                              </span>
+                              .
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setShowLocalStorageInfo(false)}
+                            aria-label="Tutup informasi storage lokal aplikasi"
+                            className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-indigo-100/60 shrink-0"
+                          >
+                            <X className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        </div>
+                      )}
+
+                      <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${barClass}`}
+                          style={{ width: `${Math.min(100, Math.max(2, loc.percent))}%` }}
+                        />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 pt-0.5 text-[11px]">
+                        <div>
+                          <p className="text-slate-500">Terpakai</p>
+                          <p
+                            data-testid="local-storage-used"
+                            className="font-mono tabular-nums font-semibold text-slate-900"
+                          >
+                            {formatBytesReadable(loc.usedBytes)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500">Tersisa</p>
+                          <p
+                            data-testid="local-storage-remaining"
+                            className="font-mono tabular-nums font-semibold text-emerald-700"
+                          >
+                            {formatBytesReadable(loc.remainingBytes)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500">Batas Maksimal</p>
+                          <p
+                            data-testid="local-storage-limit"
+                            className="font-mono tabular-nums font-semibold text-slate-700"
+                          >
+                            {formatBytesReadable(loc.limitBytes)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 border-t border-slate-100 text-[10px] text-slate-500 font-mono tabular-nums">
+                        <span>Siswa: {formatBytesReadable(loc.breakdown.studentsBytes)}</span>
+                        <span>Presensi: {formatBytesReadable(loc.breakdown.attendanceBytes)}</span>
+                        <span>Setelan/Logo: {formatBytesReadable(loc.breakdown.settingsBytes)}</span>
+                      </div>
+                    </div>
+
+                    {onClearStorage && (
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-slate-500">
+                          Kosongkan seluruh data lokal perangkat
+                        </span>
+                        <button
+                          type="button"
+                          data-testid="btn-clear-local-storage"
+                          onClick={() => setConfirmClearStorageScope('app_local')}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 transition-colors shrink-0"
+                        >
+                          <Trash2 className="h-3 w-3" aria-hidden="true" />
+                          <span>Bersihkan Storage</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {externalStorage.cloud.connected && (
+              <div className="rounded-lg border border-slate-200/80 bg-white px-3 py-2.5 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-semibold text-slate-700">
+                      Cloud Firebase Firestore (Kuota Gratis 1 GB)
+                    </span>
+                    <button
+                      type="button"
+                      data-testid="btn-info-storage-cloud"
+                      aria-expanded={showCloudStorageInfo}
+                      aria-label="Informasi Cloud Firebase Firestore"
+                      title="Klik untuk melihat penjelasan Cloud Firebase Firestore"
+                      onClick={() => setShowCloudStorageInfo((prev) => !prev)}
+                      className={`inline-flex items-center justify-center h-5 w-5 rounded-full border transition-colors shrink-0 ${
+                        showCloudStorageInfo
+                          ? 'bg-indigo-600 border-indigo-600 text-white'
+                          : 'bg-white border-slate-200 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200'
+                      }`}
+                    >
+                      <Info className="h-3 w-3" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3 font-mono tabular-nums">
+                    <span className="text-slate-600">
+                      Terpakai:{' '}
+                      <strong className="text-slate-900">
+                        {formatBytesReadable(externalStorage.cloud.usedBytes)}
+                      </strong>
+                    </span>
+                    <span className="text-slate-600">
+                      Tersisa:{' '}
+                      <strong className="text-emerald-700">
+                        {formatBytesReadable(externalStorage.cloud.remainingBytes)}
+                      </strong>
+                    </span>
+                    <span className="text-slate-500">({externalStorage.cloud.percent}%)</span>
+                  </div>
+                </div>
+                {showCloudStorageInfo && (
+                  <div
+                    data-testid="info-panel-storage-cloud"
+                    role="region"
+                    aria-label="Penjelasan Cloud Firebase Firestore"
+                    className="rounded-lg border border-indigo-200/80 bg-indigo-50/50 p-2.5 flex items-start justify-between gap-2 text-[11px] text-slate-700 leading-relaxed"
+                  >
+                    <p>
+                      Penyimpanan awan (Cloud) untuk menyinkronkan data secara otomatis antar perangkat (HP, Tablet, Laptop). Pembersihan cache atau storage lokal di perangkat ini <strong>tidak menghapus data di Cloud Firebase</strong>. Untuk mengurangi kapasitas Cloud, gunakan fitur <em>Hapus Data Presensi Siswa per Tahun Ajaran</em> di bawah.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setShowCloudStorageInfo(false)}
+                      aria-label="Tutup informasi Cloud Firebase"
+                      className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-indigo-100/60 shrink-0"
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -2089,7 +2593,7 @@ export function SettingsView({
         )}
       </section>
 
-      {/* Data Maintenance Section: Reset Semua Data Presensi & Muat Data Demo */}
+      {/* Data Maintenance Section: Hapus Presensi per Tahun Ajaran, Reset Semua Presensi & Muat Data Demo */}
       <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
         <div className="flex items-center gap-3">
           <div className="h-9 w-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
@@ -2097,13 +2601,105 @@ export function SettingsView({
           </div>
           <div>
             <h2 className="text-base font-semibold text-slate-900">
-              Pemeliharaan & Reset Data
+              Pemeliharaan &amp; Reset Data
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Kosongkan seluruh riwayat presensi siswa atau muat contoh data demo untuk pengujian cepat.
+              Hapus data presensi siswa per tahun ajaran untuk menghemat ruang storage, kosongkan seluruh riwayat presensi, atau muat data demo.
             </p>
           </div>
         </div>
+
+        {/* Hapus Data Presensi Siswa per Tahun Ajaran */}
+        {onDeleteAttendanceByAcademicYear && (
+          <div
+            data-testid="section-delete-attendance-by-year"
+            className="p-4 rounded-xl border border-amber-200/90 bg-amber-50/40 space-y-3"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">
+                  Hapus Data Presensi Siswa per Tahun Ajaran (Hemat Storage)
+                </p>
+                <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                  Pilih tahun ajaran tertentu untuk menghapus seluruh catatan presensi harian &amp; presensi mata pelajaran pada tahun ajaran tersebut saja. Data siswa dan tahun ajaran lainnya tetap tersimpan aman.
+                </p>
+              </div>
+            </div>
+
+            {academicYearAttendanceStats.length === 0 ? (
+              <p className="text-xs text-slate-500 bg-white/80 border border-slate-200/70 rounded-lg px-3 py-2.5">
+                Belum ada catatan presensi siswa yang tersimpan pada tahun ajaran mana pun.
+              </p>
+            ) : (
+              (() => {
+                const selectedStat =
+                  academicYearAttendanceStats.find(
+                    (s) => s.tahun_ajaran === selectedDeleteYear
+                  ) || academicYearAttendanceStats[0];
+                return (
+                  <div className="space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                      <div className="flex-1 min-w-0">
+                        <label
+                          htmlFor="select-delete-academic-year"
+                          className="block text-xs font-semibold text-slate-700 mb-1"
+                        >
+                          Pilih Tahun Ajaran yang Akan Dihapus Presensinya
+                        </label>
+                        <select
+                          id="select-delete-academic-year"
+                          data-testid="select-delete-academic-year"
+                          value={selectedStat.tahun_ajaran}
+                          onChange={(e) => setSelectedDeleteYear(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        >
+                          {academicYearAttendanceStats.map((stat) => (
+                            <option key={stat.tahun_ajaran} value={stat.tahun_ajaran}>
+                              TA {stat.tahun_ajaran} — {stat.dailyCount} presensi harian ·{' '}
+                              {stat.subjectCount} presensi mapel (~
+                              {formatBytesReadable(stat.estimatedBytes)})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <button
+                        type="button"
+                        data-testid="btn-delete-year-attendance"
+                        onClick={() => setConfirmDeleteYearModal(selectedStat)}
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors shrink-0 whitespace-nowrap"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Hapus Presensi TA {selectedStat.tahun_ajaran}</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div className="px-3 py-2 rounded-lg bg-white border border-slate-200/80">
+                        <p className="text-[11px] text-slate-500">Presensi Harian</p>
+                        <p className="font-mono tabular-nums font-semibold text-slate-900">
+                          {selectedStat.dailyCount} data
+                        </p>
+                      </div>
+                      <div className="px-3 py-2 rounded-lg bg-white border border-slate-200/80">
+                        <p className="text-[11px] text-slate-500">Presensi Mapel</p>
+                        <p className="font-mono tabular-nums font-semibold text-slate-900">
+                          {selectedStat.subjectCount} data
+                        </p>
+                      </div>
+                      <div className="px-3 py-2 rounded-lg bg-white border border-slate-200/80">
+                        <p className="text-[11px] text-slate-500">Estimasi Ruang Bebas</p>
+                        <p className="font-mono tabular-nums font-semibold text-emerald-700">
+                          ~{formatBytesReadable(selectedStat.estimatedBytes)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()
+            )}
+          </div>
+        )}
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl border border-rose-200/80 bg-rose-50/40">
           <div>
@@ -2683,6 +3279,219 @@ export function SettingsView({
       )}
         </div>
       </div>
+
+      {/* Modal Konfirmasi Hapus Data Presensi Siswa per Tahun Ajaran */}
+      {confirmDeleteYearModal && onDeleteAttendanceByAcademicYear && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-delete-year-title"
+          data-testid="modal-confirm-delete-year-attendance"
+          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-[2px] flex items-center justify-center p-4"
+        >
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                </div>
+                <h3
+                  id="modal-delete-year-title"
+                  className="text-sm font-semibold text-slate-900"
+                >
+                  Konfirmasi Hapus Presensi TA {confirmDeleteYearModal.tahun_ajaran}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteYearModal(null)}
+                aria-label="Tutup dialog konfirmasi"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3 text-xs text-slate-600 leading-relaxed">
+              <p>
+                Anda akan menghapus seluruh data presensi siswa pada{' '}
+                <strong className="text-slate-900">
+                  Tahun Ajaran {confirmDeleteYearModal.tahun_ajaran}
+                </strong>{' '}
+                untuk mengurangi penggunaan storage aplikasi:
+              </p>
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1 font-mono tabular-nums text-[11px] text-slate-700">
+                <div className="flex items-center justify-between">
+                  <span>Presensi Harian</span>
+                  <strong className="text-slate-900">
+                    {confirmDeleteYearModal.dailyCount} data
+                  </strong>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Presensi Mata Pelajaran</span>
+                  <strong className="text-slate-900">
+                    {confirmDeleteYearModal.subjectCount} data
+                  </strong>
+                </div>
+                <div className="flex items-center justify-between pt-1 border-t border-slate-200">
+                  <span>Estimasi Storage Dibebaskan</span>
+                  <strong className="text-emerald-700">
+                    ~{formatBytesReadable(confirmDeleteYearModal.estimatedBytes)}
+                  </strong>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Disarankan untuk menekan <strong>Simpan Backup (.json)</strong> terlebih dahulu jika Anda masih memerlukan arsip tahun ajaran tersebut. Data siswa dan presensi tahun ajaran lainnya tidak akan terpengaruh.
+              </p>
+            </div>
+
+            <div className="px-5 py-3.5 bg-slate-50/80 border-t border-slate-100 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteYearModal(null)}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                data-testid="btn-confirm-delete-year-attendance"
+                onClick={() => {
+                  const targetYear = confirmDeleteYearModal.tahun_ajaran;
+                  setConfirmDeleteYearModal(null);
+                  onDeleteAttendanceByAcademicYear(targetYear);
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 transition-colors"
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Ya, Hapus Presensi Tahun Ini</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Modal Konfirmasi Bersihkan Storage dengan Penjelasan Akibat */}
+      {confirmClearStorageScope && onClearStorage && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-clear-storage-title"
+          data-testid="modal-confirm-clear-storage"
+          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-[2px] flex items-center justify-center p-4"
+        >
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className={`h-8 w-8 rounded-xl flex items-center justify-center shrink-0 ${
+                    confirmClearStorageScope === 'app_local'
+                      ? 'bg-rose-100 text-rose-700'
+                      : 'bg-amber-100 text-amber-700'
+                  }`}
+                >
+                  <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                </div>
+                <h3
+                  id="modal-clear-storage-title"
+                  className="text-sm font-semibold text-slate-900"
+                >
+                  {confirmClearStorageScope === 'app_local'
+                    ? 'Konfirmasi Bersihkan Storage Lokal Aplikasi'
+                    : 'Konfirmasi Bersihkan Cache & Storage Perangkat'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                disabled={clearingStorage}
+                onClick={() => setConfirmClearStorageScope(null)}
+                aria-label="Tutup dialog konfirmasi bersihkan storage"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div
+              data-testid="clear-storage-consequences"
+              className="p-5 space-y-3 text-xs text-slate-600 leading-relaxed"
+            >
+              <p className="font-semibold text-slate-900">
+                Akibat jika Anda menghapus storage ini:
+              </p>
+
+              {confirmClearStorageScope === 'device_cache' ? (
+                <ul className="list-disc pl-4 space-y-1.5 text-slate-700">
+                  <li>
+                    Menghapus cache sementara browser, cadangan IndexedDB, log kuota lokal, dan <strong>antrean sinkronisasi offline</strong> pada perangkat ini.
+                  </li>
+                  <li>
+                    <strong>Risiko:</strong> Data presensi yang dicatat saat mode offline dan <em>belum sempat terkirim</em> ke Cloud Firebase atau Google Sheets akan hilang permanen.
+                  </li>
+                  <li>
+                    Data siswa, presensi aktif, dan pengaturan yang sudah tersimpan di <strong>Cloud Firebase / Google Sheets</strong> tetap aman dan tidak terhapus.
+                  </li>
+                </ul>
+              ) : (
+                <ul className="list-disc pl-4 space-y-1.5 text-slate-700">
+                  <li>
+                    Menghapus <strong>seluruh data lokal aplikasi pada perangkat ini</strong> (Data Siswa, Presensi Harian &amp; Mapel, Jadwal Pelajaran, Antrean Offline, Cache IndexedDB, serta Pengaturan/Logo lokal).
+                  </li>
+                  <li>
+                    <strong>Risiko Permanen:</strong> Jika Anda <em>belum mengunduh Backup (.json)</em> dan tidak terhubung ke Cloud Firebase / Google Spreadsheet, seluruh data lokal di perangkat ini akan <strong>hilang permanen dan tidak dapat dikembalikan</strong>.
+                  </li>
+                  <li>
+                    Jika aplikasi terhubung ke Cloud Firebase atau Google Spreadsheet, data di server tetap aman dan dapat ditarik kembali dengan tombol <strong>Sinkronkan</strong>. Sesi login Anda tetap aktif agar tidak langsung keluar.
+                  </li>
+                </ul>
+              )}
+
+              <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/80 text-[11px] text-amber-900">
+                <strong>Saran Keamanan:</strong> Tekan <strong>Simpan Backup (.json)</strong> terlebih dahulu bila Anda masih membutuhkan cadangan data di komputer/flashdisk.
+              </div>
+            </div>
+
+            <div className="px-5 py-3.5 bg-slate-50/80 border-t border-slate-100 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={clearingStorage}
+                onClick={() => setConfirmClearStorageScope(null)}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={clearingStorage}
+                data-testid="btn-confirm-clear-storage"
+                onClick={async () => {
+                  const scope = confirmClearStorageScope;
+                  setClearingStorage(true);
+                  try {
+                    await onClearStorage(scope);
+                    setConfirmClearStorageScope(null);
+                  } finally {
+                    setClearingStorage(false);
+                  }
+                }}
+                className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-white text-xs font-semibold transition-colors disabled:opacity-60 ${
+                  confirmClearStorageScope === 'app_local'
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : 'bg-amber-600 hover:bg-amber-700'
+                }`}
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>
+                  {clearingStorage
+                    ? 'Membersihkan...'
+                    : confirmClearStorageScope === 'app_local'
+                      ? 'Ya, Bersihkan Storage Lokal'
+                      : 'Ya, Bersihkan Cache'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

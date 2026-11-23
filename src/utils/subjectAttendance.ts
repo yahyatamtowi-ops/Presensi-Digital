@@ -17,6 +17,8 @@ import {
   parseTimeToMinutes,
   resolveItemAcademicYear,
 } from './attendanceLogic';
+import { mirrorSubjectRecordsBackupToIdb } from './offlineStore';
+import { notifyStorageWriteError } from './storageHealth';
 
 const SUBJECT_ASSIGNMENTS_KEY = 'presensiqr_subject_assignments_v2';
 const SUBJECT_RECORDS_KEY = 'presensiqr_subject_records_v2';
@@ -656,10 +658,13 @@ export function loadSubjectRecords(): SubjectAttendanceRecord[] {
 }
 
 export function saveSubjectRecords(records: SubjectAttendanceRecord[]): void {
+  void mirrorSubjectRecordsBackupToIdb(records);
   try {
     localStorage.setItem(SUBJECT_RECORDS_KEY, JSON.stringify(records));
   } catch {
-    // Ignore storage quota errors
+    notifyStorageWriteError(
+      'Cache cepat localStorage (5 MB) penuh saat menyimpan presensi mapel. Data tetap dicadangkan otomatis ke IndexedDB berkapasitas besar.'
+    );
   }
 }
 

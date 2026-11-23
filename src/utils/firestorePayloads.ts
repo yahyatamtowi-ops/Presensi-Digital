@@ -4,6 +4,7 @@ import type {
   AttendanceScheduleMode,
   AttendanceStatus,
   DayOfWeek,
+  LateCorrectionRequest,
   MasterSubject,
   SchoolSettings,
   SemesterKind,
@@ -113,6 +114,13 @@ export function attendanceDocId(record: Pick<AttendanceRecord, 'id' | 'tanggal' 
   return toSafeFirestoreDocId(base, 'att');
 }
 
+export function lateCorrectionDocId(
+  req: Pick<LateCorrectionRequest, 'id' | 'tanggal' | 'nis'>
+): string {
+  const base = req.id?.trim() || `lcr_${req.tanggal}_${req.nis}`;
+  return toSafeFirestoreDocId(base, 'lcr');
+}
+
 export function buildSchoolConfigCreatePayload<T>(
   ownerId: string,
   settings: SchoolSettings,
@@ -133,6 +141,8 @@ export function buildSchoolConfigCreatePayload<T>(
     semester: normalizeSemester(settings.semester, 'ganjil'),
     tema: clampString(normalizeThemeId(settings.tema, 'indigo'), 32, 'indigo'),
     script_url: sanitizeOptionalHttpsUrl(settings.script_url, 500),
+    no_wa_admin: clampString(settings.no_wa_admin, 32),
+    show_creator_credit: settings.show_creator_credit !== false,
     createdAt: timestampValue,
     updatedAt: timestampValue,
   };
@@ -156,6 +166,8 @@ export function buildSchoolConfigUpdatePayload<T>(
     semester: normalizeSemester(settings.semester, 'ganjil'),
     tema: clampString(normalizeThemeId(settings.tema, 'indigo'), 32, 'indigo'),
     script_url: sanitizeOptionalHttpsUrl(settings.script_url, 500),
+    no_wa_admin: clampString(settings.no_wa_admin, 32),
+    show_creator_credit: settings.show_creator_credit !== false,
     updatedAt: timestampValue,
   };
 }
@@ -313,6 +325,35 @@ export function buildUserAccountPayload<T>(
   };
 }
 
+export function buildLateCorrectionRequestPayload<T>(
+  ownerId: string,
+  req: LateCorrectionRequest,
+  timestampValue: T
+) {
+  const status: LateCorrectionRequest['status'] =
+    req.status === 'approved' || req.status === 'rejected' ? req.status : 'pending';
+  const yr = clampString(resolveItemAcademicYear(req.tahun_ajaran), 32, '2026/2027');
+  return {
+    ownerId,
+    id: clampString(req.id, 128, lateCorrectionDocId(req)),
+    tanggal: normalizeDateYMD(req.tanggal),
+    nis: clampString(req.nis, 64, '0'),
+    nama: clampString(req.nama, 160, 'Siswa'),
+    kelas: clampString(req.kelas, 64, 'Umum'),
+    jam_masuk_asal: clampString(req.jam_masuk_asal, 16, '-'),
+    alasan: clampString(req.alasan, 400, 'Kendala perjalanan'),
+    requested_by_user_id: clampString(req.requested_by_user_id, 128, 'usr_walikelas'),
+    requested_by_name: clampString(req.requested_by_name, 160, 'Wali Kelas'),
+    requested_at: clampString(req.requested_at, 64, new Date().toISOString()),
+    status,
+    resolved_by_name: clampString(req.resolved_by_name, 160),
+    resolved_at: clampString(req.resolved_at, 64),
+    catatan_admin: clampString(req.catatan_admin, 300),
+    tahun_ajaran: yr.length >= 4 ? yr : '2026/2027',
+    updatedAt: timestampValue,
+  };
+}
+
 export function extractSchoolSettingsFromDoc(
   data: Record<string, unknown>,
   fallback: SchoolSettings
@@ -371,5 +412,13 @@ export function extractSchoolSettingsFromDoc(
         : fallback.tema,
     script_url:
       typeof data.script_url === 'string' ? data.script_url : fallback.script_url,
+    no_wa_admin:
+      typeof data.no_wa_admin === 'string'
+        ? data.no_wa_admin
+        : fallback.no_wa_admin || '',
+    show_creator_credit:
+      typeof data.show_creator_credit === 'boolean'
+        ? data.show_creator_credit
+        : fallback.show_creator_credit !== false,
   };
 }

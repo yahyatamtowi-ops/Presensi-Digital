@@ -24,10 +24,12 @@ import {
   CalendarRange,
   Volume2,
   WifiOff,
+  Bell,
 } from 'lucide-react';
 import type {
   AuthSession,
   ConnectionStatus,
+  LateCorrectionRequest,
   SchoolSettings,
   TabId,
   ToastMessage,
@@ -35,6 +37,8 @@ import type {
 import { canAccessTab } from '../utils/auth';
 import { DEFAULT_APP_NAME, DEFAULT_SCHOOL_LOGO } from '../utils/seedData';
 import { formatSemesterLabel } from '../utils/subjectAttendance';
+import { AdminNotificationBar, AdminStorageAlertBanner } from './AdminNotificationBar';
+import type { StorageAlertItem } from '../utils/storageHealth';
 
 interface CloudSyncUiState {
   connected: boolean;
@@ -57,6 +61,11 @@ interface LayoutShellProps {
   onSyncNow: () => void;
   onReplayVoice?: () => void;
   cloudSync?: CloudSyncUiState;
+  pendingLateRequests?: LateCorrectionRequest[];
+  onApproveLateRequest?: (requestId: string) => void;
+  onRejectLateRequest?: (requestId: string) => void;
+  storageAlerts?: StorageAlertItem[];
+  onOpenStorageBackup?: () => void;
   toasts: ToastMessage[];
   onDismissToast: (id: string) => void;
   children: ReactNode;
@@ -270,6 +279,11 @@ export function LayoutShell({
   onSyncNow,
   onReplayVoice,
   cloudSync,
+  pendingLateRequests = [],
+  onApproveLateRequest,
+  onRejectLateRequest,
+  storageAlerts = [],
+  onOpenStorageBackup,
   toasts,
   onDismissToast,
   children,
@@ -278,6 +292,7 @@ export function LayoutShell({
     typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
   );
   const [showScrollTop, setShowScrollTop] = useState<boolean>(false);
+  const [notifBarExpanded, setNotifBarExpanded] = useState<boolean>(false);
 
   useEffect(() => {
     function handleFullscreenChange() {
@@ -335,6 +350,8 @@ export function LayoutShell({
 
   const currentRole = session?.role ?? null;
   const showMenuBar = Boolean(session);
+  const showCreatorCredit = settings.show_creator_credit !== false;
+  const totalAdminAlertCount = pendingLateRequests.length + storageAlerts.length;
   const isKepalaSekolah = currentRole === 'kepala_sekolah';
   const baseHeaderInfo = TAB_TITLES[activeTab];
   const headerInfo =
@@ -477,6 +494,16 @@ export function LayoutShell({
               )}
             </div>
           </div>
+
+          {showCreatorCredit && (
+            <div
+              data-testid="menu-bar-creator-credit"
+              className="pt-2.5 border-t border-slate-200/80 text-[11px] text-slate-500 leading-snug"
+            >
+              Application Created By:{' '}
+              <span className="font-semibold text-slate-700">Tamtowi Yahya</span>
+            </div>
+          )}
         </div>
       </aside>
       )}
@@ -547,6 +574,45 @@ export function LayoutShell({
                   <span className="hidden sm:inline">Sinkronkan</span>
                 </button>
               )}
+
+              {/* Master Admin Notification Bell for Wali Kelas Requests & Storage Alerts */}
+              {currentRole === 'master_admin' &&
+                onApproveLateRequest &&
+                onRejectLateRequest && (
+                  <button
+                    type="button"
+                    data-testid="admin-notif-bell"
+                    onClick={() => {
+                      setNotifBarExpanded((prev) => !prev);
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    aria-label={
+                      totalAdminAlertCount > 0
+                        ? `${totalAdminAlertCount} notifikasi aktif menunggu perhatian Master Admin`
+                        : 'Buka notifikasi Master Admin'
+                    }
+                    title={
+                      totalAdminAlertCount > 0
+                        ? `${totalAdminAlertCount} notifikasi aktif (${pendingLateRequests.length} permohonan, ${storageAlerts.length} peringatan storage)`
+                        : 'Notifikasi Master Admin'
+                    }
+                    className={`relative inline-flex items-center justify-center p-1.5 sm:p-2 rounded-lg border transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                      totalAdminAlertCount > 0
+                        ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-indigo-700'
+                    }`}
+                  >
+                    <Bell className="h-4 w-4" aria-hidden="true" />
+                    {totalAdminAlertCount > 0 && (
+                      <span
+                        data-testid="admin-notif-bell-badge"
+                        className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-bold font-mono tabular-nums flex items-center justify-center shadow-xs"
+                      >
+                        {totalAdminAlertCount}
+                      </span>
+                    )}
+                  </button>
+                )}
 
               {/* Top-right Voice Activation / Test Button (especially helpful on Tablet & HP) */}
               {onReplayVoice && (
@@ -641,10 +707,36 @@ export function LayoutShell({
               })}
             </nav>
           )}
+          {showMenuBar && showCreatorCredit && (
+            <div
+              data-testid="mobile-menu-bar-creator-credit"
+              className="lg:hidden border-t border-slate-100 bg-slate-50/70 px-3 sm:px-5 py-1 text-[10px] text-slate-500 text-center"
+            >
+              Application Created By:{' '}
+              <span className="font-semibold text-slate-700">Tamtowi Yahya</span>
+            </div>
+          )}
         </div>
 
         {/* Page Viewport */}
         <main className="flex-1 px-4 sm:px-6 lg:px-8 py-5 sm:py-6 pb-10 lg:pb-8 max-w-7xl w-full mx-auto">
+          {currentRole === 'master_admin' && storageAlerts.length > 0 && (
+            <AdminStorageAlertBanner
+              alerts={storageAlerts}
+              onOpenStorageBackup={onOpenStorageBackup}
+            />
+          )}
+          {currentRole === 'master_admin' &&
+            onApproveLateRequest &&
+            onRejectLateRequest && (
+              <AdminNotificationBar
+                requests={pendingLateRequests}
+                expanded={notifBarExpanded}
+                onClose={() => setNotifBarExpanded(false)}
+                onApprove={onApproveLateRequest}
+                onReject={onRejectLateRequest}
+              />
+            )}
           {children}
         </main>
       </div>

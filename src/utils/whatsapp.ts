@@ -55,6 +55,36 @@ export function buildParentAttendanceMessage(params: {
   return lines.join('\n');
 }
 
+export function buildLateCorrectionWhatsAppMessage(params: {
+  namaSekolah: string;
+  tanggal: string;
+  namaSiswa: string;
+  nis: string;
+  kelas: string;
+  jamMasukAsal: string;
+  alasan: string;
+  namaWaliKelas: string;
+}): string {
+  const formattedDate = formatIndonesianDate(params.tanggal);
+  const lines = [
+    `*Permohonan Ubah Status Presensi Tepat Waktu — ${params.namaSekolah}*`,
+    '',
+    'Yth. Master Admin,',
+    'Mohon persetujuan untuk mengubah status presensi siswa berikut dari *Terlambat* menjadi *Hadir (Tepat Waktu)* karena kendala di perjalanan dan telah izin kepada Wali Kelas:',
+    '',
+    `• Nama Siswa: *${params.namaSiswa}*`,
+    `• NISN: ${params.nis}`,
+    `• Kelas: ${params.kelas}`,
+    `• Tanggal: ${formattedDate}`,
+    `• Jam Masuk Tercatat: ${params.jamMasukAsal && params.jamMasukAsal !== '-' ? `${params.jamMasukAsal} WIB` : '-'}`,
+    `• Alasan Kendala: ${params.alasan.trim()}`,
+    `• Diajukan oleh: ${params.namaWaliKelas} (Wali Kelas ${params.kelas})`,
+    '',
+    'Mohon konfirmasi permohonan ini melalui Bilah Notifikasi pada halaman Master Admin aplikasi Presensi Digital. Terima kasih.',
+  ];
+  return lines.join('\n');
+}
+
 export function buildWhatsAppUrl(rawPhone: string, message: string): string | null {
   const normalized = normalizeIndonesianPhone(rawPhone);
   if (!normalized || normalized.length < 9) return null;

@@ -9,12 +9,12 @@ import {
 import type { AttendanceStatus } from '../types';
 
 interface StatusBadgeProps {
-  status: AttendanceStatus | 'Belum Absen';
+  status: AttendanceStatus | 'Belum Presensi' | 'Belum Absen';
   size?: 'sm' | 'md';
 }
 
 const STATUS_STYLES: Record<
-  AttendanceStatus | 'Belum Absen',
+  AttendanceStatus | 'Belum Presensi',
   { bg: string; text: string; border: string; Icon: typeof CheckCircle2 }
 > = {
   Hadir: {
@@ -47,7 +47,7 @@ const STATUS_STYLES: Record<
     border: 'border-rose-200',
     Icon: XCircle,
   },
-  'Belum Absen': {
+  'Belum Presensi': {
     bg: 'bg-slate-100',
     text: 'text-slate-600',
     border: 'border-slate-200',
@@ -56,7 +56,9 @@ const STATUS_STYLES: Record<
 };
 
 export function StatusBadge({ status, size = 'sm' }: StatusBadgeProps) {
-  const cfg = STATUS_STYLES[status] ?? STATUS_STYLES['Belum Absen'];
+  const normalizedStatus: AttendanceStatus | 'Belum Presensi' =
+    status === 'Belum Absen' ? 'Belum Presensi' : status;
+  const cfg = STATUS_STYLES[normalizedStatus] ?? STATUS_STYLES['Belum Presensi'];
   const { Icon } = cfg;
   const padding = size === 'sm' ? 'px-2.5 py-0.5 text-xs' : 'px-3 py-1 text-sm';
 
@@ -65,7 +67,7 @@ export function StatusBadge({ status, size = 'sm' }: StatusBadgeProps) {
       className={`inline-flex items-center gap-1.5 rounded-lg border font-medium whitespace-nowrap ${cfg.bg} ${cfg.text} ${cfg.border} ${padding}`}
     >
       <Icon className={size === 'sm' ? 'h-3.5 w-3.5 shrink-0' : 'h-4 w-4 shrink-0'} aria-hidden="true" />
-      <span>{status}</span>
+      <span>{normalizedStatus}</span>
     </span>
   );
 }

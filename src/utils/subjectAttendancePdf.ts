@@ -20,6 +20,7 @@ import {
   formatIndonesianDateWithDay,
   formatSemesterLabel,
 } from './subjectAttendance';
+import { buildLetterheadExcelSheet } from './excelLetterhead';
 
 export function resolveTeacherNip(
   accounts: UserAccount[],
@@ -711,29 +712,59 @@ export async function generateMonthlyAnalyticsPdf(params: {
 }
 
 export function exportMonthlyAnalyticsExcel(params: {
+  settings: SchoolSettings;
+  monthLabel: string;
   monthKey: string;
+  academicYearLabel: string;
   classLabel: string;
   rows: PeriodSummaryRow[];
 }): void {
-  const sheetRows = params.rows.map((r, idx) => ({
-    No: idx + 1,
-    NISN: r.nis,
-    'Nama Siswa': r.nama,
-    Kelas: r.kelas,
-    Hadir: r.hadir,
-    Terlambat: r.terlambat,
-    Sakit: r.sakit,
-    Izin: r.izin,
-    Alpa: r.alpa,
-    Total: r.totalTercatat,
-    '% Tepat Waktu': `${r.tepatWaktuPct ?? 0}%`,
-    'Skor Kehadiran': `${r.skorKehadiranPct ?? r.kehadiranPct}%`,
-    Kategori: getAnalyticsCategory(r),
-  }));
+  const headers = [
+    'No',
+    'NISN',
+    'Nama Siswa',
+    'Kelas',
+    'Hadir',
+    'Terlambat',
+    'Sakit',
+    'Izin',
+    'Alpa',
+    'Total',
+    '% Tepat Waktu',
+    'Skor Kehadiran',
+    'Kategori',
+  ];
 
-  const ws = XLSX.utils.json_to_sheet(sheetRows);
+  const dataRows = params.rows.map((r, idx) => [
+    idx + 1,
+    r.nis,
+    r.nama,
+    r.kelas,
+    r.hadir,
+    r.terlambat,
+    r.sakit,
+    r.izin,
+    r.alpa,
+    r.totalTercatat,
+    `${r.tepatWaktuPct ?? 0}%`,
+    `${r.skorKehadiranPct ?? r.kehadiranPct}%`,
+    getAnalyticsCategory(r),
+  ]);
+
+  const { sheet } = buildLetterheadExcelSheet({
+    settings: params.settings,
+    documentTitle: 'ANALISIS KEHADIRAN SELURUH SISWA (BULANAN)',
+    subtitleLines: [
+      `Periode: ${params.monthLabel} · Kelas: ${params.classLabel} · Tahun Ajaran: ${params.academicYearLabel} · Semester: ${formatSemesterLabel(params.settings.semester)}`,
+      'Ketentuan Penilaian: Nilai kurang baik berlaku untuk Terlambat, Alpa, Izin > 7×/bulan, dan Sakit > 7 hari berturut-turut',
+    ],
+    headers,
+    rows: dataRows,
+    includeSignature: true,
+  });
+
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Analisis_Bulanan');
+  XLSX.utils.book_append_sheet(wb, sheet, 'Analisis_Bulanan');
   XLSX.writeFile(
     wb,
     `Analisis_Kehadiran_Bulanan_${slugifyFilePart(params.monthKey)}_${slugifyFilePart(

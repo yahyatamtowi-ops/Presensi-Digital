@@ -8,6 +8,7 @@ import {
   Coffee,
   Download,
   FileSpreadsheet,
+  FileText,
   Plus,
   RefreshCw,
   Save,
@@ -43,6 +44,8 @@ import {
   type TimetableMatrixImportResult,
 } from '../utils/scheduleImportExport';
 import { formatSemesterLabel, normalizeSemester } from '../utils/subjectAttendance';
+import { buildLetterheadExcelSheet } from '../utils/excelLetterhead';
+import { generateTimetableMatrixPdf } from '../utils/timetablePdf';
 
 interface TimetableMatrixViewProps {
   settings: SchoolSettings;
@@ -94,6 +97,7 @@ export function TimetableMatrixView({
   const [importParsing, setImportParsing] = useState(false);
   const [importPreview, setImportPreview] = useState<TimetableMatrixImportResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   const configKey = useMemo(
     () => getTimetableConfigKey(selectedYear, selectedSemester),
@@ -427,46 +431,90 @@ export function TimetableMatrixView({
   }
 
   function handleExportExcel() {
-    const rows: Array<Record<string, string | number>> = [];
+    const headers = ['Hari', 'Jam ke', 'Waktu', ...activeClasses];
+    const rows: Array<Array<string | number>> = [];
     for (const hari of visibleDays) {
       for (const slot of dailySlots) {
         if (slot.kind === 'break') {
-          const row: Record<string, string | number> = {
-            Hari: hari,
-            'Jam ke': slot.label,
-            Waktu: `${slot.jam_mulai} - ${slot.jam_selesai}`,
-          };
-          for (const cls of activeClasses) {
-            row[cls] = slot.label.toUpperCase();
-          }
-          rows.push(row);
+          rows.push([
+            hari,
+            slot.label,
+            `${slot.jam_mulai} - ${slot.jam_selesai}`,
+            ...activeClasses.map(() => slot.label.toUpperCase()),
+          ]);
         } else {
-          const row: Record<string, string | number> = {
-            Hari: hari,
-            'Jam ke': slot.jamKe,
-            Waktu: `${slot.jam_mulai} - ${slot.jam_selesai}`,
-          };
-          for (const cls of activeClasses) {
-            const cell = draft.cells[makeTimetableCellKey(hari, slot.jamKe, cls)];
-            row[cls] = cell?.mata_pelajaran
-              ? cell.teacher_name
-                ? `${cell.mata_pelajaran} (${cell.teacher_name})`
-                : cell.mata_pelajaran
-              : '-';
-          }
-          rows.push(row);
+          rows.push([
+            hari,
+            slot.jamKe,
+            `${slot.jam_mulai} - ${slot.jam_selesai}`,
+            ...activeClasses.map((cls) => {
+              const cell = draft.cells[makeTimetableCellKey(hari, slot.jamKe, cls)];
+              return cell?.mata_pelajaran
+                ? cell.teacher_name
+                  ? `${cell.mata_pelajaran} (${cell.teacher_name})`
+                  : cell.mata_pelajaran
+                : '-';
+            }),
+          ]);
         }
       }
     }
 
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const filterDayLabel =
+      filterDay === 'ALL'
+        ? `Semua Hari (${draft.jumlah_hari === 6 ? 'Senin–Sabtu' : 'Senin–Jumat'})`
+        : `Hari ${filterDay}`;
+
+    const { sheet } = buildLetterheadExcelSheet({
+      settings,
+      documentTitle: 'JADWAL MATA PELAJARAN',
+      subtitleLines: [
+        `Tahun Ajaran: ${selectedYear} · Semester: ${formatSemesterLabel(selectedSemester)} · Durasi: ${draft.durasi_jp_menit} Menit/JP`,
+        `Cakupan Hari: ${filterDayLabel} · Jumlah Kelas: ${activeClasses.length} Kelas`,
+      ],
+      headers,
+      rows,
+      includeSignature: true,
+    });
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Jadwal_Mapel');
+    XLSX.utils.book_append_sheet(wb, sheet, 'Jadwal_Mapel');
     const safeYear = selectedYear.replace(/[^0-9]+/g, '_');
     XLSX.writeFile(
       wb,
       `Jadwal_Mata_Pelajaran_TA_${safeYear}_${formatSemesterLabel(selectedSemester)}.xlsx`
     );
+  }
+
+  async function handleDownloadPdf() {
+    setDownloadingPdf(true);
+    try {
+      const filterDayLabel =
+        filterDay === 'ALL'
+          ? `Semua Hari (${draft.jumlah_hari === 6 ? 'Senin–Sabtu' : 'Senin–Jumat'})`
+          : `Hari ${filterDay}`;
+      const { blob, filename } = await generateTimetableMatrixPdf({
+        settings,
+        config: {
+          ...draft,
+          tahun_ajaran: selectedYear,
+          semester: selectedSemester,
+        },
+        visibleDays,
+        activeClasses,
+        filterDayLabel,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } finally {
+      setDownloadingPdf(false);
+    }
   }
 
   return (
@@ -537,6 +585,17 @@ export function TimetableMatrixView({
             >
               <Download className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
               <span>Export Excel</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="btn-download-timetable-pdf"
+              disabled={downloadingPdf}
+              onClick={handleDownloadPdf}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-rose-200 bg-rose-50/70 text-xs font-semibold text-rose-700 hover:bg-rose-100/80 disabled:opacity-60 transition-colors whitespace-nowrap"
+            >
+              <FileText className="h-3.5 w-3.5 text-rose-600" aria-hidden="true" />
+              <span>{downloadingPdf ? 'Menyiapkan PDF...' : 'Unduh PDF'}</span>
             </button>
 
             <button

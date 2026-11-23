@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, type User as FirebaseUser } from 'firebase/auth';
 import { auth, signInWithGoogle, signOutFirebase } from './firebase';
 import {
+  bulkDeleteAttendanceFromCloud,
+  bulkDeleteSubjectRecordsFromCloud,
   bulkUpsertAttendanceToCloud,
   bulkUpsertStudentsToCloud,
   bulkUpsertSubjectRecordsToCloud,
@@ -16,6 +18,7 @@ import {
   subscribeToSchoolWorkspace,
   syncAllAccountsToCloud,
   upsertAttendanceToCloud,
+  upsertLateCorrectionRequestToCloud,
   upsertMasterSubjectToCloud,
   upsertStudentToCloud,
   upsertSubjectAssignmentToCloud,
@@ -30,6 +33,7 @@ import type {
   AuthSession,
   ConnectionStatus,
   DayOfWeek,
+  LateCorrectionRequest,
   MasterSubject,
   ScanActionMode,
   SchoolSettings,
@@ -59,7 +63,14 @@ import {
   saveLocalSettings,
   saveLocalStudents,
 } from './utils/gasApi';
-import { isBrowserOnline } from './utils/offlineStore';
+import {
+  clearOfflineIndexedDbCache,
+  isBrowserOnline,
+  readRecordsBackupFromIdb,
+  readStudentsBackupFromIdb,
+  readSubjectRecordsBackupFromIdb,
+  requestPersistentBrowserStorage,
+} from './utils/offlineStore';
 import {
   createAppBackupPayload,
   exportFullExcelArchive,
@@ -94,9 +105,18 @@ import {
   normalizeScheduleMode,
   normalizeTimeHHMM,
   processQrScan,
+  resetAttendanceRecordsForDate,
   resolveItemAcademicYear,
   type ScanOutcome,
 } from './utils/attendanceLogic';
+import {
+  approveLateCorrectionRequest,
+  createLateCorrectionRequest,
+  getPendingLateCorrectionRequests,
+  loadLocalLateCorrectionRequests,
+  rejectLateCorrectionRequest,
+  saveLocalLateCorrectionRequests,
+} from './utils/lateCorrectionRequests';
 import { isDarkTheme, normalizeThemeId } from './utils/themes';
 import {
   initSpeechEngine,
@@ -161,7 +181,18 @@ import { ScheduleManagementView } from './components/ScheduleManagementView';
 import { TimetableMatrixView } from './components/TimetableMatrixView';
 import { TeacherLessonListView } from './components/TeacherLessonListView';
 import { AnalyticsView } from './components/AnalyticsView';
-import { SettingsView } from './components/SettingsView';
+import { SettingsView, type SettingsSubMenuId } from './components/SettingsView';
+import {
+  buildExternalStorageSnapshot,
+  deleteAttendanceByAcademicYear,
+  estimateLiveAppDataBreakdown,
+  evaluateMasterAdminStorageAlerts,
+  measureLocalStorageUsage,
+  STORAGE_ERROR_EVENT,
+  summarizeAttendanceByAcademicYear,
+  type ClearStorageScope,
+} from './utils/storageHealth';
+import { formatBytesReadable } from './utils/firestoreUsage';
 
 const TAB_LABELS: Record<TabId, string> = {
   scan: 'Scan QR',
@@ -274,6 +305,17 @@ export default function App() {
   const [firestoreDailyUsage, setFirestoreDailyUsage] = useState(() =>
     loadFirestoreDailyUsage()
   );
+  const [storageRefreshTick, setStorageRefreshTick] = useState(0);
+  const [deviceStorageEstimate, setDeviceStorageEstimate] = useState<{
+    usage: number | null;
+    quota: number | null;
+    persisted: boolean;
+  }>({ usage: null, quota: null, persisted: false });
+  const [storageWriteError, setStorageWriteError] = useState<string | null>(null);
+  const [settingsInitialSubMenu, setSettingsInitialSubMenu] = useState<
+    SettingsSubMenuId | undefined
+  >(undefined);
+  const [settingsSubMenuNonce, setSettingsSubMenuNonce] = useState(0);
 
   const syncInFlightRef = useRef(false);
   const lastLocalSettingsSaveAtRef = useRef(0);
@@ -286,6 +328,9 @@ export default function App() {
   const studentsSaveInFlightCountRef = useRef(0);
   const autoSeededAkunForUrlRef = useRef<string | null>(null);
   const lastLocalAcademicSaveAtRef = useRef(0);
+  const [lateCorrectionRequests, setLateCorrectionRequests] = useState<
+    LateCorrectionRequest[]
+  >(() => loadLocalLateCorrectionRequests());
   const latestDataRef = useRef({ students, records, settings });
   latestDataRef.current = { students, records, settings };
   const latestFullSnapshotRef = useRef<FullLocalSchoolSnapshot>({
@@ -297,6 +342,7 @@ export default function App() {
     subjectAssignments,
     subjectRecords,
     accounts,
+    lateCorrectionRequests,
   });
   latestFullSnapshotRef.current = {
     settings,
@@ -307,7 +353,13 @@ export default function App() {
     subjectAssignments,
     subjectRecords,
     accounts,
+    lateCorrectionRequests,
   };
+
+  const pendingLateRequests = useMemo(
+    () => getPendingLateCorrectionRequests(lateCorrectionRequests),
+    [lateCorrectionRequests]
+  );
 
   const activeTheme = previewTheme ?? settings.tema ?? 'indigo';
 
@@ -371,6 +423,200 @@ export default function App() {
       accounts,
     ]
   );
+
+  // Request browser Persistent Storage & hydrate large datasets from IndexedDB if localStorage overflowed
+  useEffect(() => {
+    let cancelled = false;
+    async function initMaxLocalStorage() {
+      const persisted = await requestPersistentBrowserStorage();
+      if (!cancelled && persisted) {
+        setDeviceStorageEstimate((prev) => ({ ...prev, persisted: true }));
+      }
+      // Hydrate from IndexedDB if localStorage was capped at 5 MB and holds fewer records
+      try {
+        const [idbStudents, idbRecords, idbSubjectRecords] = await Promise.all([
+          readStudentsBackupFromIdb(),
+          readRecordsBackupFromIdb(),
+          readSubjectRecordsBackupFromIdb(),
+        ]);
+        if (cancelled) return;
+        if (idbStudents.length > latestFullSnapshotRef.current.students.length) {
+          latestDataRef.current.students = idbStudents;
+          latestFullSnapshotRef.current.students = idbStudents;
+          setStudents(idbStudents);
+        }
+        if (idbRecords.length > latestFullSnapshotRef.current.records.length) {
+          latestDataRef.current.records = idbRecords;
+          latestFullSnapshotRef.current.records = idbRecords;
+          setRecords(idbRecords);
+        }
+        if (
+          idbSubjectRecords.length > latestFullSnapshotRef.current.subjectRecords.length
+        ) {
+          latestFullSnapshotRef.current.subjectRecords = idbSubjectRecords;
+          setSubjectRecords(idbSubjectRecords);
+        }
+      } catch {
+        // Ignore IndexedDB read fallback error
+      }
+    }
+    void initMaxLocalStorage();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Measure real device/browser storage via Storage Quota API & listen for storage write errors
+  useEffect(() => {
+    let cancelled = false;
+    async function probeDeviceStorage() {
+      try {
+        if (
+          typeof navigator !== 'undefined' &&
+          navigator.storage &&
+          typeof navigator.storage.estimate === 'function'
+        ) {
+          const [est, persisted] = await Promise.all([
+            navigator.storage.estimate(),
+            typeof navigator.storage.persisted === 'function'
+              ? navigator.storage.persisted().catch(() => false)
+              : Promise.resolve(false),
+          ]);
+          if (!cancelled) {
+            setDeviceStorageEstimate({
+              usage: typeof est.usage === 'number' ? est.usage : null,
+              quota: typeof est.quota === 'number' ? est.quota : null,
+              persisted: Boolean(persisted),
+            });
+          }
+        }
+      } catch {
+        // Fallback to IndexedDB/localStorage budget automatically
+      }
+    }
+    void probeDeviceStorage();
+    return () => {
+      cancelled = true;
+    };
+  }, [storageRefreshTick, records.length, subjectRecords.length, students.length]);
+
+  useEffect(() => {
+    function handleStorageWriteErrorEvent(event: Event) {
+      const custom = event as CustomEvent<{ message?: string }>;
+      const msg =
+        custom.detail?.message ||
+        'Cache cepat browser (localStorage) penuh. Data besar diamankan di IndexedDB.';
+      setStorageWriteError(msg);
+      setStorageRefreshTick((t) => t + 1);
+    }
+    window.addEventListener(STORAGE_ERROR_EVENT, handleStorageWriteErrorEvent);
+    return () => {
+      window.removeEventListener(STORAGE_ERROR_EVENT, handleStorageWriteErrorEvent);
+    };
+  }, []);
+
+  const handleRefreshStorageEstimate = useCallback(() => {
+    setStorageWriteError(null);
+    setStorageRefreshTick((t) => t + 1);
+  }, []);
+
+  const localStorageUsage = useMemo(() => {
+    // Dependencies ensure recalculation whenever persisted app data or manual refresh changes
+    void records.length;
+    void subjectRecords.length;
+    void students.length;
+    void accounts.length;
+    void settings;
+    void storageRefreshTick;
+    return measureLocalStorageUsage();
+  }, [
+    records.length,
+    subjectRecords.length,
+    students.length,
+    accounts.length,
+    settings,
+    storageRefreshTick,
+  ]);
+
+  const liveAppBreakdown = useMemo(
+    () =>
+      estimateLiveAppDataBreakdown({
+        students,
+        records,
+        subjectRecords,
+        settings,
+        otherCollections: {
+          masterSubjects,
+          teacherSchedules,
+          subjectAssignments,
+          timetableConfigs,
+          accounts,
+          lateCorrectionRequests,
+        },
+      }),
+    [
+      students,
+      records,
+      subjectRecords,
+      settings,
+      masterSubjects,
+      teacherSchedules,
+      subjectAssignments,
+      timetableConfigs,
+      accounts,
+      lateCorrectionRequests,
+    ]
+  );
+
+  const externalStorageSnapshot = useMemo(
+    () =>
+      buildExternalStorageSnapshot({
+        deviceUsageBytes: deviceStorageEstimate.usage,
+        deviceQuotaBytes: deviceStorageEstimate.quota,
+        devicePersisted: deviceStorageEstimate.persisted,
+        localUsage: localStorageUsage,
+        liveAppBreakdown,
+        cloudStorage: firestoreQuota.storage,
+        cloudConnected,
+      }),
+    [
+      deviceStorageEstimate,
+      localStorageUsage,
+      liveAppBreakdown,
+      firestoreQuota.storage,
+      cloudConnected,
+    ]
+  );
+
+  const storageAlerts = useMemo(
+    () =>
+      evaluateMasterAdminStorageAlerts({
+        localUsage: localStorageUsage,
+        externalStorage: externalStorageSnapshot,
+        firestoreQuota,
+        cloudConnected,
+        storageWriteError,
+      }),
+    [
+      localStorageUsage,
+      externalStorageSnapshot,
+      firestoreQuota,
+      cloudConnected,
+      storageWriteError,
+    ]
+  );
+
+  const academicYearAttendanceStats = useMemo(
+    () => summarizeAttendanceByAcademicYear(records, subjectRecords, settings.tahun_ajaran),
+    [records, subjectRecords, settings.tahun_ajaran]
+  );
+
+  const handleOpenStorageBackup = useCallback(() => {
+    setSettingsInitialSubMenu('backup');
+    setSettingsSubMenuNonce((n) => n + 1);
+    setActiveTab('pengaturan');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
 
   const handleResetLocalQuota = useCallback(() => {
     setFirestoreDailyUsage(resetFirestoreDailyUsage());
@@ -496,6 +742,10 @@ export default function App() {
               saveAuthSession(syncedSession);
               return syncedSession;
             });
+          },
+          onLateCorrectionRequests: (cloudRequests) => {
+            setLateCorrectionRequests(cloudRequests);
+            saveLocalLateCorrectionRequests(cloudRequests);
           },
           onSyncActivity: () => {
             setCloudConnected(true);
@@ -2124,6 +2374,161 @@ export default function App() {
     runCloudWrite((uid) => upsertAttendanceToCloud(uid, updatedRecord));
   }
 
+  function handleResetRecapStatus(params: {
+    tanggal: string;
+    students: Array<{ nis: string; nama: string; kelas: string }>;
+  }) {
+    if (session?.role !== 'master_admin') return;
+    const { tanggal, students: targetStudents } = params;
+    const currentRecords = latestDataRef.current.records;
+    const { nextRecords, removedRecords } = resetAttendanceRecordsForDate(
+      currentRecords,
+      tanggal,
+      targetStudents.map((s) => s.nis)
+    );
+    if (removedRecords.length === 0) return;
+
+    latestDataRef.current.records = nextRecords;
+    lastLocalRecordsSaveAtRef.current = Date.now();
+    setRecords(nextRecords);
+    saveLocalRecords(nextRecords);
+
+    pushToast({
+      type: 'success',
+      title: 'Status Diubah ke Belum Presensi',
+      description:
+        removedRecords.length === 1
+          ? `${removedRecords[0].nama} pada ${tanggal} berhasil direset ke Belum Presensi.`
+          : `${removedRecords.length} siswa pada ${tanggal} berhasil direset secara kolektif ke Belum Presensi.`,
+    });
+
+    runCloudWrite((uid) => bulkDeleteAttendanceFromCloud(uid, removedRecords));
+    if (settings.script_url.trim()) {
+      void syncRecordsMutation('syncAll', {
+        students: latestDataRef.current.students,
+        records: nextRecords,
+        settings: latestDataRef.current.settings,
+      });
+    }
+  }
+
+  function handleSaveAdminWaPhone(phone: string) {
+    const trimmed = phone.trim();
+    if (trimmed === (settings.no_wa_admin || '').trim()) return;
+    const nextSettings: SchoolSettings = {
+      ...settings,
+      no_wa_admin: trimmed,
+    };
+    latestDataRef.current.settings = nextSettings;
+    setSettings(nextSettings);
+    saveLocalSettings(nextSettings);
+    runCloudWrite((uid) => saveSchoolSettingsToCloud(uid, nextSettings));
+  }
+
+  function handleCreateLateCorrectionRequest(input: {
+    tanggal: string;
+    nis: string;
+    nama: string;
+    kelas: string;
+    jam_masuk_asal: string;
+    alasan: string;
+    adminWaPhone?: string;
+  }) {
+    if (session?.role !== 'wali_kelas') {
+      return {
+        ok: false,
+        error: 'Permohonan ubah kehadiran tepat waktu hanya dapat diajukan oleh akun Wali Kelas.',
+      };
+    }
+
+    const result = createLateCorrectionRequest(lateCorrectionRequests, {
+      tanggal: input.tanggal,
+      nis: input.nis,
+      nama: input.nama,
+      kelas: input.kelas,
+      jam_masuk_asal: input.jam_masuk_asal,
+      alasan: input.alasan,
+      requested_by_user_id: session.userId,
+      requested_by_name: session.nama,
+      tahun_ajaran: settings.tahun_ajaran,
+    });
+
+    if (!result.ok || !result.request) {
+      return { ok: false, error: result.error };
+    }
+
+    setLateCorrectionRequests(result.nextRequests);
+    saveLocalLateCorrectionRequests(result.nextRequests);
+    runCloudWrite((uid) => upsertLateCorrectionRequestToCloud(uid, result.request!));
+
+    pushToast({
+      type: 'success',
+      title: 'Permohonan Diajukan ke Master Admin',
+      description: `Permohonan ubah kehadiran ${result.request.nama} masuk ke bilah notifikasi Master Admin dan siap dikirim via WhatsApp.`,
+    });
+
+    return { ok: true, request: result.request };
+  }
+
+  function handleApproveLateCorrectionRequest(requestId: string) {
+    if (session?.role !== 'master_admin') return;
+    const currentRecords = latestDataRef.current.records;
+    const result = approveLateCorrectionRequest({
+      requests: lateCorrectionRequests,
+      records: currentRecords,
+      requestId,
+      adminName: session.nama,
+      batasJamMasuk: settings.batas_jam_masuk,
+    });
+    if (!result.ok || !result.updatedRequest) return;
+
+    setLateCorrectionRequests(result.nextRequests);
+    saveLocalLateCorrectionRequests(result.nextRequests);
+    runCloudWrite((uid) =>
+      upsertLateCorrectionRequestToCloud(uid, result.updatedRequest!)
+    );
+
+    if (result.updatedRecord) {
+      latestDataRef.current.records = result.nextRecords;
+      lastLocalRecordsSaveAtRef.current = Date.now();
+      setRecords(result.nextRecords);
+      saveLocalRecords(result.nextRecords);
+      void syncRecordsMutation('updateStatusPresensi', {
+        ...result.updatedRecord,
+        record: { ...result.updatedRecord },
+      });
+      runCloudWrite((uid) => upsertAttendanceToCloud(uid, result.updatedRecord!));
+    }
+
+    pushToast({
+      type: 'success',
+      title: 'Permohonan Disetujui',
+      description: `Kehadiran ${result.updatedRequest.nama} (${result.updatedRequest.tanggal}) berhasil diubah menjadi Hadir tepat waktu.`,
+    });
+  }
+
+  function handleRejectLateCorrectionRequest(requestId: string) {
+    if (session?.role !== 'master_admin') return;
+    const result = rejectLateCorrectionRequest({
+      requests: lateCorrectionRequests,
+      requestId,
+      adminName: session.nama,
+    });
+    if (!result.ok || !result.updatedRequest) return;
+
+    setLateCorrectionRequests(result.nextRequests);
+    saveLocalLateCorrectionRequests(result.nextRequests);
+    runCloudWrite((uid) =>
+      upsertLateCorrectionRequestToCloud(uid, result.updatedRequest!)
+    );
+
+    pushToast({
+      type: 'info',
+      title: 'Permohonan Ditolak',
+      description: `Permohonan ubah kehadiran ${result.updatedRequest.nama} telah ditolak. Status tetap Terlambat.`,
+    });
+  }
+
   function handleConfirmCheckout(params: {
     tanggal: string;
     student: { nis: string; nama: string; kelas: string };
@@ -2282,6 +2687,7 @@ export default function App() {
           semester: normalizeSemester(newSettings.semester, 'ganjil'),
           tema: newSettings.tema,
           logo_sekolah: newSettings.logo_sekolah || '',
+          show_creator_credit: newSettings.show_creator_credit !== false,
           accounts: latestFullSnapshotRef.current.accounts,
         },
         newSettings.script_url
@@ -2395,6 +2801,216 @@ export default function App() {
     }
   }
 
+  async function handleClearStorage(scope: ClearStorageScope) {
+    if (scope === 'device_cache') {
+      await clearOfflineIndexedDbCache();
+      clearSyncQueue();
+      setPendingSyncCount(0);
+      setFirestoreDailyUsage(resetFirestoreDailyUsage());
+      try {
+        // Remove legacy or temporary non-core cache entries while preserving active data & login
+        const keysToKeep = new Set([
+          'presensiqr_auth_session_v2',
+          'presensiqr_user_accounts_v2',
+          'presensiqr_kepsek_seeded_v1',
+          'presensiqr_students_v2',
+          'presensiqr_records_v2',
+          'presensiqr_settings_v2',
+          'presensiqr_default_identity_v2',
+          'presensiqr_subject_assignments_v2',
+          'presensiqr_subject_records_v2',
+          'presensiqr_master_subjects_v2',
+          'presensiqr_teacher_schedules_v2',
+          'presensiqr_timetable_configs_v1',
+          'presensiqr_late_requests_v1',
+          'presensiqr_last_backup_meta_v2',
+        ]);
+        const allKeys: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k) allKeys.push(k);
+        }
+        for (const k of allKeys) {
+          if (!keysToKeep.has(k)) {
+            localStorage.removeItem(k);
+          }
+        }
+      } catch {
+        // Ignore storage removal errors
+      }
+      setStorageWriteError(null);
+      setStorageRefreshTick((t) => t + 1);
+      pushToast({
+        type: 'success',
+        title: 'Cache & Storage Sementara Dibersihkan',
+        description:
+          'Cache browser, IndexedDB sementara, dan antrean offline telah dibersihkan. Data utama aplikasi tetap aman.',
+      });
+      return;
+    }
+
+    // scope === 'app_local': clear all local application datasets on this device (preserve login session & accounts)
+    await clearOfflineIndexedDbCache();
+    clearSyncQueue();
+    setPendingSyncCount(0);
+    setFirestoreDailyUsage(resetFirestoreDailyUsage());
+
+    const defaultIdentity = loadDefaultSchoolIdentity();
+    const cleanSettings: SchoolSettings = {
+      nama_sekolah: defaultIdentity.nama_sekolah,
+      logo_sekolah: defaultIdentity.logo_sekolah || '',
+      nama_kepala_sekolah: '',
+      nip_kepala_sekolah: '',
+      ttd_kepala_sekolah: '',
+      cap_sekolah: '',
+      batas_jam_masuk: '07:15',
+      mode_presensi: 'masuk_saja',
+      jam_pulang_standar: '15:00',
+      tahun_ajaran: settings.tahun_ajaran || '2026/2027',
+      semester: normalizeSemester(settings.semester, 'ganjil'),
+      tema: 'indigo',
+      script_url: settings.script_url || '',
+      no_wa_admin: settings.no_wa_admin || '',
+      show_creator_credit: settings.show_creator_credit !== false,
+    };
+
+    try {
+      const preservedKeys = new Set([
+        'presensiqr_auth_session_v2',
+        'presensiqr_user_accounts_v2',
+        'presensiqr_kepsek_seeded_v1',
+        'presensiqr_default_identity_v2',
+      ]);
+      const allKeys: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k) allKeys.push(k);
+      }
+      for (const k of allKeys) {
+        if (!preservedKeys.has(k)) {
+          localStorage.removeItem(k);
+        }
+      }
+    } catch {
+      // Ignore storage removal errors
+    }
+
+    latestDataRef.current = { students: [], records: [], settings: cleanSettings };
+    latestFullSnapshotRef.current = {
+      ...latestFullSnapshotRef.current,
+      students: [],
+      records: [],
+      subjectRecords: [],
+      subjectAssignments: [],
+      teacherSchedules: [],
+      lateCorrectionRequests: [],
+      settings: cleanSettings,
+    };
+    setPreviewTheme(null);
+    setStudents([]);
+    saveLocalStudents([]);
+    setRecords([]);
+    saveLocalRecords([]);
+    setSubjectRecords([]);
+    saveSubjectRecords([]);
+    setSubjectAssignments([]);
+    saveSubjectAssignments([]);
+    setTeacherSchedules([]);
+    saveTeacherSchedules([]);
+    setTimetableConfigs({});
+    saveTimetableConfigs({});
+    setLateCorrectionRequests([]);
+    saveLocalLateCorrectionRequests([]);
+    setSettings(cleanSettings);
+    saveLocalSettings(cleanSettings);
+    setStorageWriteError(null);
+    setStorageRefreshTick((t) => t + 1);
+
+    pushToast({
+      type: 'info',
+      title: 'Storage Lokal Aplikasi Dibersihkan',
+      description:
+        'Seluruh data lokal pada perangkat ini telah dikosongkan. Gunakan Sinkronkan atau Pulihkan Backup (.json) untuk memuat data kembali.',
+    });
+  }
+
+  function handleDeleteAttendanceByAcademicYear(targetAcademicYear: string) {
+    const result = deleteAttendanceByAcademicYear(
+      records,
+      subjectRecords,
+      targetAcademicYear,
+      settings.tahun_ajaran
+    );
+    const totalRemoved =
+      result.removedRecords.length + result.removedSubjectRecords.length;
+    if (totalRemoved === 0) {
+      pushToast({
+        type: 'info',
+        title: `Tidak Ada Data Presensi TA ${targetAcademicYear}`,
+        description: 'Tidak ditemukan catatan presensi pada tahun ajaran tersebut.',
+      });
+      return;
+    }
+
+    latestDataRef.current.records = result.nextRecords;
+    latestFullSnapshotRef.current.records = result.nextRecords;
+    latestFullSnapshotRef.current.subjectRecords = result.nextSubjectRecords;
+    lastLocalRecordsSaveAtRef.current = Date.now();
+    lastLocalAcademicSaveAtRef.current = Date.now();
+    setRecords(result.nextRecords);
+    saveLocalRecords(result.nextRecords);
+    setSubjectRecords(result.nextSubjectRecords);
+    saveSubjectRecords(result.nextSubjectRecords);
+    setStorageWriteError(null);
+    setStorageRefreshTick((t) => t + 1);
+
+    pushToast({
+      type: 'success',
+      title: `Data Presensi TA ${targetAcademicYear} Dihapus`,
+      description: `${result.removedRecords.length} presensi harian & ${
+        result.removedSubjectRecords.length
+      } presensi mapel dihapus (~${formatBytesReadable(result.freedBytes)} storage dibebaskan).`,
+    });
+
+    if (settings.script_url.trim()) {
+      void syncMutation(
+        'syncAll',
+        {
+          students,
+          records: result.nextRecords,
+          settings: {
+            nama_sekolah: settings.nama_sekolah,
+            nama_kepala_sekolah: settings.nama_kepala_sekolah || '',
+            nip_kepala_sekolah: settings.nip_kepala_sekolah || '',
+            ttd_kepala_sekolah: settings.ttd_kepala_sekolah || '',
+            cap_sekolah: settings.cap_sekolah || '',
+            batas_jam_masuk: settings.batas_jam_masuk,
+            mode_presensi: settings.mode_presensi,
+            jam_pulang_standar: settings.jam_pulang_standar,
+            tahun_ajaran: settings.tahun_ajaran,
+            semester: normalizeSemester(settings.semester, 'ganjil'),
+            tema: settings.tema,
+            logo_sekolah: settings.logo_sekolah || '',
+            show_creator_credit: settings.show_creator_credit !== false,
+          },
+          accounts,
+          masterSubjects,
+          teacherSchedules,
+          subjectAssignments,
+          subjectRecords: result.nextSubjectRecords,
+        },
+        settings.script_url
+      );
+    }
+
+    runCloudWrite(async (uid) => {
+      await Promise.all([
+        bulkDeleteAttendanceFromCloud(uid, result.removedRecords),
+        bulkDeleteSubjectRecordsFromCloud(uid, result.removedSubjectRecords),
+      ]);
+    });
+  }
+
   function handleResetAllAttendance() {
     latestDataRef.current.records = [];
     lastLocalRecordsSaveAtRef.current = Date.now();
@@ -2404,6 +3020,8 @@ export default function App() {
     latestFullSnapshotRef.current.subjectRecords = [];
     setSubjectRecords([]);
     saveSubjectRecords([]);
+    setStorageWriteError(null);
+    setStorageRefreshTick((t) => t + 1);
     pushToast({
       type: 'info',
       title: 'Semua Data Presensi Direset',
@@ -3433,6 +4051,11 @@ export default function App() {
           onConnect: () => void handleConnectCloud(),
         }}
         onReplayVoice={handleReplayVoice}
+        pendingLateRequests={pendingLateRequests}
+        onApproveLateRequest={handleApproveLateCorrectionRequest}
+        onRejectLateRequest={handleRejectLateCorrectionRequest}
+        storageAlerts={storageAlerts}
+        onOpenStorageBackup={handleOpenStorageBackup}
         toasts={toasts}
         onDismissToast={dismissToast}
       >
@@ -3494,6 +4117,16 @@ export default function App() {
             masterYearControl={masterYearControl}
             onUpdateStatus={handleUpdateRecapStatus}
             onConfirmCheckout={handleConfirmCheckout}
+            onResetStatus={
+              session?.role === 'master_admin' ? handleResetRecapStatus : undefined
+            }
+            lateCorrectionRequests={lateCorrectionRequests}
+            onSubmitLateCorrection={
+              session?.role === 'wali_kelas'
+                ? handleCreateLateCorrectionRequest
+                : undefined
+            }
+            onSaveAdminWaPhone={handleSaveAdminWaPhone}
           />
         )}
 
@@ -3621,6 +4254,13 @@ export default function App() {
               onDisconnect: handleDisconnectCloud,
               onPushLocalToCloud: handlePushLocalToCloud,
             }}
+            initialSubMenu={settingsInitialSubMenu}
+            initialSubMenuNonce={settingsSubMenuNonce}
+            academicYearAttendanceStats={academicYearAttendanceStats}
+            externalStorage={externalStorageSnapshot}
+            onRefreshStorageEstimate={handleRefreshStorageEstimate}
+            onClearStorage={handleClearStorage}
+            onDeleteAttendanceByAcademicYear={handleDeleteAttendanceByAcademicYear}
             onSaveSettings={handleSaveSettings}
             onSetDefaultIdentity={handleSetDefaultIdentity}
             onPreviewTheme={(tema) => setPreviewTheme(tema)}

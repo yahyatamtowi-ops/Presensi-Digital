@@ -38,8 +38,11 @@ import {
   isLikelyNetworkError,
   mirrorOfflineQueueToIdb,
   mirrorRecordsBackupToIdb,
+  mirrorSettingsBackupToIdb,
+  mirrorStudentsBackupToIdb,
   readOfflineQueueFromIdb,
 } from './offlineStore';
+import { notifyStorageWriteError } from './storageHealth';
 
 const LEGACY_DEFAULT_SCHOOL_NAME = 'SMA Negeri 1 Nusantara';
 
@@ -240,6 +243,14 @@ export function loadLocalCache(): LocalCacheState {
       SEED_SETTINGS.jam_pulang_standar
     );
     parsedSettings.tema = normalizeThemeId(parsedSettings.tema, 'indigo');
+    const rawCreatorCredit = (parsedSettings as unknown as Record<string, unknown>)
+      .show_creator_credit;
+    parsedSettings.show_creator_credit =
+      typeof rawCreatorCredit === 'boolean'
+        ? rawCreatorCredit
+        : String(rawCreatorCredit ?? '').toLowerCase() === 'false'
+          ? false
+          : true;
 
     // Default state starts genuinely empty before user inputs/imports data
     const students: Student[] = rawStudents
@@ -275,25 +286,31 @@ export function loadLocalCache(): LocalCacheState {
 }
 
 export function saveLocalStudents(students: Student[]): void {
+  void mirrorStudentsBackupToIdb(students);
   try {
     localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
   } catch {
-    // Ignore storage quota errors
+    notifyStorageWriteError(
+      'Cache cepat localStorage (5 MB) penuh saat menyimpan data siswa. Data tetap dicadangkan otomatis ke IndexedDB berkapasitas besar.'
+    );
   }
 }
 
 export function saveLocalRecords(records: AttendanceRecord[]): void {
+  void mirrorRecordsBackupToIdb(records);
   try {
     localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(records));
   } catch {
-    // Ignore storage quota errors
+    notifyStorageWriteError(
+      'Cache cepat localStorage (5 MB) penuh saat menyimpan data presensi. Data tetap dicadangkan otomatis ke IndexedDB berkapasitas besar.'
+    );
   }
-  void mirrorRecordsBackupToIdb(records);
 }
 
 export function saveLocalSettings(
   settings: SchoolSettings
 ): { ok: boolean; error?: string } {
+  void mirrorSettingsBackupToIdb(settings);
   const serialized = JSON.stringify(settings);
   try {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, serialized);
@@ -306,10 +323,12 @@ export function saveLocalSettings(
       localStorage.setItem(STORAGE_KEYS.SETTINGS, serialized);
       return { ok: true };
     } catch {
+      const msg =
+        'Cache cepat localStorage (5 MB) penuh. Data pengaturan dicadangkan ke IndexedDB, namun disarankan membersihkan cache atau presensi tahun ajaran lama.';
+      notifyStorageWriteError(msg);
       return {
         ok: false,
-        error:
-          'Penyimpanan lokal browser penuh. Gunakan gambar logo/TTD/cap berukuran lebih kecil agar dapat tersimpan.',
+        error: msg,
       };
     }
   }

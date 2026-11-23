@@ -30,6 +30,14 @@ import {
   createDefaultTimetableConfig,
   makeTimetableCellKey,
 } from './timetableLogic';
+import { buildLetterheadExcelSheet } from './excelLetterhead';
+import {
+  chunkTimetableClasses,
+  getTimetablePdfColumns,
+  TIMETABLE_PDF_CONFIG,
+} from './timetablePdf';
+import { SEED_SETTINGS } from './seedData';
+import * as XLSX from 'xlsx';
 
 const SAMPLE_TEACHERS: UserAccount[] = [
   {
@@ -117,7 +125,7 @@ test('buildAttendanceComparisonExplanation and buildClassAttendanceExplanation g
       sakit: 0,
       izin: 0,
       alpa,
-      belumAbsen: 0,
+      belumPresensi: 0,
       kehadiranPct: pct,
       tepatWaktuPct: total > 0 ? Math.round((hadir / total) * 100) : 0,
       skorKehadiranPct: pct,
@@ -134,7 +142,9 @@ test('buildAttendanceComparisonExplanation and buildClassAttendanceExplanation g
 
   const comp = buildAttendanceComparisonExplanation(overviews, 'bulanan');
   assert.ok(comp.formulaNote.includes('Hadir Tepat Waktu'));
-  assert.ok(comp.formulaNote.includes('Terlambat bernilai 50%'));
+  assert.ok(comp.formulaNote.includes('Terlambat'));
+  assert.ok(comp.formulaNote.includes('Izin lebih dari 7 kali dalam sebulan'));
+  assert.ok(comp.formulaNote.includes('Sakit lebih dari 7 hari berturut-turut'));
   assert.ok(comp.colorLegend.includes('Sangat Baik'));
   assert.ok(comp.colorLegend.includes('Kurang Baik'));
   assert.ok(comp.dynamicSummary.includes('Bulanan'));
@@ -172,7 +182,9 @@ test('buildAttendanceComparisonExplanation and buildClassAttendanceExplanation g
 
   const clsExp = buildClassAttendanceExplanation(classes, overviews.bulanan);
   assert.ok(clsExp.headline.includes('Bulanan'));
-  assert.ok(clsExp.legendNote.includes('H = Hadir tepat waktu 100%'));
+  assert.ok(clsExp.legendNote.includes('H = Hadir tepat waktu'));
+  assert.ok(clsExp.legendNote.includes('Izin > 7×/bulan'));
+  assert.ok(clsExp.legendNote.includes('Sakit > 7 hari berturut-turut'));
   assert.ok(clsExp.dynamicSummary.includes('X IPA 1 (93%'));
   assert.ok(clsExp.dynamicSummary.includes('XI IPS 2 (53%)'));
   assert.ok(clsExp.actionNote.includes('Kurang Baik / Perlu Perhatian'));
@@ -359,4 +371,76 @@ test('parseTeacherScheduleRows validates rows, resolves Waktu/Jam ke, detects du
   assert.equal(res.validItems[1].jam_mulai, '07:15');
   assert.equal(res.validItems[1].jam_selesai, '08:45');
   assert.equal(res.validItems[1].teacher_user_id, 'usr-guru-2');
+});
+
+test('buildLetterheadExcelSheet renders Kop Surat, uppercase document title, metadata, merges, and signature block', () => {
+  const { sheet, meta } = buildLetterheadExcelSheet({
+    settings: {
+      ...SEED_SETTINGS,
+      nama_sekolah: 'SMA Negeri 1 Kabun',
+      nama_kepala_sekolah: 'Drs. Ahmad Hidayat, M.Pd',
+      nip_kepala_sekolah: '197001011995011001',
+      tahun_ajaran: '2025/2026',
+      semester: 'ganjil',
+    },
+    documentTitle: 'Rekapitulasi Presensi Siswa (Bulanan)',
+    subtitleLines: ['Periode: November 2026 · Kelas: X IPA 1'],
+    headers: ['No', 'NISN', 'Nama Siswa', 'Status'],
+    rows: [
+      [1, '2026001', 'Ahmad Fauzi', 'Hadir'],
+      [2, '2026002', 'Siti Rahma', 'Terlambat'],
+    ],
+    includeSignature: true,
+    printedDateLabel: '22 November 2026',
+  });
+
+  const aoa = XLSX.utils.sheet_to_json<Array<string | number>>(sheet, {
+    header: 1,
+    defval: '',
+  });
+
+  assert.equal(aoa[0][0], 'SMA NEGERI 1 KABUN');
+  assert.ok(String(aoa[1][0]).includes('PRESENSI DIGITAL'));
+  assert.ok(String(aoa[1][0]).includes('2025/2026'));
+  assert.ok(String(aoa[2][0]).includes('═'));
+  assert.equal(aoa[meta.titleRowIndex][0], 'REKAPITULASI PRESENSI SISWA (BULANAN)');
+  assert.equal(aoa[meta.titleRowIndex + 1][0], 'Periode: November 2026 · Kelas: X IPA 1');
+  assert.equal(aoa[meta.titleRowIndex + 2][0], 'Dicetak pada: 22 November 2026');
+  assert.deepEqual(aoa[meta.headerRowIndex], ['No', 'NISN', 'Nama Siswa', 'Status']);
+  assert.deepEqual(aoa[meta.dataStartRowIndex], [1, '2026001', 'Ahmad Fauzi', 'Hadir']);
+
+  const allText = aoa.flat().map(String).join(' | ');
+  assert.ok(allText.includes('Kepala Sekolah,'));
+  assert.ok(allText.includes('Drs. Ahmad Hidayat, M.Pd'));
+  assert.ok(allText.includes('NIP. 197001011995011001'));
+  assert.ok((sheet['!merges']?.length ?? 0) >= 6);
+  assert.equal(sheet['!cols']?.length, 4);
+});
+
+test('timetablePdf chunks class columns cleanly and matches exact F4 landscape contentWidth (308mm)', () => {
+  assert.equal(TIMETABLE_PDF_CONFIG.widthMm, 330);
+  assert.equal(TIMETABLE_PDF_CONFIG.heightMm, 215);
+  assert.equal(TIMETABLE_PDF_CONFIG.contentWidth, 308);
+
+  const chunks = chunkTimetableClasses([
+    'X IPA 1',
+    'X IPA 2',
+    'X IPS 1',
+    'XI IPA 1',
+    'XI IPA 2',
+    'XI IPS 1',
+    'XII IPA 1',
+    'XII IPA 2',
+    'XII IPS 1',
+  ]);
+  assert.equal(chunks.length, 2);
+  assert.equal(chunks[0].length, 7);
+  assert.equal(chunks[1].length, 2);
+
+  for (const group of chunks) {
+    const cols = getTimetablePdfColumns(group);
+    assert.equal(cols.length, 3 + group.length);
+    const totalWidth = cols.reduce((acc, c) => acc + c.width, 0);
+    assert.ok(Math.abs(totalWidth - TIMETABLE_PDF_CONFIG.contentWidth) < 0.01);
+  }
 });

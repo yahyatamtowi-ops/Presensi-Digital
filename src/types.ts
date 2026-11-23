@@ -60,6 +60,26 @@ export interface AttendanceRecord {
   tahun_ajaran?: string;
 }
 
+export type LateCorrectionRequestStatus = 'pending' | 'approved' | 'rejected';
+
+export interface LateCorrectionRequest {
+  id: string;
+  tanggal: string; // YYYY-MM-DD
+  nis: string;
+  nama: string;
+  kelas: string;
+  jam_masuk_asal: string; // HH:MM:SS or '-'
+  alasan: string;
+  requested_by_user_id: string;
+  requested_by_name: string;
+  requested_at: string; // ISO string
+  status: LateCorrectionRequestStatus;
+  resolved_by_name?: string;
+  resolved_at?: string;
+  catatan_admin?: string;
+  tahun_ajaran: string;
+}
+
 export interface SchoolSettings {
   nama_sekolah: string;
   nama_kepala_sekolah?: string;
@@ -74,6 +94,8 @@ export interface SchoolSettings {
   tema: AppThemeId;
   script_url: string;
   logo_sekolah?: string; // Data URL (PNG/JPG/SVG)
+  no_wa_admin?: string; // Nomor WhatsApp Master Admin untuk notifikasi permohonan koreksi presensi
+  show_creator_credit?: boolean; // Tampilkan "Application Created By: Tamtowi Yahya" di bagian bawah Menu Bar (default true)
 }
 
 export interface MasterSubject {

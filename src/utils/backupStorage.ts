@@ -23,6 +23,7 @@ import {
   sanitizeTeacherSchedules,
 } from './subjectAttendance';
 import { normalizeThemeId } from './themes';
+import { buildLetterheadExcelSheet } from './excelLetterhead';
 
 const LAST_BACKUP_META_KEY = 'presensiqr_last_backup_meta_v2';
 
@@ -400,107 +401,153 @@ export function exportFullExcelArchive(payload: AppBackupPayload): {
   meta: LastBackupMeta;
 } {
   const wb = XLSX.utils.book_new();
+  const settings = payload.data.settings;
+  const exportMetaLine = `Diekspor oleh: ${payload.exportedBy} · Tahun Ajaran: ${settings.tahun_ajaran} · Semester: ${formatSemesterLabel(settings.semester)}`;
 
-  const studentRows = payload.data.students.map((s) => ({
-    NISN: s.nis,
-    'Nama Siswa': s.nama,
-    Kelas: s.kelas,
-    Gender: s.gender,
-    'No WA Ortu': s.no_wa_ortu || '',
-    'Tahun Ajaran': s.tahun_ajaran || payload.data.settings.tahun_ajaran,
-  }));
-  const wsSiswa = XLSX.utils.json_to_sheet(
-    studentRows.length > 0
-      ? studentRows
-      : [{ NISN: '', 'Nama Siswa': '', Kelas: '', Gender: '', 'No WA Ortu': '', 'Tahun Ajaran': '' }]
-  );
+  const studentRows: Array<Array<string | number>> = payload.data.students.map((s, idx) => [
+    idx + 1,
+    s.nis,
+    s.nama,
+    s.kelas,
+    s.gender,
+    s.no_wa_ortu || '',
+    s.tahun_ajaran || settings.tahun_ajaran,
+  ]);
+  const { sheet: wsSiswa } = buildLetterheadExcelSheet({
+    settings,
+    documentTitle: 'ARSIP DATA SISWA',
+    subtitleLines: [
+      `Total Siswa: ${payload.data.students.length} siswa · ${exportMetaLine}`,
+    ],
+    headers: ['No', 'NISN', 'Nama Siswa', 'Kelas', 'Gender', 'No WA Ortu', 'Tahun Ajaran'],
+    rows: studentRows,
+    includeSignature: true,
+  });
   XLSX.utils.book_append_sheet(wb, wsSiswa, 'Siswa');
 
-  const recordRows = payload.data.records.map((r) => ({
-    ID: r.id,
-    Tanggal: r.tanggal,
-    NISN: r.nis,
-    'Nama Siswa': r.nama,
-    Kelas: r.kelas,
-    'Jam Masuk': r.jam_masuk,
-    'Jam Pulang': r.jam_pulang || '-',
-    Status: r.status,
-    Keterangan: r.keterangan || '',
-    'Tahun Ajaran': r.tahun_ajaran || payload.data.settings.tahun_ajaran,
-  }));
-  const wsPresensi = XLSX.utils.json_to_sheet(
-    recordRows.length > 0
-      ? recordRows
-      : [
-          {
-            ID: '',
-            Tanggal: '',
-            NISN: '',
-            'Nama Siswa': '',
-            Kelas: '',
-            'Jam Masuk': '',
-            'Jam Pulang': '',
-            Status: '',
-            Keterangan: '',
-            'Tahun Ajaran': '',
-          },
-        ]
-  );
+  const recordRows: Array<Array<string | number>> = payload.data.records.map((r, idx) => [
+    idx + 1,
+    r.id,
+    r.tanggal,
+    r.nis,
+    r.nama,
+    r.kelas,
+    r.jam_masuk,
+    r.jam_pulang || '-',
+    r.status,
+    r.keterangan || '',
+    r.tahun_ajaran || settings.tahun_ajaran,
+  ]);
+  const { sheet: wsPresensi } = buildLetterheadExcelSheet({
+    settings,
+    documentTitle: 'ARSIP CATATAN PRESENSI SISWA',
+    subtitleLines: [
+      `Total Catatan: ${payload.data.records.length} baris · ${exportMetaLine}`,
+    ],
+    headers: [
+      'No',
+      'ID',
+      'Tanggal',
+      'NISN',
+      'Nama Siswa',
+      'Kelas',
+      'Jam Masuk',
+      'Jam Pulang',
+      'Status',
+      'Keterangan',
+      'Tahun Ajaran',
+    ],
+    rows: recordRows,
+    includeSignature: true,
+  });
   XLSX.utils.book_append_sheet(wb, wsPresensi, 'Presensi');
 
-  const settingsRows = [
-    { Pengaturan: 'Nama Sekolah', Nilai: payload.data.settings.nama_sekolah },
-    {
-      Pengaturan: 'Nama Kepala Sekolah',
-      Nilai: payload.data.settings.nama_kepala_sekolah || '-',
-    },
-    {
-      Pengaturan: 'NIP Kepala Sekolah',
-      Nilai: payload.data.settings.nip_kepala_sekolah || '-',
-    },
-    { Pengaturan: 'Tahun Ajaran', Nilai: payload.data.settings.tahun_ajaran },
-    { Pengaturan: 'Semester', Nilai: formatSemesterLabel(payload.data.settings.semester) },
-    { Pengaturan: 'Mode Presensi', Nilai: payload.data.settings.mode_presensi },
-    { Pengaturan: 'Batas Jam Masuk', Nilai: payload.data.settings.batas_jam_masuk },
-    { Pengaturan: 'Jam Pulang Standar', Nilai: payload.data.settings.jam_pulang_standar },
-    { Pengaturan: 'Tema Aplikasi', Nilai: payload.data.settings.tema },
-    { Pengaturan: 'Diekspor Pada', Nilai: payload.exportedAt },
+  const settingsRows: Array<Array<string | number>> = [
+    ['Nama Sekolah', settings.nama_sekolah],
+    ['Nama Kepala Sekolah', settings.nama_kepala_sekolah || '-'],
+    ['NIP Kepala Sekolah', settings.nip_kepala_sekolah || '-'],
+    ['Tahun Ajaran', settings.tahun_ajaran],
+    ['Semester', formatSemesterLabel(settings.semester)],
+    ['Mode Presensi', settings.mode_presensi],
+    ['Batas Jam Masuk', settings.batas_jam_masuk],
+    ['Jam Pulang Standar', settings.jam_pulang_standar],
+    ['Tema Aplikasi', settings.tema],
+    ['Diekspor Pada', payload.exportedAt],
   ];
-  const wsPengaturan = XLSX.utils.json_to_sheet(settingsRows);
+  const { sheet: wsPengaturan } = buildLetterheadExcelSheet({
+    settings,
+    documentTitle: 'PENGATURAN APLIKASI PRESENSI DIGITAL',
+    subtitleLines: [exportMetaLine],
+    headers: ['Pengaturan', 'Nilai'],
+    rows: settingsRows,
+    includeSignature: false,
+  });
   XLSX.utils.book_append_sheet(wb, wsPengaturan, 'Pengaturan');
 
-  const accountRows = (payload.data.accounts ?? []).map((a) => ({
-    ID: a.id,
-    Username: a.username,
-    'Nama Lengkap': a.nama,
-    NIP: a.nip || '',
-    Peran: a.role,
-    Jabatan: a.jabatan,
-    'Kelas Binaan': a.kelas_binaan || '',
-  }));
+  const accountRows: Array<Array<string | number>> = (payload.data.accounts ?? []).map((a, idx) => [
+    idx + 1,
+    a.id,
+    a.username,
+    a.nama,
+    a.nip || '',
+    a.role,
+    a.jabatan,
+    a.kelas_binaan || '',
+  ]);
   if (accountRows.length > 0) {
-    const wsAkun = XLSX.utils.json_to_sheet(accountRows);
+    const { sheet: wsAkun } = buildLetterheadExcelSheet({
+      settings,
+      documentTitle: 'DAFTAR AKUN DAN AKSES PENGGUNA',
+      subtitleLines: [`Total Akun: ${accountRows.length} akun · ${exportMetaLine}`],
+      headers: ['No', 'ID', 'Username', 'Nama Lengkap', 'NIP', 'Peran', 'Jabatan', 'Kelas Binaan'],
+      rows: accountRows,
+      includeSignature: true,
+    });
     XLSX.utils.book_append_sheet(wb, wsAkun, 'Akun');
   }
 
-  const subjectRecordRows = (payload.data.subjectRecords ?? []).map((r) => ({
-    Tanggal: r.tanggal,
-    Kelas: r.kelas,
-    'Mata Pelajaran': r.mata_pelajaran,
-    Guru: r.teacher_name,
-    NISN: r.nis,
-    'Nama Siswa': r.nama,
-    'Jam Masuk': r.jam_masuk,
-    Status: r.status,
-    Keterangan: r.keterangan || '',
-    'Tahun Ajaran': r.tahun_ajaran,
-  }));
+  const subjectRecordRows: Array<Array<string | number>> = (payload.data.subjectRecords ?? []).map(
+    (r, idx) => [
+      idx + 1,
+      r.tanggal,
+      r.kelas,
+      r.mata_pelajaran,
+      r.teacher_name,
+      r.nis,
+      r.nama,
+      r.jam_masuk,
+      r.status,
+      r.keterangan || '',
+      r.tahun_ajaran,
+    ]
+  );
   if (subjectRecordRows.length > 0) {
-    const wsMapel = XLSX.utils.json_to_sheet(subjectRecordRows);
+    const { sheet: wsMapel } = buildLetterheadExcelSheet({
+      settings,
+      documentTitle: 'ARSIP PRESENSI MATA PELAJARAN',
+      subtitleLines: [
+        `Total Catatan Mapel: ${subjectRecordRows.length} baris · ${exportMetaLine}`,
+      ],
+      headers: [
+        'No',
+        'Tanggal',
+        'Kelas',
+        'Mata Pelajaran',
+        'Guru',
+        'NISN',
+        'Nama Siswa',
+        'Jam Masuk',
+        'Status',
+        'Keterangan',
+        'Tahun Ajaran',
+      ],
+      rows: subjectRecordRows,
+      includeSignature: true,
+    });
     XLSX.utils.book_append_sheet(wb, wsMapel, 'Presensi_Mapel');
   }
 
-  const filename = buildBackupFilename(payload.data.settings.nama_sekolah, 'xlsx');
+  const filename = buildBackupFilename(settings.nama_sekolah, 'xlsx');
   XLSX.writeFile(wb, filename);
 
   const meta: LastBackupMeta = {

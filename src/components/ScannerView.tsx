@@ -33,6 +33,7 @@ import {
   EarlyCheckoutModal,
   type EarlyCheckoutStudentInfo,
 } from './EarlyCheckoutModal';
+import { DEFAULT_SCHOOL_LOGO } from '../utils/seedData';
 
 interface ScannerViewProps {
   students: Student[];
@@ -342,8 +343,35 @@ export function ScannerView({
     }
   }
 
+  const schoolDisplayName = (settings.nama_sekolah || 'SMA Negeri 1 Kabun').trim();
+
   return (
     <div className="space-y-6">
+      {/* Institutional Application Title Banner */}
+      <header className="bg-white rounded-2xl border border-slate-200/80 px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)] flex items-center gap-3.5 sm:gap-4">
+        <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl border border-slate-200/80 bg-slate-50/80 p-1.5 flex items-center justify-center shrink-0 overflow-hidden">
+          <img
+            src={settings.logo_sekolah || DEFAULT_SCHOOL_LOGO}
+            alt={`Logo ${schoolDisplayName}`}
+            className="h-full w-full object-contain"
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h1
+            data-testid="scanner-app-title"
+            className="text-base sm:text-xl font-bold tracking-tight text-slate-900 leading-snug uppercase break-words"
+          >
+            PRESENSI DIGITAL {schoolDisplayName.toUpperCase()}
+          </h1>
+          <p
+            data-testid="scanner-app-slogan"
+            className="mt-0.5 text-xs sm:text-[13px] text-slate-500 font-medium"
+          >
+            Disiplin Tepat Waktu, Presensi Cepat, Akurat, dan Transparan
+          </p>
+        </div>
+      </header>
+
       {/* Offline Storage & Auto-Sync Status Banner */}
       {(!isOnline || pendingSyncCount > 0) && (
         <section

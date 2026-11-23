@@ -17,7 +17,11 @@ import {
   computeAttendanceAnalytics,
   computeFairAttendanceScore,
   evaluateAttendanceCategory,
+  analyzeStudentAttendancePenalties,
+  IZIN_MONTHLY_FAIR_LIMIT,
+  SAKIT_CONSECUTIVE_FAIR_LIMIT,
   isBeforeCheckoutTime,
+  resetAttendanceRecordsForDate,
 } from './attendanceLogic';
 import type { AttendanceRecord, Student } from '../types';
 
@@ -182,7 +186,7 @@ test('buildDailyRecapRows merges recorded and unrecorded students cleanly', () =
   const siti = rows.find((r) => r.nis === '2026002');
   assert.equal(ahmad?.status, 'Hadir');
   assert.equal(ahmad?.isRecorded, true);
-  assert.equal(siti?.status, 'Belum Absen');
+  assert.equal(siti?.status, 'Belum Presensi');
   assert.equal(siti?.isRecorded, false);
 });
 
@@ -705,9 +709,9 @@ test('computeFairAttendanceScore & evaluateAttendanceCategory reward on-time Had
     'Baik'
   );
 
-  // 6. Fair distinction between Sakit/Izin vs Alpa:
-  //    8H + 2S (0 Alpa) => 85% score, Baik
-  //    8H + 2A (20% Alpa) => 80% score, Cukup (cannot be Baik with Alpa!)
+  // 6. Fair distinction between excused Sakit (<= 7 consecutive days) vs Alpa:
+  //    8H + 2S (0 Alpa, excused) => 100% score, Sangat Baik (Sakit <= 7 hari tidak merugikan)
+  //    8H + 2A (20% Alpa) => 80% score, Kurang Baik (Alpa > 10% bernilai kurang baik)
   const sickCase = computeFairAttendanceScore({
     hadir: 8,
     terlambat: 0,
@@ -724,6 +728,8 @@ test('computeFairAttendanceScore & evaluateAttendanceCategory reward on-time Had
     alpa: 2,
     totalTercatat: 10,
   });
+  assert.equal(sickCase.skorKehadiranPct, 100);
+  assert.equal(alpaCase.skorKehadiranPct, 80);
   assert.ok(sickCase.skorKehadiranPct > alpaCase.skorKehadiranPct);
   assert.equal(
     evaluateAttendanceCategory({
@@ -734,7 +740,7 @@ test('computeFairAttendanceScore & evaluateAttendanceCategory reward on-time Had
       alpa: 0,
       totalTercatat: 10,
     }).label,
-    'Baik'
+    'Sangat Baik'
   );
   assert.equal(
     evaluateAttendanceCategory({
@@ -745,7 +751,7 @@ test('computeFairAttendanceScore & evaluateAttendanceCategory reward on-time Had
       alpa: 2,
       totalTercatat: 10,
     }).label,
-    'Cukup'
+    'Kurang Baik'
   );
 
   // 7. Heavy Alpa => Perlu Perhatian
@@ -792,8 +798,242 @@ test('computeFairAttendanceScore & evaluateAttendanceCategory reward on-time Had
   assert.equal(evaluateAttendanceCategory(sitiRow).label, 'Kurang Baik');
 });
 
+test('Izin > 7x/bulan and Sakit > 7 hari berturut-turut are flagged Kurang Baik while <= 7 remains fair', () => {
+  assert.equal(IZIN_MONTHLY_FAIR_LIMIT, 7);
+  assert.equal(SAKIT_CONSECUTIVE_FAIR_LIMIT, 7);
 
+  const mkRec = (
+    id: string,
+    tanggal: string,
+    nis: string,
+    nama: string,
+    status: AttendanceRecord['status']
+  ): AttendanceRecord => ({
+    id,
+    tanggal,
+    nis,
+    nama,
+    kelas: 'X IPA 1',
+    jam_masuk: status === 'Hadir' ? '07:00:00' : status === 'Terlambat' ? '07:30:00' : '-',
+    status,
+  });
 
+  // 1. Izin exactly 7x in one month => NOT penalized
+  const izin7Records = Array.from({ length: 7 }, (_, i) =>
+    mkRec(`iz7-${i}`, `2026-11-${String(i + 1).padStart(2, '0')}`, 'S1', 'Izin Tujuh', 'Izin')
+  );
+  const pIzin7 = analyzeStudentAttendancePenalties(izin7Records);
+  assert.equal(pIzin7.maxMonthlyIzin, 7);
+  assert.equal(pIzin7.penalizedIzinDays, 0);
 
+  // 2. Izin 8x in one month => penalized (all 8 days in that month penalized)
+  const izin8Records = [
+    ...izin7Records,
+    mkRec('iz8', '2026-11-10', 'S1', 'Izin Delapan', 'Izin'),
+  ];
+  const pIzin8 = analyzeStudentAttendancePenalties(izin8Records);
+  assert.equal(pIzin8.maxMonthlyIzin, 8);
+  assert.equal(pIzin8.penalizedIzinDays, 8);
 
+  // 3. Izin 5x in Oct + 5x in Nov (10 total, <= 7 per month) => NOT penalized
+  const izinSplitMonths = [
+    ...Array.from({ length: 5 }, (_, i) =>
+      mkRec(`oct-${i}`, `2026-10-${String(i + 1).padStart(2, '0')}`, 'S1', 'Izin Split', 'Izin')
+    ),
+    ...Array.from({ length: 5 }, (_, i) =>
+      mkRec(`nov-${i}`, `2026-11-${String(i + 1).padStart(2, '0')}`, 'S1', 'Izin Split', 'Izin')
+    ),
+  ];
+  const pIzinSplit = analyzeStudentAttendancePenalties(izinSplitMonths);
+  assert.equal(pIzinSplit.maxMonthlyIzin, 5);
+  assert.equal(pIzinSplit.penalizedIzinDays, 0);
 
+  // 4. Sakit 7 consecutive days (Nov 1..7) => NOT penalized
+  const sakit7Consec = Array.from({ length: 7 }, (_, i) =>
+    mkRec(`sk7-${i}`, `2026-11-${String(i + 1).padStart(2, '0')}`, 'S2', 'Sakit Tujuh', 'Sakit')
+  );
+  const pSakit7 = analyzeStudentAttendancePenalties(sakit7Consec);
+  assert.equal(pSakit7.maxConsecutiveSakitDays, 7);
+  assert.equal(pSakit7.penalizedSakitDays, 0);
+
+  // 5. Sakit 8 consecutive days (Nov 1..8) => penalized (all 8 days in streak penalized)
+  const sakit8Consec = [
+    ...sakit7Consec,
+    mkRec('sk8', '2026-11-08', 'S2', 'Sakit Delapan', 'Sakit'),
+  ];
+  const pSakit8 = analyzeStudentAttendancePenalties(sakit8Consec);
+  assert.equal(pSakit8.maxConsecutiveSakitDays, 8);
+  assert.equal(pSakit8.penalizedSakitDays, 8);
+
+  // 6. Sakit 10 total days split into 5 consecutive + gap + 5 consecutive => NOT penalized
+  const sakitSplit = [
+    ...Array.from({ length: 5 }, (_, i) =>
+      mkRec(`skA-${i}`, `2026-11-${String(i + 1).padStart(2, '0')}`, 'S2', 'Sakit Split', 'Sakit')
+    ),
+    // Gap on Nov 6-9 (Hadir)
+    mkRec('skGap', '2026-11-07', 'S2', 'Sakit Split', 'Hadir'),
+    ...Array.from({ length: 5 }, (_, i) =>
+      mkRec(`skB-${i}`, `2026-11-${String(i + 10).padStart(2, '0')}`, 'S2', 'Sakit Split', 'Sakit')
+    ),
+  ];
+  const pSakitSplit = analyzeStudentAttendancePenalties(sakitSplit);
+  assert.equal(pSakitSplit.maxConsecutiveSakitDays, 5);
+  assert.equal(pSakitSplit.penalizedSakitDays, 0);
+
+  // 7. End-to-end computeAttendanceAnalytics verification
+  const testStudents: Student[] = [
+    { nis: '901', nama: 'Izin Aman 5x', kelas: 'X IPA 1', gender: 'L', no_wa_ortu: '' },
+    { nis: '902', nama: 'Izin Berlebih 8x', kelas: 'X IPA 1', gender: 'P', no_wa_ortu: '' },
+    { nis: '903', nama: 'Sakit Aman 6hr', kelas: 'X IPA 1', gender: 'L', no_wa_ortu: '' },
+    { nis: '904', nama: 'Sakit Beruntun 8hr', kelas: 'X IPA 1', gender: 'P', no_wa_ortu: '' },
+  ];
+
+  const allRecords: AttendanceRecord[] = [
+    // 901: 10 Hadir + 5 Izin => Sangat Baik
+    ...Array.from({ length: 10 }, (_, i) =>
+      mkRec(`901h-${i}`, `2026-11-${String(i + 1).padStart(2, '0')}`, '901', 'Izin Aman 5x', 'Hadir')
+    ),
+    ...Array.from({ length: 5 }, (_, i) =>
+      mkRec(`901i-${i}`, `2026-11-${String(i + 12).padStart(2, '0')}`, '901', 'Izin Aman 5x', 'Izin')
+    ),
+    // 902: 10 Hadir + 8 Izin in Nov => Kurang Baik
+    ...Array.from({ length: 10 }, (_, i) =>
+      mkRec(`902h-${i}`, `2026-11-${String(i + 1).padStart(2, '0')}`, '902', 'Izin Berlebih 8x', 'Hadir')
+    ),
+    ...Array.from({ length: 8 }, (_, i) =>
+      mkRec(`902i-${i}`, `2026-11-${String(i + 12).padStart(2, '0')}`, '902', 'Izin Berlebih 8x', 'Izin')
+    ),
+    // 903: 10 Hadir + 6 consecutive Sakit => Sangat Baik
+    ...Array.from({ length: 10 }, (_, i) =>
+      mkRec(`903h-${i}`, `2026-11-${String(i + 10).padStart(2, '0')}`, '903', 'Sakit Aman 6hr', 'Hadir')
+    ),
+    ...Array.from({ length: 6 }, (_, i) =>
+      mkRec(`903s-${i}`, `2026-11-${String(i + 1).padStart(2, '0')}`, '903', 'Sakit Aman 6hr', 'Sakit')
+    ),
+    // 904: 10 Hadir + 8 consecutive Sakit => Kurang Baik
+    ...Array.from({ length: 10 }, (_, i) =>
+      mkRec(`904h-${i}`, `2026-11-${String(i + 12).padStart(2, '0')}`, '904', 'Sakit Beruntun 8hr', 'Hadir')
+    ),
+    ...Array.from({ length: 8 }, (_, i) =>
+      mkRec(`904s-${i}`, `2026-11-${String(i + 1).padStart(2, '0')}`, '904', 'Sakit Beruntun 8hr', 'Sakit')
+    ),
+  ];
+
+  const analytics = computeAttendanceAnalytics({
+    students: testStudents,
+    records: allRecords,
+    selectedPeriod: 'bulanan',
+    date: '2026-11-20',
+    month: '2026-11',
+    semester: 'ganjil',
+    semesterYear: 2026,
+    academicYear: '2026/2027',
+  });
+
+  const row901 = analytics.studentRows.find((r) => r.nis === '901')!;
+  const row902 = analytics.studentRows.find((r) => r.nis === '902')!;
+  const row903 = analytics.studentRows.find((r) => r.nis === '903')!;
+  const row904 = analytics.studentRows.find((r) => r.nis === '904')!;
+
+  assert.equal(evaluateAttendanceCategory(row901).label, 'Sangat Baik');
+  assert.equal(row901.skorKehadiranPct, 100);
+  assert.equal(row901.penalizedIzinDays, 0);
+
+  assert.equal(evaluateAttendanceCategory(row902).label, 'Kurang Baik');
+  assert.equal(row902.penalizedIzinDays, 8);
+  assert.equal(row902.maxMonthlyIzin, 8);
+
+  assert.equal(evaluateAttendanceCategory(row903).label, 'Sangat Baik');
+  assert.equal(row903.skorKehadiranPct, 100);
+  assert.equal(row903.penalizedSakitDays, 0);
+
+  assert.equal(evaluateAttendanceCategory(row904).label, 'Kurang Baik');
+  assert.equal(row904.penalizedSakitDays, 8);
+  assert.equal(row904.maxConsecutiveSakitDays, 8);
+
+  // 901 & 903 are top students; 902 & 904 are in attentionStudents!
+  const topIds = analytics.topStudents.map((s) => s.nis).sort();
+  const attentionIds = analytics.attentionStudents.map((s) => s.nis).sort();
+  assert.deepEqual(topIds, ['901', '903']);
+  assert.deepEqual(attentionIds, ['902', '904']);
+});
+
+test('resetAttendanceRecordsForDate reverts single and collective recorded statuses back to Belum Presensi without affecting other dates', () => {
+  const seedRecords: AttendanceRecord[] = [
+    {
+      id: '2026-11-20_2026001',
+      tanggal: '2026-11-20',
+      nis: '2026001',
+      nama: 'Ahmad Fauzi',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:05:00',
+      status: 'Hadir',
+    },
+    {
+      id: '2026-11-20_2026002',
+      tanggal: '2026-11-20',
+      nis: '2026002',
+      nama: 'Siti Rahma',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:25:00',
+      status: 'Terlambat',
+    },
+    {
+      id: '2026-11-20_2026003',
+      tanggal: '2026-11-20',
+      nis: '2026003',
+      nama: 'Budi Santoso',
+      kelas: 'XI IPS 2',
+      jam_masuk: '-',
+      status: 'Sakit',
+    },
+    {
+      id: '2026-11-19_2026001',
+      tanggal: '2026-11-19',
+      nis: '2026001',
+      nama: 'Ahmad Fauzi',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:01:00',
+      status: 'Hadir',
+    },
+  ];
+
+  // Single reset: revert 2026001 on 2026-11-20 only
+  const singleRes = resetAttendanceRecordsForDate(seedRecords, '2026-11-20', ['2026001']);
+  assert.equal(singleRes.removedRecords.length, 1);
+  assert.equal(singleRes.removedRecords[0].nis, '2026001');
+  assert.equal(singleRes.nextRecords.length, 3);
+  const rowsAfterSingle = buildDailyRecapRows(
+    sampleStudents,
+    singleRes.nextRecords,
+    '2026-11-20'
+  );
+  assert.equal(
+    rowsAfterSingle.find((r) => r.nis === '2026001')?.status,
+    'Belum Presensi'
+  );
+  assert.equal(
+    rowsAfterSingle.find((r) => r.nis === '2026002')?.status,
+    'Terlambat'
+  );
+
+  // Collective reset: revert 2026002 & 2026003 on 2026-11-20
+  const collectiveRes = resetAttendanceRecordsForDate(
+    singleRes.nextRecords,
+    '2026-11-20',
+    ['2026002', '2026003']
+  );
+  assert.equal(collectiveRes.removedRecords.length, 2);
+  assert.equal(collectiveRes.nextRecords.length, 1);
+  assert.equal(collectiveRes.nextRecords[0].tanggal, '2026-11-19');
+
+  const rowsAfterCollective = buildDailyRecapRows(
+    sampleStudents,
+    collectiveRes.nextRecords,
+    '2026-11-20'
+  );
+  assert.equal(
+    rowsAfterCollective.every((r) => r.status === 'Belum Presensi'),
+    true
+  );
+});

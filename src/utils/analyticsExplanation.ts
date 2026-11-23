@@ -70,6 +70,8 @@ export function buildAttendanceComparisonExplanation(
           : selected.totalTercatat,
       skorKehadiranPct: selectedScore,
       tepatWaktuPct: selected.tepatWaktuPct,
+      penalizedIzinDays: selected.penalizedIzinDays,
+      penalizedSakitDays: selected.penalizedSakitDays,
     });
 
     const activePart =
@@ -96,9 +98,9 @@ export function buildAttendanceComparisonExplanation(
   return {
     headline: 'Cara Membaca Perbandingan Skor Kehadiran',
     formulaNote:
-      'Penilaian adil berbasis ketepatan waktu: Hadir Tepat Waktu bernilai 100%, Terlambat bernilai 50% (dinilai Kurang Baik jika mendominasi), Sakit/Izin bernilai 25%, dan Alpa bernilai 0%.',
+      'Hadir Tepat Waktu bernilai penuh (100%). Nilai Kurang Baik berlaku untuk Terlambat (50%), Alpa (0%), Izin lebih dari 7 kali dalam sebulan, dan Sakit lebih dari 7 hari berturut-turut. Izin ≤ 7×/bulan dan Sakit ≤ 7 hari berturut-turut tidak menurunkan nilai.',
     colorLegend:
-      'Hijau: Sangat Baik (tepat waktu ≥ 90%, tanpa alpa) · Biru: Baik (skor & tepat waktu ≥ 75%, tanpa alpa) · Kuning: Cukup (skor ≥ 60%, tepat waktu > terlambat) · Oranye: Kurang Baik (skor 40–59% atau terlambat ≥ tepat waktu) · Merah: Perlu Perhatian (skor < 40% atau Alpa ≥ 30%). Batang Indigo gelap menandakan periode aktif.',
+      'Hijau: Sangat Baik (tepat waktu ≥ 90%, tanpa Alpa, izin/sakit wajar) · Biru: Baik (skor & tepat waktu ≥ 75%, tanpa Alpa) · Kuning: Cukup (skor ≥ 60%, tepat waktu > terlambat) · Oranye: Kurang Baik (Terlambat dominan, Alpa > 10%, Izin > 7×/bulan, atau Sakit > 7 hari berturut-turut) · Merah: Perlu Perhatian (skor < 40% atau Alpa ≥ 30%).',
     dynamicSummary,
     interactionHint:
       'Klik salah satu batang periode (Harian, Mingguan, Bulanan, Semester, atau Tahunan) untuk melihat rincian distribusi status dan daftar kategori siswa pada periode tersebut.',
@@ -142,6 +144,8 @@ export function buildClassAttendanceExplanation(
             : c.totalTercatat,
         skorKehadiranPct: getClassScore(c),
         tepatWaktuPct: c.tepatWaktuPct,
+        penalizedIzinDays: c.penalizedIzinDays,
+        penalizedSakitDays: c.penalizedSakitDays,
       });
       return cat.tier === 'kurang_baik' || cat.tier === 'perlu_perhatian';
     });
@@ -160,6 +164,8 @@ export function buildClassAttendanceExplanation(
             : topClass.totalTercatat,
         skorKehadiranPct: getClassScore(topClass),
         tepatWaktuPct: topClass.tepatWaktuPct,
+        penalizedIzinDays: topClass.penalizedIzinDays,
+        penalizedSakitDays: topClass.penalizedSakitDays,
       });
       dynamicSummary = `Pada periode ${periodName}, kelas ${topClass.kelas} mencatat skor kehadiran ${getClassScore(
         topClass
@@ -177,7 +183,7 @@ export function buildClassAttendanceExplanation(
         .slice(0, 3)
         .map((c) => `${c.kelas} (${getClassScore(c)}%)`)
         .join(', ');
-      actionNote = `Terdapat ${lowTierClasses.length} kelas pada kategori Kurang Baik / Perlu Perhatian: ${names}. Disarankan koordinasi dengan wali kelas untuk menindaklanjuti siswa yang sering terlambat atau alpa.`;
+      actionNote = `Terdapat ${lowTierClasses.length} kelas pada kategori Kurang Baik / Perlu Perhatian: ${names}. Disarankan koordinasi dengan wali kelas untuk menindaklanjuti siswa yang terlambat, alpa, izin > 7×/bulan, atau sakit > 7 hari berturut-turut.`;
     } else {
       actionNote = `Seluruh ${activeClasses.length} kelas aktif berada pada kategori Cukup hingga Sangat Baik. Terus dorong siswa hadir tepat waktu agar mencapai kategori Sangat Baik (≥ 90% tepat waktu).`;
     }
@@ -186,7 +192,7 @@ export function buildClassAttendanceExplanation(
   return {
     headline: `Cara Membaca Skor Kehadiran per Kelas (${periodName})`,
     legendNote:
-      'Setiap batang menampilkan skor kehadiran adil kelas (H = Hadir tepat waktu 100%, T = Terlambat 50%, S = Sakit 25%, I = Izin 25%, A = Alpa 0%). Kategori Sangat Baik hanya untuk kehadiran tepat waktu ≥ 90% tanpa alpa.',
+      'Penilaian kurang baik berlaku untuk Terlambat, Alpa, Izin > 7×/bulan, dan Sakit > 7 hari berturut-turut. Keterangan: H = Hadir tepat waktu, T = Terlambat, S = Sakit, I = Izin, A = Alpa.',
     dynamicSummary,
     actionNote,
   };

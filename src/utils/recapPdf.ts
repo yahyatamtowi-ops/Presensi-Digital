@@ -191,7 +191,7 @@ export async function generateRecapPdf(
           { label: 'Sakit', value: totalSakit, rgb: [2, 132, 199] },
           { label: 'Izin', value: totalIzin, rgb: [2, 132, 199] },
           { label: 'Alpa', value: totalAlpa, rgb: [225, 29, 72] },
-          { label: 'Belum Absen', value: totalBelum, rgb: [100, 116, 139] },
+          { label: 'Belum Presensi', value: totalBelum, rgb: [100, 116, 139] },
         ]
       : [
           { label: 'Total Siswa', value: periodRows.length, rgb: [15, 23, 42] },

@@ -18,6 +18,7 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import type {
   AttendanceRecord,
   DayOfWeek,
+  LateCorrectionRequest,
   MasterSubject,
   SchoolSettings,
   SemesterKind,
@@ -30,6 +31,7 @@ import type {
 import {
   attendanceDocId,
   buildAttendancePayload,
+  buildLateCorrectionRequestPayload,
   buildMasterSubjectPayload,
   buildSchoolConfigCreatePayload,
   buildSchoolConfigUpdatePayload,
@@ -39,6 +41,7 @@ import {
   buildTeacherSchedulePayload,
   buildUserAccountPayload,
   extractSchoolSettingsFromDoc,
+  lateCorrectionDocId,
   studentDocId,
   toSafeFirestoreDocId,
 } from './firestorePayloads';
@@ -54,6 +57,7 @@ export interface FullLocalSchoolSnapshot {
   subjectAssignments: SubjectAssignment[];
   subjectRecords: SubjectAttendanceRecord[];
   accounts: UserAccount[];
+  lateCorrectionRequests?: LateCorrectionRequest[];
 }
 
 export interface WorkspaceSubscriptionCallbacks {
@@ -66,6 +70,7 @@ export interface WorkspaceSubscriptionCallbacks {
   onSubjectAssignments: (assignments: SubjectAssignment[]) => void;
   onSubjectRecords: (records: SubjectAttendanceRecord[]) => void;
   onAccounts: (accounts: UserAccount[]) => void;
+  onLateCorrectionRequests?: (requests: LateCorrectionRequest[]) => void;
   onSyncActivity: () => void;
   onError: (err: unknown, path: string) => void;
 }
@@ -193,6 +198,12 @@ async function pushSubcollectionsToCloud(
     ops.push({
       pathSegments: ['schools', uid, 'accounts', toSafeFirestoreDocId(acc.id, 'usr')],
       data: buildUserAccountPayload(uid, acc, serverTimestamp()),
+    });
+  }
+  for (const req of snapshot.lateCorrectionRequests || []) {
+    ops.push({
+      pathSegments: ['schools', uid, 'lateCorrectionRequests', lateCorrectionDocId(req)],
+      data: buildLateCorrectionRequestPayload(uid, req, serverTimestamp()),
     });
   }
 
@@ -526,6 +537,62 @@ export function subscribeToSchoolWorkspace(
     )
   );
 
+  // 9. Late Correction Requests (Wali Kelas -> Master Admin)
+  if (callbacks.onLateCorrectionRequests) {
+    const onLateReq = callbacks.onLateCorrectionRequests;
+    unsubs.push(
+      onSnapshot(
+        query(
+          collection(db, 'schools', uid, 'lateCorrectionRequests'),
+          where('ownerId', '==', uid)
+        ),
+        (snap) => {
+          if (!snap.metadata.fromCache) {
+            recordFirestoreOps({ reads: Math.max(1, snap.docChanges().length) });
+          }
+          const list: LateCorrectionRequest[] = snap.docs
+            .map((d) => {
+              const data = d.data();
+              const status: LateCorrectionRequest['status'] =
+                data.status === 'approved' || data.status === 'rejected'
+                  ? data.status
+                  : 'pending';
+              return {
+                id: String(data.id || d.id),
+                tanggal: String(data.tanggal || ''),
+                nis: String(data.nis || ''),
+                nama: String(data.nama || ''),
+                kelas: String(data.kelas || ''),
+                jam_masuk_asal: String(data.jam_masuk_asal || '-'),
+                alasan: String(data.alasan || ''),
+                requested_by_user_id: String(data.requested_by_user_id || ''),
+                requested_by_name: String(data.requested_by_name || 'Wali Kelas'),
+                requested_at: String(data.requested_at || ''),
+                status,
+                resolved_by_name:
+                  typeof data.resolved_by_name === 'string' && data.resolved_by_name
+                    ? data.resolved_by_name
+                    : undefined,
+                resolved_at:
+                  typeof data.resolved_at === 'string' && data.resolved_at
+                    ? data.resolved_at
+                    : undefined,
+                catatan_admin:
+                  typeof data.catatan_admin === 'string' && data.catatan_admin
+                    ? data.catatan_admin
+                    : undefined,
+                tahun_ajaran: String(data.tahun_ajaran || ''),
+              };
+            })
+            .sort((a, b) => b.requested_at.localeCompare(a.requested_at));
+          onLateReq(list);
+          callbacks.onSyncActivity();
+        },
+        handleListenerError(`schools/${uid}/lateCorrectionRequests`)
+      )
+    );
+  }
+
   return () => {
     for (const unsub of unsubs) {
       unsub();
@@ -634,6 +701,57 @@ export async function bulkUpsertAttendanceToCloud(
     );
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `schools/${uid}/attendance`);
+  }
+}
+
+export async function deleteAttendanceFromCloud(
+  uid: string,
+  record: Pick<AttendanceRecord, 'id' | 'tanggal' | 'nis'>
+): Promise<void> {
+  const docId = attendanceDocId(record);
+  const path = `schools/${uid}/attendance/${docId}`;
+  try {
+    await deleteDoc(doc(db, 'schools', uid, 'attendance', docId));
+    recordFirestoreOps({ deletes: 1 });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function bulkDeleteAttendanceFromCloud(
+  uid: string,
+  records: Array<Pick<AttendanceRecord, 'id' | 'tanggal' | 'nis'>>
+): Promise<void> {
+  if (records.length === 0) return;
+  try {
+    for (let i = 0; i < records.length; i += BATCH_LIMIT) {
+      const chunk = records.slice(i, i + BATCH_LIMIT);
+      const batch = writeBatch(db);
+      for (const r of chunk) {
+        batch.delete(doc(db, 'schools', uid, 'attendance', attendanceDocId(r)));
+      }
+      await batch.commit();
+      recordFirestoreOps({ deletes: chunk.length });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `schools/${uid}/attendance`);
+  }
+}
+
+export async function upsertLateCorrectionRequestToCloud(
+  uid: string,
+  request: LateCorrectionRequest
+): Promise<void> {
+  const docId = lateCorrectionDocId(request);
+  const path = `schools/${uid}/lateCorrectionRequests/${docId}`;
+  try {
+    await setDoc(
+      doc(db, 'schools', uid, 'lateCorrectionRequests', docId),
+      buildLateCorrectionRequestPayload(uid, request, serverTimestamp())
+    );
+    recordFirestoreOps({ writes: 1 });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
@@ -768,6 +886,28 @@ export async function bulkUpsertSubjectRecordsToCloud(
     );
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `schools/${uid}/subjectRecords`);
+  }
+}
+
+export async function bulkDeleteSubjectRecordsFromCloud(
+  uid: string,
+  records: Array<Pick<SubjectAttendanceRecord, 'id'>>
+): Promise<void> {
+  if (records.length === 0) return;
+  try {
+    for (let i = 0; i < records.length; i += BATCH_LIMIT) {
+      const chunk = records.slice(i, i + BATCH_LIMIT);
+      const batch = writeBatch(db);
+      for (const r of chunk) {
+        batch.delete(
+          doc(db, 'schools', uid, 'subjectRecords', toSafeFirestoreDocId(r.id, 'srec'))
+        );
+      }
+      await batch.commit();
+      recordFirestoreOps({ deletes: chunk.length });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `schools/${uid}/subjectRecords`);
   }
 }
 

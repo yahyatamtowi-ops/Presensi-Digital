@@ -1,4 +1,9 @@
-import type { AttendanceRecord } from '../types';
+import type {
+  AttendanceRecord,
+  SchoolSettings,
+  Student,
+  SubjectAttendanceRecord,
+} from '../types';
 import type { GasAction, PendingSyncItem } from './gasApi';
 
 const IDB_NAME = 'presensi_digital_offline_v1';
@@ -6,6 +11,9 @@ const IDB_VERSION = 1;
 const IDB_STORE = 'offline_kv';
 const IDB_QUEUE_KEY = 'sync_queue_v2';
 const IDB_RECORDS_BACKUP_KEY = 'offline_records_backup_v1';
+const IDB_STUDENTS_BACKUP_KEY = 'offline_students_backup_v1';
+const IDB_SUBJECT_RECORDS_BACKUP_KEY = 'offline_subject_records_backup_v1';
+const IDB_SETTINGS_BACKUP_KEY = 'offline_settings_backup_v1';
 
 export interface OfflineQueueSummary {
   total: number;
@@ -288,4 +296,102 @@ export async function readRecordsBackupFromIdb(): Promise<AttendanceRecord[]> {
   const stored = await idbGet<{ records?: AttendanceRecord[] }>(IDB_RECORDS_BACKUP_KEY);
   if (!stored || !Array.isArray(stored.records)) return [];
   return stored.records;
+}
+
+export async function mirrorStudentsBackupToIdb(students: Student[]): Promise<void> {
+  await idbPut(IDB_STUDENTS_BACKUP_KEY, {
+    savedAt: new Date().toISOString(),
+    students,
+  });
+}
+
+export async function readStudentsBackupFromIdb(): Promise<Student[]> {
+  const stored = await idbGet<{ students?: Student[] }>(IDB_STUDENTS_BACKUP_KEY);
+  if (!stored || !Array.isArray(stored.students)) return [];
+  return stored.students;
+}
+
+export async function mirrorSubjectRecordsBackupToIdb(
+  subjectRecords: SubjectAttendanceRecord[]
+): Promise<void> {
+  await idbPut(IDB_SUBJECT_RECORDS_BACKUP_KEY, {
+    savedAt: new Date().toISOString(),
+    subjectRecords,
+  });
+}
+
+export async function readSubjectRecordsBackupFromIdb(): Promise<SubjectAttendanceRecord[]> {
+  const stored = await idbGet<{ subjectRecords?: SubjectAttendanceRecord[] }>(
+    IDB_SUBJECT_RECORDS_BACKUP_KEY
+  );
+  if (!stored || !Array.isArray(stored.subjectRecords)) return [];
+  return stored.subjectRecords;
+}
+
+export async function mirrorSettingsBackupToIdb(settings: SchoolSettings): Promise<void> {
+  await idbPut(IDB_SETTINGS_BACKUP_KEY, {
+    savedAt: new Date().toISOString(),
+    settings,
+  });
+}
+
+export async function readSettingsBackupFromIdb(): Promise<SchoolSettings | null> {
+  const stored = await idbGet<{ settings?: SchoolSettings }>(IDB_SETTINGS_BACKUP_KEY);
+  if (!stored || !stored.settings || typeof stored.settings !== 'object') return null;
+  return stored.settings;
+}
+
+/**
+ * Requests browser Persistent Storage so IndexedDB can safely utilize maximum
+ * browser-allocated disk quota without automatic eviction.
+ */
+export async function requestPersistentBrowserStorage(): Promise<boolean> {
+  try {
+    if (typeof navigator === 'undefined' || !navigator.storage) return false;
+    if (typeof navigator.storage.persisted === 'function') {
+      const already = await navigator.storage.persisted();
+      if (already) return true;
+    }
+    if (typeof navigator.storage.persist === 'function') {
+      return await navigator.storage.persist();
+    }
+  } catch {
+    // Browser policy may decline persistent storage silently
+  }
+  return false;
+}
+
+/**
+ * Clears all cached records inside IndexedDB offline store and browser Cache Storage API.
+ */
+export async function clearOfflineIndexedDbCache(): Promise<void> {
+  const db = await openOfflineDb();
+  if (db) {
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        tx.objectStore(IDB_STORE).clear();
+        tx.oncomplete = () => {
+          db.close();
+          resolve();
+        };
+        tx.onerror = () => {
+          db.close();
+          resolve();
+        };
+      } catch {
+        db.close();
+        resolve();
+      }
+    });
+  }
+
+  try {
+    if (typeof window !== 'undefined' && 'caches' in window) {
+      const cacheNames = await window.caches.keys();
+      await Promise.all(cacheNames.map((name) => window.caches.delete(name)));
+    }
+  } catch {
+    // Ignore Cache API restrictions
+  }
 }
