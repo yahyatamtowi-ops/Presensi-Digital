@@ -1,8 +1,15 @@
 import {
   DEFAULT_FONNTE_CONFIG,
+  DEFAULT_FONNTE_PACING,
+  buildFonnteDedupeKey,
   clampFonntePacing,
+  computeNextStaggeredDelaySec,
+  estimateStaggeredDurationSec,
+  maskFonnteTarget,
+  normalizeFonnteTarget,
   type FonnteConfig,
   type FonntePacingPolicy,
+  type FonnteQueueJob,
   type FonnteQueueJobInput,
   type FonnteQueueSnapshot,
   type FonnteStatusResponse,
@@ -34,11 +41,274 @@ async function safeParseJson<T>(res: Response): Promise<T> {
   try {
     return JSON.parse(text) as T;
   } catch {
+    if (res.status === 404) {
+      throw new Error(
+        'Endpoint API Fonnte tidak ditemukan (HTTP 404). Pastikan konfigurasi netlify.toml & folder netlify/functions sudah ter-deploy di Netlify, atau server aplikasi sedang berjalan.'
+      );
+    }
     throw new Error(
       `Respon server tidak valid (HTTP ${res.status}). Pastikan server aplikasi sedang berjalan.`
     );
   }
 }
+
+interface ServerlessClientJob extends FonnteQueueJob {
+  input: FonnteQueueJobInput;
+  role: FonnteClientRole;
+}
+
+/**
+ * Coordinates anti-ban staggered delivery when hosted on serverless platforms (e.g. Netlify Functions)
+ * where backend containers freeze immediately after returning an HTTP response.
+ * Tokens remain strictly on the server; this runner only dispatches 1 item per serverless call.
+ */
+class BrowserServerlessFonnteRunner {
+  private jobs: ServerlessClientJob[] = [];
+  private dedupe = new Set<string>();
+  private pacing: FonntePacingPolicy = { ...DEFAULT_FONNTE_PACING };
+  private paused = false;
+  private processing = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private nextSendAtMs: number | null = null;
+  private sentInCurrentBatch = 0;
+  private tokenConfigured = true;
+
+  hasJobs(): boolean {
+    return this.jobs.length > 0;
+  }
+
+  setTokenConfigured(configured: boolean): void {
+    this.tokenConfigured = configured;
+  }
+
+  recordRemoteJobs(remoteJobs: FonnteQueueJob[]): void {
+    if (!Array.isArray(remoteJobs) || remoteJobs.length === 0) return;
+    const existingIds = new Set(this.jobs.map((j) => j.id));
+    for (const rj of remoteJobs) {
+      if (existingIds.has(rj.id)) continue;
+      if (rj.state === 'sent') {
+        this.dedupe.add(rj.dedupeKey);
+      }
+      this.jobs.push({
+        ...rj,
+        input: {
+          nis: rj.nis,
+          studentName: rj.studentName,
+          kelas: rj.kelas,
+          target: '',
+          status: rj.status,
+          tanggal: rj.tanggal,
+          message: '',
+        },
+        role: 'master_admin',
+      });
+    }
+    if (this.jobs.length > 500) {
+      this.jobs = this.jobs.slice(-500);
+    }
+  }
+
+  getSnapshot(): FonnteQueueSnapshot {
+    let pending = 0;
+    let sending = 0;
+    let sent = 0;
+    let failed = 0;
+    for (const j of this.jobs) {
+      if (j.state === 'pending') pending++;
+      else if (j.state === 'sending') sending++;
+      else if (j.state === 'sent') sent++;
+      else if (j.state === 'failed') failed++;
+    }
+    const remainingToSend = pending + sending;
+    const baseRemainingSec = estimateStaggeredDurationSec(remainingToSend, this.pacing);
+    const countdownSec =
+      this.nextSendAtMs && this.nextSendAtMs > Date.now()
+        ? Math.ceil((this.nextSendAtMs - Date.now()) / 1000)
+        : 0;
+
+    return {
+      running: this.processing || this.timer !== null,
+      paused: this.paused,
+      tokenConfigured: this.tokenConfigured,
+      nextSendAt: this.nextSendAtMs ? new Date(this.nextSendAtMs).toISOString() : null,
+      sentInCurrentBatch: this.sentInCurrentBatch,
+      counts: {
+        pending,
+        sending,
+        sent,
+        failed,
+        total: this.jobs.length,
+      },
+      pacing: { ...this.pacing },
+      estimatedRemainingSec: remainingToSend > 0 ? baseRemainingSec + countdownSec : 0,
+      jobs: this.jobs.slice(-100).map(({ input: _i, role: _r, ...pub }) => pub),
+    };
+  }
+
+  enqueue(
+    role: FonnteClientRole,
+    items: FonnteQueueJobInput[],
+    pacing: FonntePacingPolicy
+  ): { enqueued: number; skippedDuplicates: number; skippedInvalid: number } {
+    this.pacing = clampFonntePacing(pacing);
+    let enqueued = 0;
+    let skippedDuplicates = 0;
+    let skippedInvalid = 0;
+
+    for (const item of items) {
+      const target = normalizeFonnteTarget(item.target);
+      if (!item.nis || !item.studentName || !item.tanggal || !item.message || !target) {
+        skippedInvalid++;
+        continue;
+      }
+      const dedupeKey = buildFonnteDedupeKey(item.tanggal, item.nis, item.status);
+      if (this.dedupe.has(dedupeKey)) {
+        skippedDuplicates++;
+        continue;
+      }
+      this.dedupe.add(dedupeKey);
+      this.jobs.push({
+        id: `sfq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        dedupeKey,
+        nis: item.nis,
+        studentName: item.studentName,
+        kelas: item.kelas || '-',
+        targetMasked: maskFonnteTarget(target),
+        status: item.status,
+        tanggal: item.tanggal,
+        state: 'pending',
+        attempts: 0,
+        createdAt: new Date().toISOString(),
+        input: { ...item, target },
+        role,
+      });
+      enqueued++;
+    }
+
+    if (this.jobs.length > 500) {
+      this.jobs = this.jobs.slice(-500);
+    }
+
+    if (enqueued > 0 && !this.paused) {
+      this.kickoff();
+    }
+    return { enqueued, skippedDuplicates, skippedInvalid };
+  }
+
+  pause(): void {
+    this.paused = true;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.nextSendAtMs = null;
+  }
+
+  resume(): void {
+    this.paused = false;
+    this.kickoff();
+  }
+
+  clear(): void {
+    this.pause();
+    this.jobs = [];
+    this.dedupe.clear();
+    this.sentInCurrentBatch = 0;
+    this.paused = false;
+  }
+
+  private kickoff(): void {
+    if (this.paused || this.processing || this.timer) return;
+    if (!this.jobs.some((j) => j.state === 'pending')) {
+      this.nextSendAtMs = null;
+      return;
+    }
+    void this.processNext();
+  }
+
+  private scheduleNext(): void {
+    if (this.paused) {
+      this.nextSendAtMs = null;
+      return;
+    }
+    const nextPending = this.jobs.find((j) => j.state === 'pending');
+    if (!nextPending) {
+      this.nextSendAtMs = null;
+      this.sentInCurrentBatch = 0;
+      return;
+    }
+    const { delaySec, isBatchPause } = computeNextStaggeredDelaySec(
+      this.sentInCurrentBatch,
+      this.pacing
+    );
+    if (isBatchPause) {
+      this.sentInCurrentBatch = 0;
+    }
+    nextPending.scheduledDelaySec = delaySec;
+    this.nextSendAtMs = Date.now() + delaySec * 1000;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.nextSendAtMs = null;
+      void this.processNext();
+    }, delaySec * 1000);
+  }
+
+  private async processNext(): Promise<void> {
+    if (this.paused || this.processing) return;
+    const job = this.jobs.find((j) => j.state === 'pending');
+    if (!job) {
+      this.nextSendAtMs = null;
+      return;
+    }
+
+    this.processing = true;
+    job.state = 'sending';
+    job.attempts += 1;
+
+    try {
+      const res = await fetch('/api/fonnte/enqueue', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: buildHeaders(job.role),
+        body: JSON.stringify({
+          items: [job.input],
+          pacing: this.pacing,
+        }),
+      });
+      const data = await safeParseJson<{
+        queue?: FonnteQueueSnapshot;
+        error?: string;
+      }>(res);
+      if (!res.ok) {
+        job.state = 'failed';
+        job.error = data.error || `Gagal mengirim pesan (HTTP ${res.status}).`;
+        this.dedupe.delete(job.dedupeKey);
+      } else {
+        const remoteJob = data.queue?.jobs?.find((rj) => rj.dedupeKey === job.dedupeKey);
+        if (remoteJob && remoteJob.state === 'failed') {
+          job.state = 'failed';
+          job.error = remoteJob.error || 'Pengiriman ditolak oleh Fonnte.';
+          this.dedupe.delete(job.dedupeKey);
+        } else {
+          job.state = 'sent';
+          job.sentAt = remoteJob?.sentAt || new Date().toISOString();
+          job.error = undefined;
+          this.sentInCurrentBatch += 1;
+        }
+      }
+    } catch (err) {
+      job.state = 'failed';
+      job.error = err instanceof Error ? err.message : 'Gagal menghubungi server Fonnte.';
+      this.dedupe.delete(job.dedupeKey);
+    } finally {
+      this.processing = false;
+      this.scheduleNext();
+    }
+  }
+}
+
+let detectedServerMode: 'persistent' | 'serverless' | null = null;
+const serverlessRunner = new BrowserServerlessFonnteRunner();
 
 export function loadFonnteConfig(): FonnteConfig {
   if (typeof window === 'undefined') return { ...DEFAULT_FONNTE_CONFIG };
@@ -159,23 +429,45 @@ export async function fetchFonnteStatus(
   const query = checkDevice ? '?checkDevice=1' : '';
   const res = await fetch(`/api/fonnte/status${query}`, {
     method: 'GET',
+    credentials: 'same-origin',
     headers: buildHeaders(role),
   });
   const data = await safeParseJson<FonnteStatusResponse & { error?: string }>(res);
   if (!res.ok) {
     throw new Error(data.error || 'Gagal memeriksa status server Fonnte.');
   }
+  if (data.serverMode === 'serverless' || data.serverMode === 'persistent') {
+    detectedServerMode = data.serverMode;
+  }
+  serverlessRunner.setTokenConfigured(Boolean(data.configured));
+  if (detectedServerMode === 'serverless' && serverlessRunner.hasJobs()) {
+    return {
+      ...data,
+      queue: serverlessRunner.getSnapshot(),
+    };
+  }
   return data;
 }
 
 export async function fetchFonnteQueue(role: FonnteClientRole): Promise<FonnteQueueSnapshot> {
+  if (detectedServerMode === 'serverless' && serverlessRunner.hasJobs()) {
+    return serverlessRunner.getSnapshot();
+  }
   const res = await fetch('/api/fonnte/queue', {
     method: 'GET',
+    credentials: 'same-origin',
     headers: buildHeaders(role),
   });
-  const data = await safeParseJson<{ queue?: FonnteQueueSnapshot; error?: string }>(res);
+  const data = await safeParseJson<{
+    serverMode?: 'persistent' | 'serverless';
+    queue?: FonnteQueueSnapshot;
+    error?: string;
+  }>(res);
   if (!res.ok || !data.queue) {
     throw new Error(data.error || 'Gagal memuat antrean Fonnte.');
+  }
+  if (data.serverMode === 'serverless' || data.serverMode === 'persistent') {
+    detectedServerMode = data.serverMode;
   }
   return data.queue;
 }
@@ -190,23 +482,58 @@ export async function enqueueFonnteNotifications(params: {
   skippedInvalid: number;
   queue: FonnteQueueSnapshot;
 }> {
+  const clampedPacing = clampFonntePacing(params.pacing);
+
+  // If server mode is not yet known for multi-item batches, probe /api/fonnte/status first
+  if (detectedServerMode === null && params.items.length > 1) {
+    try {
+      await fetchFonnteStatus(params.role, false);
+    } catch {
+      // Proceed to normal request which will report the exact network/HTTP error
+    }
+  }
+
+  // On serverless platforms (Netlify), pace multi-item batches 1-by-1 via client runner
+  // so every message respects anti-ban delays without hitting serverless execution timeouts.
+  if (detectedServerMode === 'serverless' && params.items.length > 1) {
+    const result = serverlessRunner.enqueue(params.role, params.items, clampedPacing);
+    return {
+      ...result,
+      queue: serverlessRunner.getSnapshot(),
+    };
+  }
+
   const res = await fetch('/api/fonnte/enqueue', {
     method: 'POST',
+    credentials: 'same-origin',
     headers: buildHeaders(params.role),
     body: JSON.stringify({
       items: params.items,
-      pacing: clampFonntePacing(params.pacing),
+      pacing: clampedPacing,
     }),
   });
   const data = await safeParseJson<{
     enqueued?: number;
     skippedDuplicates?: number;
     skippedInvalid?: number;
+    serverMode?: 'persistent' | 'serverless';
     queue?: FonnteQueueSnapshot;
     error?: string;
   }>(res);
   if (!res.ok || !data.queue) {
     throw new Error(data.error || 'Gagal memasukkan pesan ke antrean Fonnte.');
+  }
+  if (data.serverMode === 'serverless' || data.serverMode === 'persistent') {
+    detectedServerMode = data.serverMode;
+  }
+  if (detectedServerMode === 'serverless' && serverlessRunner.hasJobs()) {
+    serverlessRunner.recordRemoteJobs(data.queue.jobs);
+    return {
+      enqueued: data.enqueued ?? 0,
+      skippedDuplicates: data.skippedDuplicates ?? 0,
+      skippedInvalid: data.skippedInvalid ?? 0,
+      queue: serverlessRunner.getSnapshot(),
+    };
   }
   return {
     enqueued: data.enqueued ?? 0,
@@ -220,14 +547,24 @@ export async function controlFonnteQueue(
   role: FonnteClientRole,
   action: 'pause' | 'resume' | 'clear'
 ): Promise<FonnteQueueSnapshot> {
+  if (detectedServerMode === 'serverless' && serverlessRunner.hasJobs()) {
+    if (action === 'pause') serverlessRunner.pause();
+    else if (action === 'resume') serverlessRunner.resume();
+    else if (action === 'clear') serverlessRunner.clear();
+  }
+
   const res = await fetch(`/api/fonnte/queue/${action}`, {
     method: 'POST',
+    credentials: 'same-origin',
     headers: buildHeaders(role),
     body: JSON.stringify({}),
   });
   const data = await safeParseJson<{ queue?: FonnteQueueSnapshot; error?: string }>(res);
   if (!res.ok || !data.queue) {
     throw new Error(data.error || 'Gagal mengendalikan antrean Fonnte.');
+  }
+  if (detectedServerMode === 'serverless' && serverlessRunner.hasJobs()) {
+    return serverlessRunner.getSnapshot();
   }
   return data.queue;
 }
@@ -239,6 +576,7 @@ export async function sendFonnteTestMessage(params: {
 }): Promise<{ ok: boolean; detail: string }> {
   const res = await fetch('/api/fonnte/test', {
     method: 'POST',
+    credentials: 'same-origin',
     headers: buildHeaders(params.role),
     body: JSON.stringify({
       target: params.target,
@@ -259,6 +597,7 @@ export async function updateFonnteToken(params: {
 }): Promise<FonnteStatusResponse & { message?: string }> {
   const res = await fetch('/api/fonnte/token', {
     method: 'POST',
+    credentials: 'same-origin',
     headers: buildHeaders(params.role),
     body: JSON.stringify({
       token: params.token,
@@ -280,6 +619,7 @@ export async function switchFonnteTokenSlot(params: {
 }): Promise<FonnteStatusResponse & { message?: string }> {
   const res = await fetch('/api/fonnte/token', {
     method: 'POST',
+    credentials: 'same-origin',
     headers: buildHeaders(params.role),
     body: JSON.stringify({
       slot: params.slot,
@@ -299,6 +639,7 @@ export async function resetFonnteTokenToDefault(
 ): Promise<FonnteStatusResponse & { message?: string }> {
   const res = await fetch('/api/fonnte/token', {
     method: 'DELETE',
+    credentials: 'same-origin',
     headers: buildHeaders(role),
   });
   const data = await safeParseJson<FonnteStatusResponse & { message?: string; error?: string }>(

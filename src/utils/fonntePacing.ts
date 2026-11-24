@@ -97,6 +97,7 @@ export interface FonnteTokenMeta {
 
 export interface FonnteStatusResponse {
   configured: boolean;
+  serverMode?: 'persistent' | 'serverless';
   tokenMeta?: FonnteTokenMeta;
   deviceStatus?: {
     checked: boolean;

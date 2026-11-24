@@ -1,8 +1,10 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
+  getRedirectResult,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   type User,
 } from 'firebase/auth';
@@ -108,19 +110,44 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
+function isTopLevelStandaloneWindow(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.self === window.top;
+  } catch {
+    return false;
+  }
+}
+
 export async function signInWithGoogle(loginHintEmail?: string): Promise<User> {
   const hint = (loginHintEmail || '').trim();
-  if (hint) {
-    const hintedProvider = new GoogleAuthProvider();
-    hintedProvider.setCustomParameters({
-      prompt: 'select_account',
-      login_hint: hint,
-    });
-    const result = await signInWithPopup(auth, hintedProvider);
+  const provider = hint
+    ? (() => {
+        const hintedProvider = new GoogleAuthProvider();
+        hintedProvider.setCustomParameters({
+          prompt: 'select_account',
+          login_hint: hint,
+        });
+        return hintedProvider;
+      })()
+    : googleProvider;
+
+  try {
+    const result = await signInWithPopup(auth, provider);
     return result.user;
+  } catch (err) {
+    const code =
+      err && typeof err === 'object' && 'code' in err
+        ? String((err as { code?: unknown }).code || '')
+        : '';
+    // On standalone hosts like Netlify mobile browsers where popups are blocked, fall back smoothly to redirect flow
+    if (code === 'auth/popup-blocked' && isTopLevelStandaloneWindow()) {
+      await signInWithRedirect(auth, provider);
+      // Browser navigates away; return a never-resolving promise so caller does not flash an error during redirect
+      return new Promise<User>(() => {});
+    }
+    throw err;
   }
-  const result = await signInWithPopup(auth, googleProvider);
-  return result.user;
 }
 
 export async function signOutFirebase(): Promise<void> {
@@ -138,5 +165,8 @@ async function testConnection() {
 }
 
 if (typeof window !== 'undefined') {
+  void getRedirectResult(auth).catch(() => {
+    // Ignore non-fatal redirect check errors (e.g. third-party storage partition or no active redirect)
+  });
   void testConnection();
 }

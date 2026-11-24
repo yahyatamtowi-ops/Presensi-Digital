@@ -565,6 +565,7 @@ async function startServer() {
 
       res.json({
         configured,
+        serverMode: 'persistent',
         tokenMeta: fonnteQueue.getTokenMeta(),
         deviceStatus,
         queue: fonnteQueue.getSnapshot(),
@@ -596,6 +597,7 @@ async function startServer() {
         const deviceStatus = await checkFonnteDeviceStatus(fonnteQueue.getToken());
         res.json({
           configured: fonnteQueue.isConfigured(),
+          serverMode: 'persistent',
           tokenMeta: fonnteQueue.getTokenMeta(),
           deviceStatus,
           queue: fonnteQueue.getSnapshot(),
@@ -636,6 +638,7 @@ async function startServer() {
 
       res.json({
         configured: true,
+        serverMode: 'persistent',
         tokenMeta: fonnteQueue.getTokenMeta(),
         deviceStatus,
         queue: fonnteQueue.getSnapshot(),
@@ -659,6 +662,7 @@ async function startServer() {
         : undefined;
       res.json({
         configured,
+        serverMode: 'persistent',
         tokenMeta: fonnteQueue.getTokenMeta(),
         deviceStatus,
         queue: fonnteQueue.getSnapshot(),
@@ -721,6 +725,7 @@ async function startServer() {
 
     res.json({
       ...result,
+      serverMode: 'persistent',
       queue: fonnteQueue.getSnapshot(),
     });
   });

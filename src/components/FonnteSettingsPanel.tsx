@@ -613,11 +613,11 @@ export function FonnteSettingsPanel({
             </div>
             <p className="text-indigo-900/90 leading-relaxed">
               Demi keamanan, token API Fonnte <strong>tidak disimpan di browser</strong>. Simpan token perangkat Anda dari dashboard{' '}
-              <span className="font-mono font-semibold">md.fonnte.com</span> sebagai Secret / Environment Variable server dengan nama{' '}
+              <span className="font-mono font-semibold">md.fonnte.com</span> sebagai Environment Variable server dengan nama{' '}
               <code className="px-1.5 py-0.5 rounded bg-white border border-indigo-200 font-mono font-bold text-indigo-900">
                 FONNTE_TOKEN
               </code>{' '}
-              (melalui menu <strong>Settings → Secrets</strong>). Semua pengiriman dijalankan melalui proxy backend server agar token tetap rahasia.
+              (pada <strong>Settings → Secrets</strong> atau pada <strong>Netlify → Site configuration → Environment variables</strong> lalu redeploy). Semua pengiriman dijalankan melalui proxy backend/Netlify Function agar token tetap rahasia.
             </p>
           </div>
         )}
@@ -855,6 +855,12 @@ export function FonnteSettingsPanel({
               </div>
               <p className="text-[11px] text-slate-500">
                 Token langsung diverifikasi ke Fonnte dan hanya aktif di memori server (tidak disimpan di browser). Jika token baru tidak valid, nomor WhatsApp yang sedang aktif tetap dipertahankan.
+                {statusData?.serverMode === 'serverless' && (
+                  <>
+                    {' '}
+                    Pada hosting Netlify, agar perubahan token bersifat permanen setelah server istirahat, simpan juga di <strong>Netlify → Environment variables</strong> (<code className="font-mono">FONNTE_TOKEN</code>).
+                  </>
+                )}
               </p>
             </div>
           ) : (
