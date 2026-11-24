@@ -551,7 +551,7 @@ export function SubjectAttendanceView({
         // Ignore stop race
       }
       try {
-        instance.clear();
+        await Promise.resolve(instance.clear()).catch(() => {});
       } catch {
         // Ignore clear errors
       }
@@ -628,8 +628,18 @@ export function SubjectAttendanceView({
   useEffect(() => {
     return () => {
       const instance = scannerRef.current;
-      if (instance && instance.isScanning) {
-        instance.stop().catch(() => {});
+      scannerRef.current = null;
+      if (instance) {
+        const stopPromise = instance.isScanning
+          ? Promise.resolve(instance.stop()).catch(() => {})
+          : Promise.resolve();
+        void stopPromise.finally(() => {
+          try {
+            void Promise.resolve(instance.clear()).catch(() => {});
+          } catch {
+            // ignore unmount clear error
+          }
+        });
       }
     };
   }, []);

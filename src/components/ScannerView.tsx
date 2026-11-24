@@ -181,7 +181,11 @@ export function ScannerView({
         if (instance.isScanning) {
           await instance.stop();
         }
-        instance.clear();
+      } catch {
+        // Ignore stop race
+      }
+      try {
+        await Promise.resolve(instance.clear()).catch(() => {});
       } catch {
         // Ignore cleanup errors
       }
@@ -277,10 +281,18 @@ export function ScannerView({
   useEffect(() => {
     return () => {
       const instance = scannerRef.current;
+      scannerRef.current = null;
       if (instance) {
-        if (instance.isScanning) {
-          instance.stop().catch(() => {});
-        }
+        const stopPromise = instance.isScanning
+          ? Promise.resolve(instance.stop()).catch(() => {})
+          : Promise.resolve();
+        void stopPromise.finally(() => {
+          try {
+            void Promise.resolve(instance.clear()).catch(() => {});
+          } catch {
+            // ignore unmount clear error
+          }
+        });
       }
     };
   }, []);

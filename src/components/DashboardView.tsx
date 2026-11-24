@@ -295,7 +295,8 @@ export function DashboardView({
               <div className="space-y-3">
                 {metrics.classBreakdown.map((cls) => {
                   const present = cls.hadir + cls.terlambat;
-                  const pct = cls.total > 0 ? Math.round((present / cls.total) * 100) : 0;
+                  const safeTotal = Math.max(1, cls.total);
+                  const pct = cls.total > 0 ? Math.round((present / safeTotal) * 100) : 0;
                   return (
                     <div key={cls.kelas} className="space-y-1.5">
                       <div className="flex items-center justify-between text-xs">
@@ -307,19 +308,19 @@ export function DashboardView({
                       <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden flex">
                         {cls.hadir > 0 && (
                           <div
-                            style={{ width: `${(cls.hadir / cls.total) * 100}%` }}
+                            style={{ width: `${(cls.hadir / safeTotal) * 100}%` }}
                             className="bg-emerald-500 h-full"
                           />
                         )}
                         {cls.terlambat > 0 && (
                           <div
-                            style={{ width: `${(cls.terlambat / cls.total) * 100}%` }}
+                            style={{ width: `${(cls.terlambat / safeTotal) * 100}%` }}
                             className="bg-amber-400 h-full"
                           />
                         )}
                         {cls.tidakHadir > 0 && (
                           <div
-                            style={{ width: `${(cls.tidakHadir / cls.total) * 100}%` }}
+                            style={{ width: `${(cls.tidakHadir / safeTotal) * 100}%` }}
                             className="bg-rose-400 h-full"
                           />
                         )}

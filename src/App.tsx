@@ -14,6 +14,26 @@ import {
 import { FirebaseDomainHelpModal } from './components/FirebaseDomainHelpModal';
 import { StartupSyncModal } from './components/StartupSyncModal';
 import {
+  buildFonnteDedupeKey,
+  buildPendingFonnteRecipients,
+  evaluateScheduledFonnteRun,
+  normalizeFonnteTarget,
+  renderFonnteMessage,
+  type FonnteConfig,
+  type FonnteNotificationCategory,
+} from './utils/fonntePacing';
+import {
+  clearLocalFonnteSentKeys,
+  enqueueFonnteNotifications,
+  loadFonnteConfig,
+  loadLastFonnteScheduleRunKey,
+  loadLocalFonnteSentKeys,
+  saveFonnteConfig,
+  saveLastFonnteScheduleRunKey,
+  saveLocalFonnteSentKeys,
+  type FonnteClientRole,
+} from './utils/fonnteClient';
+import {
   bulkDeleteAttendanceFromCloud,
   bulkDeleteSubjectRecordsFromCloud,
   bulkUpsertAttendanceToCloud,
@@ -320,6 +340,18 @@ export default function App() {
   const [startupSyncStep, setStartupSyncStep] = useState<StartupSyncStep>('done');
   const [startupSyncInitialized, setStartupSyncInitialized] = useState(false);
   const [startupSheetsSyncing, setStartupSheetsSyncing] = useState(false);
+  const [fonnteConfig, setFonnteConfig] = useState<FonnteConfig>(() => loadFonnteConfig());
+  const fonnteConfigRef = useRef<FonnteConfig>(fonnteConfig);
+  const [fonnteSentKeys, setFonnteSentKeys] = useState<Set<string>>(() =>
+    loadLocalFonnteSentKeys(getTodayDateString())
+  );
+  const fonnteSentKeysRef = useRef<Set<string>>(fonnteSentKeys);
+  const [fonnteLastScheduleRunKey, setFonnteLastScheduleRunKey] = useState<string>(() =>
+    loadLastFonnteScheduleRunKey()
+  );
+  const fonnteLastScheduleRunKeyRef = useRef<string>(fonnteLastScheduleRunKey);
+  const fonnteScheduleInFlightRef = useRef<boolean>(false);
+  const [fonnteQueueSyncNonce, setFonnteQueueSyncNonce] = useState<number>(0);
   const [firestoreDailyUsage, setFirestoreDailyUsage] = useState(() =>
     loadFirestoreDailyUsage()
   );
@@ -1304,10 +1336,14 @@ export default function App() {
   // Hydrate offline queue from IndexedDB backup on mount
   useEffect(() => {
     let active = true;
-    void hydrateSyncQueueFromOfflineStore().then((queue) => {
-      if (!active) return;
-      setPendingSyncCount(queue.length);
-    });
+    void hydrateSyncQueueFromOfflineStore()
+      .then((queue) => {
+        if (!active) return;
+        setPendingSyncCount(queue.length);
+      })
+      .catch(() => {
+        // Ignore IndexedDB hydration errors on restricted browsers
+      });
     return () => {
       active = false;
     };
@@ -1775,6 +1811,227 @@ export default function App() {
     [handleTestAndSyncSheets]
   );
 
+  const handleUpdateFonnteConfig = useCallback((next: FonnteConfig) => {
+    const saved = saveFonnteConfig(next);
+    fonnteConfigRef.current = saved;
+    setFonnteConfig(saved);
+  }, []);
+
+  const handleMarkFonnteSentKeys = useCallback((keys: string[]) => {
+    if (keys.length === 0) return;
+    const today = getTodayDateString();
+    const next = new Set(fonnteSentKeysRef.current);
+    for (const key of keys) {
+      next.add(key);
+    }
+    fonnteSentKeysRef.current = next;
+    setFonnteSentKeys(next);
+    saveLocalFonnteSentKeys(today, next);
+  }, []);
+
+  const handleClearFonnteSentKeys = useCallback(() => {
+    const empty = new Set<string>();
+    fonnteSentKeysRef.current = empty;
+    setFonnteSentKeys(empty);
+    clearLocalFonnteSentKeys();
+  }, []);
+
+  const handleResetFonnteScheduleToday = useCallback(() => {
+    fonnteLastScheduleRunKeyRef.current = '';
+    setFonnteLastScheduleRunKey('');
+    saveLastFonnteScheduleRunKey('');
+    pushToast({
+      type: 'info',
+      title: 'Jadwal Kirim Otomatis Direset',
+      description: `Jadwal otomatis pukul ${fonnteConfigRef.current.autoAbsentScheduleTime} siap dijalankan ulang hari ini.`,
+    });
+  }, [pushToast]);
+
+  const triggerAutoFonnteSingle = useCallback(
+    (params: {
+      student: { nis: string; nama: string; kelas: string; no_wa_ortu?: string };
+      tanggal: string;
+      status: FonnteNotificationCategory;
+      jamMasuk: string;
+      roleOverride?: FonnteClientRole;
+    }) => {
+      const cfg = fonnteConfigRef.current;
+      if (!cfg.enabled || !isBrowserOnline()) return;
+      if (params.status === 'Hadir Tepat Waktu' && !cfg.autoSendOnTime) return;
+      if (params.status === 'Terlambat' && !cfg.autoSendLate) return;
+      if (
+        (params.status === 'Alpa' || params.status === 'Belum Presensi') &&
+        !cfg.autoSendAbsent
+      ) {
+        return;
+      }
+
+      const target = normalizeFonnteTarget(params.student.no_wa_ortu);
+      if (!target) return;
+
+      const dedupeKey = buildFonnteDedupeKey(
+        params.tanggal,
+        params.student.nis,
+        params.status
+      );
+      if (fonnteSentKeysRef.current.has(dedupeKey)) return;
+
+      const currentSettings = latestDataRef.current.settings;
+      const template =
+        params.status === 'Hadir Tepat Waktu'
+          ? cfg.onTimeTemplate
+          : params.status === 'Terlambat'
+            ? cfg.lateTemplate
+            : cfg.absentTemplate;
+      const message = renderFonnteMessage(
+        template,
+        {
+          nama: params.student.nama,
+          nisn: params.student.nis,
+          kelas: params.student.kelas,
+          tanggal: params.tanggal,
+          jam_masuk: params.jamMasuk || '-',
+          batas_jam: currentSettings.batas_jam_masuk,
+          status: params.status,
+          sekolah: currentSettings.nama_sekolah,
+        },
+        fonnteSentKeysRef.current.size
+      );
+
+      const role: FonnteClientRole =
+        params.roleOverride || session?.role || 'scan_kiosk';
+
+      void enqueueFonnteNotifications({
+        role,
+        pacing: cfg.pacing,
+        items: [
+          {
+            nis: params.student.nis,
+            studentName: params.student.nama,
+            kelas: params.student.kelas,
+            target,
+            status: params.status,
+            tanggal: params.tanggal,
+            message,
+          },
+        ],
+      })
+        .then((res) => {
+          if (res.enqueued > 0) {
+            handleMarkFonnteSentKeys([dedupeKey]);
+            setFonnteQueueSyncNonce((n) => n + 1);
+            pushToast({
+              type: 'info',
+              title: 'Antrean WhatsApp Ortu Dijadwalkan',
+              description: `Notifikasi ${params.status} untuk orang tua ${params.student.nama} masuk antrean bertahap Fonnte.`,
+            });
+          }
+        })
+        .catch(() => {
+          // Non-blocking: attendance remains saved even if Fonnte server token isn't active yet
+        });
+    },
+    [handleMarkFonnteSentKeys, pushToast, session?.role]
+  );
+
+  // Daily scheduled auto-enqueue for pending late & absent students (Alpa / Belum Presensi / Terlambat)
+  useEffect(() => {
+    if (!fonnteConfig.enabled || !fonnteConfig.autoAbsentScheduleEnabled) return;
+
+    const checkSchedule = () => {
+      if (!isBrowserOnline() || fonnteScheduleInFlightRef.current) return;
+      const now = new Date();
+      const evaluation = evaluateScheduledFonnteRun({
+        now,
+        config: fonnteConfigRef.current,
+        lastRunKey: fonnteLastScheduleRunKeyRef.current,
+      });
+
+      if (!evaluation.shouldRun) return;
+
+      const today = evaluation.todayDate;
+      const currentSettings = latestDataRef.current.settings;
+      const cfg = fonnteConfigRef.current;
+
+      const activeStudents = filterByAcademicYear(latestDataRef.current.students, {
+        activeAcademicYear: currentSettings.tahun_ajaran,
+        isMasterAdmin: false,
+      });
+      const todayRecs = filterByAcademicYear(latestDataRef.current.records, {
+        activeAcademicYear: currentSettings.tahun_ajaran,
+        isMasterAdmin: false,
+      }).filter((r) => r.tanggal === today);
+
+      const candidates = buildPendingFonnteRecipients({
+        students: activeStudents,
+        todayRecords: todayRecs,
+        tanggal: today,
+        sekolah: currentSettings.nama_sekolah,
+        batasJamMasuk: currentSettings.batas_jam_masuk,
+        config: cfg,
+        sentDedupeKeys: fonnteSentKeysRef.current,
+        includeOnTime: cfg.autoSendOnTime,
+        includeLate: cfg.autoSendLate,
+        includeAbsent: true,
+        includeUnrecorded: cfg.includeUnrecordedAsAbsent,
+      }).filter((c) => c.hasValidPhone && !c.alreadyNotified);
+
+      if (candidates.length === 0) return;
+
+      fonnteScheduleInFlightRef.current = true;
+      const dispatchRole: FonnteClientRole =
+        session && ['master_admin', 'kepala_sekolah', 'wali_kelas'].includes(session.role)
+          ? session.role
+          : 'auto_scheduler';
+
+      void enqueueFonnteNotifications({
+        role: dispatchRole,
+        pacing: cfg.pacing,
+        items: candidates.map((c) => ({
+          nis: c.nis,
+          studentName: c.nama,
+          kelas: c.kelas,
+          target: c.normalizedTarget,
+          status: c.status,
+          tanggal: today,
+          message: c.message,
+        })),
+      })
+        .then((res) => {
+          fonnteLastScheduleRunKeyRef.current = evaluation.runKey;
+          setFonnteLastScheduleRunKey(evaluation.runKey);
+          saveLastFonnteScheduleRunKey(evaluation.runKey);
+          handleMarkFonnteSentKeys(candidates.map((c) => c.dedupeKey));
+          setFonnteQueueSyncNonce((n) => n + 1);
+
+          if (res.enqueued > 0) {
+            pushToast({
+              type: 'success',
+              title: `Jadwal Otomatis Pukul ${evaluation.targetHHMM} Berjalan`,
+              description: `${res.enqueued} pesan WhatsApp orang tua otomatis masuk antrean bertahap Fonnte.`,
+            });
+          }
+        })
+        .catch((err) => {
+          pushToast({
+            type: 'warning',
+            title: `Jadwal Otomatis Pukul ${evaluation.targetHHMM} Tertunda`,
+            description:
+              err instanceof Error
+                ? err.message
+                : 'Gagal menghubungi server Fonnte. Sistem akan mencoba kembali otomatis.',
+          });
+        })
+        .finally(() => {
+          fonnteScheduleInFlightRef.current = false;
+        });
+    };
+
+    checkSchedule();
+    const interval = window.setInterval(checkSchedule, 5000);
+    return () => window.clearInterval(interval);
+  }, [fonnteConfig, fonnteLastScheduleRunKey, handleMarkFonnteSentKeys, pushToast, session]);
+
   const isMasterAdmin = session?.role === 'master_admin';
 
   const availableAcademicYears = useMemo(
@@ -2153,6 +2410,18 @@ export default function App() {
         record: { ...taggedRecord },
       });
       runCloudWrite((uid) => upsertAttendanceToCloud(uid, taggedRecord));
+      if (
+        outcome.scanType !== 'pulang' &&
+        (taggedRecord.status === 'Hadir' || taggedRecord.status === 'Terlambat')
+      ) {
+        triggerAutoFonnteSingle({
+          student: outcome.student,
+          tanggal: taggedRecord.tanggal,
+          status: taggedRecord.status === 'Hadir' ? 'Hadir Tepat Waktu' : 'Terlambat',
+          jamMasuk: taggedRecord.jam_masuk,
+          roleOverride: session?.role || 'scan_kiosk',
+        });
+      }
       return outcome;
     }
 
@@ -2464,6 +2733,18 @@ export default function App() {
       record: { ...updatedRecord },
     });
     runCloudWrite((uid) => upsertAttendanceToCloud(uid, updatedRecord));
+    if (
+      tanggal === getTodayDateString() &&
+      (status === 'Hadir' || status === 'Alpa' || status === 'Terlambat') &&
+      studentMatch
+    ) {
+      triggerAutoFonnteSingle({
+        student: studentMatch,
+        tanggal,
+        status: status === 'Hadir' ? 'Hadir Tepat Waktu' : status,
+        jamMasuk: updatedRecord.jam_masuk,
+      });
+    }
   }
 
   function handleResetRecapStatus(params: {
@@ -4372,6 +4653,23 @@ export default function App() {
             onRestoreBackup={handleRestoreBackup}
             onResetAllAttendance={handleResetAllAttendance}
             onResetDemo={handleResetDemo}
+            fonnte={{
+              config: fonnteConfig,
+              students: activeYearStudents,
+              todayRecords: activeYearRecords.filter(
+                (r) => r.tanggal === getTodayDateString()
+              ),
+              todayDate: getTodayDateString(),
+              sentDedupeKeys: fonnteSentKeys,
+              lastScheduleRunKey: fonnteLastScheduleRunKey,
+              queueSyncNonce: fonnteQueueSyncNonce,
+              clientRole: session?.role || 'master_admin',
+              onChangeConfig: handleUpdateFonnteConfig,
+              onMarkSentKeys: handleMarkFonnteSentKeys,
+              onClearSentKeys: handleClearFonnteSentKeys,
+              onResetScheduleToday: handleResetFonnteScheduleToday,
+              onNotifyToast: pushToast,
+            }}
           />
         )}
       </LayoutShell>

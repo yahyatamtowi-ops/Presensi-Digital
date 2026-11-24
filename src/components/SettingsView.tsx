@@ -36,13 +36,16 @@ import {
   Database,
   ExternalLink,
   Info,
+  MessageSquare,
 } from 'lucide-react';
 import type {
   AppThemeId,
+  AttendanceRecord,
   AttendanceScheduleMode,
   ConnectionStatus,
   SchoolSettings,
   SemesterKind,
+  Student,
   UserAccount,
   UserRole,
 } from '../types';
@@ -73,6 +76,9 @@ import {
   buildFirebaseAuthorizedDomainsUrl,
   type FirebaseAuthErrorDetail,
 } from '../utils/firebaseAuthErrors';
+import type { FonnteConfig } from '../utils/fonntePacing';
+import type { FonnteClientRole } from '../utils/fonnteClient';
+import { FonnteSettingsPanel } from './FonnteSettingsPanel';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 interface CloudSyncSettingsProps {
@@ -123,6 +129,25 @@ interface SettingsViewProps {
   onRestoreBackup: (backup: AppBackupPayload) => Promise<void>;
   onResetAllAttendance: () => void;
   onResetDemo: () => void;
+  fonnte?: {
+    config: FonnteConfig;
+    students: Student[];
+    todayRecords: AttendanceRecord[];
+    todayDate: string;
+    sentDedupeKeys: ReadonlySet<string>;
+    lastScheduleRunKey: string;
+    queueSyncNonce: number;
+    clientRole: FonnteClientRole;
+    onChangeConfig: (next: FonnteConfig) => void;
+    onMarkSentKeys: (keys: string[]) => void;
+    onClearSentKeys: () => void;
+    onResetScheduleToday: () => void;
+    onNotifyToast: (toast: {
+      type: 'success' | 'warning' | 'error' | 'info';
+      title: string;
+      description?: string;
+    }) => void;
+  };
 }
 
 const LIGHT_THEMES = THEME_PRESETS.filter((t) => t.mode === 'light');
@@ -133,6 +158,7 @@ export type SettingsSubMenuId =
   | 'jadwal'
   | 'tema'
   | 'koneksi'
+  | 'fonnte'
   | 'akun'
   | 'backup';
 
@@ -170,6 +196,13 @@ const SETTINGS_SUBMENUS: Array<{
     desc: 'Sinkron Firebase & Sheets',
     Icon: Cloud,
     usesFormSave: true,
+  },
+  {
+    id: 'fonnte',
+    label: 'WhatsApp Fonnte',
+    desc: 'Notifikasi ortu & anti-blokir',
+    Icon: MessageSquare,
+    usesFormSave: false,
   },
   {
     id: 'akun',
@@ -459,6 +492,7 @@ export function SettingsView({
   onRestoreBackup,
   onResetAllAttendance,
   onResetDemo,
+  fonnte,
 }: SettingsViewProps) {
   const [formState, setFormState] = useState<SchoolSettings>({
     ...settings,
@@ -2234,6 +2268,26 @@ export function SettingsView({
                 </section>
               )}
             </form>
+          )}
+
+          {/* SUB-MENU: WHATSAPP FONNTE (Notifikasi Orang Tua Otomatis & Anti-Blokir) */}
+          {activeSubMenu === 'fonnte' && fonnte && (
+            <FonnteSettingsPanel
+              config={fonnte.config}
+              settings={settings}
+              students={fonnte.students}
+              todayRecords={fonnte.todayRecords}
+              todayDate={fonnte.todayDate}
+              sentDedupeKeys={fonnte.sentDedupeKeys}
+              lastScheduleRunKey={fonnte.lastScheduleRunKey}
+              queueSyncNonce={fonnte.queueSyncNonce}
+              clientRole={fonnte.clientRole}
+              onChangeConfig={fonnte.onChangeConfig}
+              onMarkSentKeys={fonnte.onMarkSentKeys}
+              onClearSentKeys={fonnte.onClearSentKeys}
+              onResetScheduleToday={fonnte.onResetScheduleToday}
+              onNotifyToast={fonnte.onNotifyToast}
+            />
           )}
 
           {/* SUB-MENU: BACKUP & RESET (External / Local Computer Storage Backup & Restore + Reset) */}

@@ -197,8 +197,18 @@ export function loadLocalCache(): LocalCacheState {
       script_url: DEFAULT_SCRIPT_URL,
     };
 
-    const parsedSettings: SchoolSettings = rawSettings
-      ? { ...baseDefaults, ...JSON.parse(rawSettings) }
+    const parseJsonSafe = <T,>(raw: string | null): T | null => {
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw) as T;
+      } catch {
+        return null;
+      }
+    };
+
+    const parsedRawSettings = parseJsonSafe<Partial<SchoolSettings>>(rawSettings);
+    const parsedSettings: SchoolSettings = parsedRawSettings
+      ? { ...baseDefaults, ...parsedRawSettings }
       : legacySettings
         ? {
             ...baseDefaults,
@@ -253,21 +263,21 @@ export function loadLocalCache(): LocalCacheState {
           : true;
 
     // Default state starts genuinely empty before user inputs/imports data
-    const students: Student[] = rawStudents
-      ? sanitizeStudents(JSON.parse(rawStudents))
-      : [];
-    const records: AttendanceRecord[] = rawRecords
-      ? sanitizeRecords(JSON.parse(rawRecords))
-      : [];
+    const students: Student[] = sanitizeStudents(parseJsonSafe<unknown>(rawStudents));
+    const records: AttendanceRecord[] = sanitizeRecords(parseJsonSafe<unknown>(rawRecords));
 
-    if (!rawStudents) {
-      localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
-    }
-    if (!rawRecords) {
-      localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(records));
-    }
-    if (!rawSettings) {
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsedSettings));
+    try {
+      if (!rawStudents) {
+        localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
+      }
+      if (!rawRecords) {
+        localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(records));
+      }
+      if (!rawSettings) {
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsedSettings));
+      }
+    } catch {
+      // Ignore quota write failures during initial hydration
     }
 
     return { students, records, settings: parsedSettings };
@@ -495,18 +505,39 @@ export function normalizeSheetDateString(raw: unknown): string {
 export function sanitizeStudents(rawList: unknown): Student[] {
   if (!Array.isArray(rawList)) return [];
   const out: Student[] = [];
+  const indexByNis = new Map<string, number>();
+
   for (const item of rawList) {
     if (!item || typeof item !== 'object') continue;
     const obj = item as Record<string, unknown>;
-    const nis = getFieldCaseInsensitive(obj, ['nis']);
+    const nis = getFieldCaseInsensitive(obj, ['nis', 'nisn']);
     const nama = getFieldCaseInsensitive(obj, ['nama', 'nama_siswa']);
-    if (!nis && !nama) continue;
+    if (!nis) continue;
     const kelas = getFieldCaseInsensitive(obj, ['kelas']);
     const genderRaw = getFieldCaseInsensitive(obj, ['gender', 'jenis_kelamin', 'l_p']);
     const gender: 'L' | 'P' = /^p/i.test(genderRaw) ? 'P' : 'L';
     const no_wa_ortu = getFieldCaseInsensitive(obj, ['no_wa_ortu', 'wa_ortu', 'no_wa']);
     const tahun_ajaran = getFieldCaseInsensitive(obj, ['tahun_ajaran']);
 
+    const dedupeKey = nis.toLowerCase();
+    const existingIdx = indexByNis.get(dedupeKey);
+    if (existingIdx !== undefined) {
+      const prev = out[existingIdx];
+      out[existingIdx] = {
+        ...prev,
+        nis,
+        nama: nama || prev.nama,
+        kelas: kelas || prev.kelas,
+        gender: genderRaw ? gender : prev.gender,
+        no_wa_ortu: no_wa_ortu || prev.no_wa_ortu,
+        ...(tahun_ajaran || prev.tahun_ajaran
+          ? { tahun_ajaran: tahun_ajaran || prev.tahun_ajaran }
+          : {}),
+      };
+      continue;
+    }
+
+    indexByNis.set(dedupeKey, out.length);
     out.push({
       nis,
       nama: nama || nis,
