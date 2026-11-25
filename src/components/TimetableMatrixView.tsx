@@ -875,13 +875,6 @@ export function TimetableMatrixView({
               }}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-mono tabular-nums text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
-            <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] leading-tight text-slate-500 font-mono">
-              <span className="whitespace-nowrap">1 JP={draft.durasi_jp_menit}m</span>
-              <span aria-hidden="true">·</span>
-              <span className="whitespace-nowrap">2 JP={draft.durasi_jp_menit * 2}m</span>
-              <span aria-hidden="true">·</span>
-              <span className="whitespace-nowrap">3 JP={draft.durasi_jp_menit * 3}m</span>
-            </p>
           </div>
 
           <div>

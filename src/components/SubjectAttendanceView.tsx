@@ -15,6 +15,7 @@ import {
   FileSpreadsheet,
   Filter,
   Keyboard,
+  Pencil,
   Plus,
   QrCode,
   Search,
@@ -78,7 +79,17 @@ interface SubjectAttendanceViewProps {
     jam_mulai?: string;
     jam_selesai?: string;
   }) => { ok: boolean; assignment?: SubjectAssignment; error?: string };
-  onDeleteAssignment: (assignmentId: string) => void;
+  onUpdateAssignment?: (
+    target: SubjectAssignment,
+    input: {
+      kelas: string;
+      mata_pelajaran: string;
+      hari: DayOfWeek;
+      jam_mulai?: string;
+      jam_selesai?: string;
+    }
+  ) => { ok: boolean; assignment?: SubjectAssignment; error?: string };
+  onDeleteAssignment: (target: SubjectAssignment) => void;
   onScanSubject: (
     assignment: SubjectAssignment,
     nis: string,
@@ -129,6 +140,7 @@ export function SubjectAttendanceView({
   masterSubjects,
   records,
   onAddAssignment,
+  onUpdateAssignment,
   onDeleteAssignment,
   onScanSubject,
   onUpdateStudentStatus,
@@ -164,7 +176,17 @@ export function SubjectAttendanceView({
   const [newJamMulai, setNewJamMulai] = useState('');
   const [newJamSelesai, setNewJamSelesai] = useState('');
   const [addError, setAddError] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [editingAssignment, setEditingAssignment] = useState<SubjectAssignment | null>(
+    null
+  );
+  const [editKelas, setEditKelas] = useState('');
+  const [editMapel, setEditMapel] = useState('');
+  const [editHari, setEditHari] = useState<DayOfWeek>('Senin');
+  const [editJamMulai, setEditJamMulai] = useState('');
+  const [editJamSelesai, setEditJamSelesai] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
+  const [confirmDeleteTarget, setConfirmDeleteTarget] =
+    useState<SubjectAssignment | null>(null);
 
   // Collapsible Camera QR Scanner state
   const [showCameraPanel, setShowCameraPanel] = useState(false);
@@ -705,6 +727,46 @@ export function SubjectAttendanceView({
     setNewJamMulai('');
     setNewJamSelesai('');
     setAddError(null);
+  }
+
+  function openEditModal(target: SubjectAssignment) {
+    setEditingAssignment(target);
+    setEditKelas(target.kelas);
+    setEditMapel(target.mata_pelajaran);
+    setEditHari(
+      target.hari && target.hari !== 'Minggu'
+        ? target.hari
+        : selectedDayName === 'Minggu'
+          ? 'Senin'
+          : selectedDayName
+    );
+    setEditJamMulai(target.jam_mulai || '07:30');
+    setEditJamSelesai(target.jam_selesai || '');
+    setEditError(null);
+  }
+
+  function handleSubmitEditAssignment(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingAssignment || !onUpdateAssignment) return;
+    const res = onUpdateAssignment(editingAssignment, {
+      kelas: editKelas,
+      mata_pelajaran: editMapel,
+      hari: editHari,
+      jam_mulai: editJamMulai || undefined,
+      jam_selesai: editJamSelesai || undefined,
+    });
+    if (!res.ok) {
+      setEditError(res.error || 'Gagal memperbarui jadwal mengajar.');
+      return;
+    }
+    if (res.assignment) {
+      if (editHari !== selectedDayName) {
+        setSelectedDate(getDateForDayInSameWeek(selectedDate, editHari));
+      }
+      setActiveAssignmentId(res.assignment.id);
+    }
+    setEditingAssignment(null);
+    setEditError(null);
   }
 
   function handleManualSubmit(e: React.FormEvent) {
@@ -1273,16 +1335,31 @@ export function SubjectAttendanceView({
                         </p>
                       </div>
                     </button>
-                    {asg.source === 'manual' && (
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteId(asg.id)}
-                        aria-label={`Hapus ${asg.kelas} ${asg.mata_pelajaran}`}
-                        title="Hapus kelas & mapel tambahan"
-                        className="p-1.5 mr-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors shrink-0"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      </button>
+                    {asg.source !== 'record' && (
+                      <div className="flex items-center gap-0.5 mr-1.5 shrink-0">
+                        {onUpdateAssignment && (
+                          <button
+                            type="button"
+                            data-testid={`btn-edit-schedule-${asg.id}`}
+                            onClick={() => openEditModal(asg)}
+                            aria-label={`Edit jadwal ${asg.kelas} ${asg.mata_pelajaran}`}
+                            title="Edit jadwal mengajar"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-100/70 transition-colors"
+                          >
+                            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          data-testid={`btn-delete-schedule-${asg.id}`}
+                          onClick={() => setConfirmDeleteTarget(asg)}
+                          aria-label={`Hapus jadwal ${asg.kelas} ${asg.mata_pelajaran}`}
+                          title="Hapus jadwal mengajar"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
@@ -1329,6 +1406,31 @@ export function SubjectAttendanceView({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    {activeAssignment.source !== 'record' && (
+                      <>
+                        {onUpdateAssignment && (
+                          <button
+                            type="button"
+                            data-testid="btn-edit-active-schedule"
+                            onClick={() => openEditModal(activeAssignment)}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50/70 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors whitespace-nowrap"
+                          >
+                            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>Edit Jadwal</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          data-testid="btn-delete-active-schedule"
+                          onClick={() => setConfirmDeleteTarget(activeAssignment)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-rose-200 bg-rose-50/70 text-xs font-semibold text-rose-700 hover:bg-rose-100 transition-colors whitespace-nowrap"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>Hapus Jadwal</span>
+                        </button>
+                      </>
+                    )}
+
                     <button
                       type="button"
                       data-testid="btn-download-mapel-pdf"
@@ -2017,38 +2119,209 @@ export function SubjectAttendanceView({
         </div>
       )}
 
-      {/* Modal: Konfirmasi Hapus Kelas & Mapel Tambahan */}
-      {confirmDeleteId && (
+      {/* Modal: Edit Jadwal Mengajar */}
+      {editingAssignment && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-mapel-title"
+          data-testid="modal-edit-schedule"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/55 backdrop-blur-[1px]"
+        >
+          <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-md shadow-xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 id="edit-mapel-title" className="text-base font-semibold text-slate-900">
+                Edit Jadwal Mengajar
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingAssignment(null);
+                  setEditError(null);
+                }}
+                aria-label="Tutup modal edit jadwal mengajar"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitEditAssignment} className="p-6 space-y-4">
+              {editError && (
+                <div
+                  role="alert"
+                  className="p-3 rounded-xl border border-rose-200 bg-rose-50 text-xs font-medium text-rose-700"
+                >
+                  {editError}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="mapel-edit-hari"
+                    className="block text-xs font-medium text-slate-700 mb-1.5"
+                  >
+                    Hari <span className="text-rose-600">*</span>
+                  </label>
+                  <select
+                    id="mapel-edit-hari"
+                    value={editHari}
+                    onChange={(e) => setEditHari(e.target.value as DayOfWeek)}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+                  >
+                    {SCHOOL_DAYS.map((day) => (
+                      <option key={day} value={day}>
+                        {day}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="mapel-edit-kelas"
+                    className="block text-xs font-medium text-slate-700 mb-1.5"
+                  >
+                    Kelas yang Diajar <span className="text-rose-600">*</span>
+                  </label>
+                  <input
+                    id="mapel-edit-kelas"
+                    type="text"
+                    required
+                    list="mapel-class-suggestions"
+                    value={editKelas}
+                    onChange={(e) => setEditKelas(e.target.value)}
+                    placeholder="Contoh: X IPA 1"
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="mapel-edit-subject"
+                  className="block text-xs font-medium text-slate-700 mb-1.5"
+                >
+                  Mata Pelajaran yang Diampu <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  id="mapel-edit-subject"
+                  type="text"
+                  required
+                  list="mapel-subject-suggestions"
+                  value={editMapel}
+                  onChange={(e) => setEditMapel(e.target.value)}
+                  placeholder="Contoh: Matematika, Fisika, Bahasa Indonesia"
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="mapel-edit-time"
+                    className="block text-xs font-medium text-slate-700 mb-1.5"
+                  >
+                    Jam Mulai Pelajaran
+                  </label>
+                  <input
+                    id="mapel-edit-time"
+                    type="time"
+                    value={editJamMulai}
+                    onChange={(e) => setEditJamMulai(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-mono text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="mapel-edit-end-time"
+                    className="block text-xs font-medium text-slate-700 mb-1.5"
+                  >
+                    Jam Selesai Pelajaran
+                  </label>
+                  <input
+                    id="mapel-edit-end-time"
+                    type="time"
+                    value={editJamSelesai}
+                    onChange={(e) => setEditJamSelesai(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-mono text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500 -mt-2">
+                Perubahan otomatis tersinkron ke <strong>Daftar Pelajaran</strong> serta <strong>Pengaturan Jadwal</strong> dan <strong>Mapel &amp; Jadwal</strong> Master Admin.
+              </p>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingAssignment(null);
+                    setEditError(null);
+                  }}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  data-testid="btn-submit-edit-schedule"
+                  className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700"
+                >
+                  Simpan Perubahan
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Konfirmasi Hapus Jadwal Mengajar */}
+      {confirmDeleteTarget && (
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="delete-mapel-title"
+          data-testid="modal-delete-schedule"
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-[1px]"
         >
           <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-sm shadow-xl p-6 space-y-4">
             <h3 id="delete-mapel-title" className="text-base font-semibold text-slate-900">
-              Hapus Kelas &amp; Mapel Tambahan?
+              Hapus Jadwal Mengajar?
             </h3>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-700 space-y-0.5">
+              <p className="font-semibold text-slate-900">
+                {confirmDeleteTarget.kelas} — {confirmDeleteTarget.mata_pelajaran}
+              </p>
+              <p className="text-slate-500 font-mono">
+                {confirmDeleteTarget.hari || selectedDayName}
+                {confirmDeleteTarget.jam_mulai
+                  ? ` · ${confirmDeleteTarget.jam_mulai}${confirmDeleteTarget.jam_selesai ? `–${confirmDeleteTarget.jam_selesai}` : ''}`
+                  : ''}
+              </p>
+            </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Kelas dan mata pelajaran ini akan dihapus dari sub menu Anda. Riwayat presensi yang sudah tercatat tetap aman.
+              Jadwal mengajar ini akan dihapus dari menu Presensi Mapel, Daftar Pelajaran, serta Pengaturan Jadwal Master Admin. Riwayat presensi siswa yang sudah tercatat tetap aman.
             </p>
             <div className="flex items-center justify-end gap-2.5">
               <button
                 type="button"
-                onClick={() => setConfirmDeleteId(null)}
+                onClick={() => setConfirmDeleteTarget(null)}
                 className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-700 hover:bg-slate-50"
               >
                 Batal
               </button>
               <button
                 type="button"
+                data-testid="btn-confirm-delete-schedule"
                 onClick={() => {
-                  onDeleteAssignment(confirmDeleteId);
-                  setConfirmDeleteId(null);
+                  onDeleteAssignment(confirmDeleteTarget);
+                  setConfirmDeleteTarget(null);
                 }}
                 className="px-3.5 py-2 rounded-xl bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700"
               >
-                Ya, Hapus
+                Ya, Hapus Jadwal
               </button>
             </div>
           </div>

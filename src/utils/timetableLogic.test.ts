@@ -14,6 +14,7 @@ import {
   syncTimetableConfigsFromSchedules,
 } from './timetableLogic';
 import {
+  deleteTeachingEntryBidirectional,
   getDateForDayInSameWeek,
   getIndonesianDayOfWeek,
   processSubjectQrScan,
@@ -21,6 +22,7 @@ import {
   resolveAssignmentsForDate,
   syncAssignmentToTeacherSchedules,
   syncScheduleToSubjectAssignments,
+  updateTeachingEntryBidirectional,
 } from './subjectAttendance';
 import type { Student, SubjectAssignment, TeacherSchedule } from '../types';
 
@@ -757,6 +759,172 @@ describe('Bidirectional Sync: Jadwal Pelajaran Guru <-> Menu Mapel Guru', () => 
     assert.equal(exported.find((s) => s.mata_pelajaran === 'PPKn')?.jam_selesai, '09:15');
     assert.equal(exported.find((s) => s.mata_pelajaran === 'Fisika')?.jam_mulai, '07:30');
     assert.equal(exported.find((s) => s.mata_pelajaran === 'Fisika')?.jam_selesai, '09:15');
+  });
+
+  it('edits and deletes teaching schedules from Presensi Mapel (Guru/Wali Kelas) with bidirectional sync to Pengaturan Jadwal', () => {
+    const initialSchedules: TeacherSchedule[] = [
+      {
+        id: 'sch_admin_1',
+        hari: 'Senin',
+        teacher_user_id: 'usr_guru',
+        teacher_name: 'Siti Aminah, S.Pd',
+        kelas: 'X IPA 1',
+        mata_pelajaran: 'Matematika',
+        jam_mulai: '07:30',
+        jam_selesai: '08:40',
+        tahun_ajaran: '2026/2027',
+        semester: 'ganjil',
+      },
+      {
+        id: 'sch_admin_2',
+        hari: 'Senin',
+        teacher_user_id: 'usr_guru',
+        teacher_name: 'Siti Aminah, S.Pd',
+        kelas: 'X IPA 2',
+        mata_pelajaran: 'Kimia',
+        jam_mulai: '08:40',
+        jam_selesai: '09:15',
+        tahun_ajaran: '2026/2027',
+        semester: 'ganjil',
+      },
+    ];
+    const initialAssignments: SubjectAssignment[] = [
+      {
+        id: 'asg_from_sch_admin_1',
+        teacher_user_id: 'usr_guru',
+        teacher_name: 'Siti Aminah, S.Pd',
+        kelas: 'X IPA 1',
+        mata_pelajaran: 'Matematika',
+        hari: 'Senin',
+        jam_mulai: '07:30',
+        jam_selesai: '08:40',
+        tahun_ajaran: '2026/2027',
+        semester: 'ganjil',
+        source: 'schedule',
+      },
+      {
+        id: 'asg_from_sch_admin_2',
+        teacher_user_id: 'usr_guru',
+        teacher_name: 'Siti Aminah, S.Pd',
+        kelas: 'X IPA 2',
+        mata_pelajaran: 'Kimia',
+        hari: 'Senin',
+        jam_mulai: '08:40',
+        jam_selesai: '09:15',
+        tahun_ajaran: '2026/2027',
+        semester: 'ganjil',
+        source: 'schedule',
+      },
+    ];
+
+    const resolvedMonday = resolveAssignmentsForDate({
+      selectedDate: '2026-11-23', // Monday
+      academicYear: '2026/2027',
+      semester: 'ganjil',
+      schedules: initialSchedules,
+      manualAssignments: initialAssignments,
+      records: [],
+      role: 'guru',
+      teacherUserId: 'usr_guru',
+    });
+    assert.equal(resolvedMonday.length, 2);
+    const targetMtk = resolvedMonday.find((a) => a.mata_pelajaran === 'Matematika')!;
+    assert.equal(targetMtk.id, 'sch_admin_1');
+
+    // Validation: reject jam_selesai <= jam_mulai
+    const badTime = updateTeachingEntryBidirectional({
+      schedules: initialSchedules,
+      assignments: initialAssignments,
+      target: targetMtk,
+      input: {
+        hari: 'Senin',
+        kelas: 'X IPA 1',
+        mata_pelajaran: 'Matematika',
+        jam_mulai: '08:40',
+        jam_selesai: '08:00',
+      },
+      tahunAjaran: '2026/2027',
+      semester: 'ganjil',
+    });
+    assert.equal(badTime.ok, false);
+
+    // Validation: reject same-teacher overlap clash with Kimia (X IPA 2 08:40-09:15)
+    const clashRes = updateTeachingEntryBidirectional({
+      schedules: initialSchedules,
+      assignments: initialAssignments,
+      target: targetMtk,
+      input: {
+        hari: 'Senin',
+        kelas: 'X IPA 1',
+        mata_pelajaran: 'Matematika',
+        jam_mulai: '08:40',
+        jam_selesai: '09:15',
+      },
+      tahunAjaran: '2026/2027',
+      semester: 'ganjil',
+    });
+    assert.equal(clashRes.ok, false);
+
+    // Valid edit: change Matematika -> Biologi on Selasa 07:30-08:40
+    const edited = updateTeachingEntryBidirectional({
+      schedules: initialSchedules,
+      assignments: initialAssignments,
+      target: targetMtk,
+      input: {
+        hari: 'Selasa',
+        kelas: 'X IPA 1',
+        mata_pelajaran: 'Biologi',
+        jam_mulai: '07:30',
+        jam_selesai: '08:40',
+      },
+      tahunAjaran: '2026/2027',
+      semester: 'ganjil',
+    });
+    assert.equal(edited.ok, true);
+    if (!edited.ok) return;
+    assert.equal(edited.updatedSchedule.id, 'sch_admin_1');
+    assert.equal(edited.updatedSchedule.hari, 'Selasa');
+    assert.equal(edited.updatedSchedule.mata_pelajaran, 'Biologi');
+    assert.equal(edited.schedules.length, 2);
+    assert.equal(edited.assignments.length, 2);
+
+    // Sync to TimetableConfig -> Senin X IPA 1 cleared, Selasa JP1-2 filled with Biologi
+    const syncedConfigs = syncTimetableConfigsFromSchedules(
+      {},
+      edited.schedules,
+      '07:30',
+      ['X IPA 1', 'X IPA 2']
+    );
+    const cfg = syncedConfigs['2026/2027__ganjil'];
+    assert.ok(cfg);
+    assert.equal(cfg.cells[makeTimetableCellKey('Senin', 1, 'X IPA 1')], undefined);
+    assert.equal(cfg.cells[makeTimetableCellKey('Selasa', 1, 'X IPA 1')]?.mata_pelajaran, 'Biologi');
+    assert.equal(cfg.cells[makeTimetableCellKey('Selasa', 2, 'X IPA 1')]?.mata_pelajaran, 'Biologi');
+    assert.equal(detectTimetableTeacherConflicts(cfg, ['X IPA 1', 'X IPA 2']).length, 0);
+
+    // Delete Kimia (schedule-sourced entry) from Presensi Mapel
+    const targetKimia = resolvedMonday.find((a) => a.mata_pelajaran === 'Kimia')!;
+    const deleted = deleteTeachingEntryBidirectional({
+      schedules: edited.schedules,
+      assignments: edited.assignments,
+      target: targetKimia,
+    });
+    assert.equal(deleted.schedules.length, 1);
+    assert.equal(deleted.assignments.length, 1);
+    assert.deepEqual(deleted.removedScheduleIds, ['sch_admin_2']);
+    assert.deepEqual(deleted.removedAssignmentIds, ['asg_from_sch_admin_2']);
+
+    // Sync to TimetableConfig after deletion -> Kimia slot cleared cleanly
+    const afterDeleteConfigs = syncTimetableConfigsFromSchedules(
+      syncedConfigs,
+      deleted.schedules,
+      '07:30',
+      ['X IPA 1', 'X IPA 2']
+    );
+    const cfgAfterDel = afterDeleteConfigs['2026/2027__ganjil'];
+    assert.equal(cfgAfterDel.cells[makeTimetableCellKey('Senin', 3, 'X IPA 2')], undefined);
+    assert.equal(cfgAfterDel.cells[makeTimetableCellKey('Selasa', 1, 'X IPA 1')]?.mata_pelajaran, 'Biologi');
+    assert.notEqual(cfgAfterDel.updated_at, '');
   });
 });
 

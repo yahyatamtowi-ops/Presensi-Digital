@@ -791,6 +791,14 @@ export function addSubjectAssignment(
     ? normalizeTimeHHMM(rawJamSelesai, '') || undefined
     : undefined;
 
+  if (jamMulai && jamSelesai) {
+    const startMins = parseTimeToMinutes(jamMulai);
+    const endMins = parseTimeToMinutes(jamSelesai);
+    if (startMins !== null && endMins !== null && endMins <= startMins) {
+      return { ok: false, error: 'Jam selesai harus lebih besar dari jam mulai.' };
+    }
+  }
+
   const assignment: SubjectAssignment = {
     id: `asg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     teacher_user_id: teacherId,
@@ -1386,6 +1394,249 @@ export function reconcileSchedulesAndAssignments(
     assignments: nextAssignments,
     addedSchedules,
     addedAssignments,
+  };
+}
+
+/**
+ * Updates a teaching schedule entry from Menu Presensi Mapel (Guru / Wali Kelas)
+ * and keeps TeacherSchedules + SubjectAssignments cleanly synchronized in both directions.
+ */
+export function updateTeachingEntryBidirectional(params: {
+  schedules: TeacherSchedule[];
+  assignments: SubjectAssignment[];
+  target: SubjectAssignment;
+  input: {
+    hari: DayOfWeek;
+    kelas: string;
+    mata_pelajaran: string;
+    jam_mulai?: string;
+    jam_selesai?: string;
+  };
+  tahunAjaran: string;
+  semester?: SemesterKind;
+}):
+  | {
+      ok: true;
+      schedules: TeacherSchedule[];
+      assignments: SubjectAssignment[];
+      updatedSchedule: TeacherSchedule;
+      updatedAssignment: SubjectAssignment;
+      removedAssignmentIds: string[];
+    }
+  | { ok: false; error: string } {
+  const { schedules, assignments, target, input } = params;
+  const hari = normalizeDayOfWeek(input.hari);
+  const kelas = input.kelas.trim();
+  const mapel = input.mata_pelajaran.trim();
+  const teacherId = target.teacher_user_id.trim();
+  const teacherName = target.teacher_name.trim() || 'Guru';
+  const normYear = resolveItemAcademicYear(params.tahunAjaran || target.tahun_ajaran);
+  const normSem = normalizeSemester(params.semester ?? target.semester, 'ganjil');
+
+  if (!hari) return { ok: false, error: 'Hari pelajaran wajib dipilih.' };
+  if (!kelas) return { ok: false, error: 'Nama kelas wajib diisi.' };
+  if (!mapel) return { ok: false, error: 'Nama mata pelajaran wajib diisi.' };
+
+  const rawMulai = (input.jam_mulai ?? '').trim();
+  const jamMulai = normalizeTimeHHMM(rawMulai || target.jam_mulai || '', '07:30');
+  const startMins = parseTimeToMinutes(jamMulai);
+  if (startMins === null) {
+    return { ok: false, error: 'Format jam mulai tidak valid (gunakan HH:MM).' };
+  }
+
+  const rawSelesai = (input.jam_selesai ?? '').trim();
+  let jamSelesai: string;
+  if (rawSelesai) {
+    const normalizedEnd = normalizeTimeHHMM(rawSelesai, '');
+    const endMins = normalizedEnd ? parseTimeToMinutes(normalizedEnd) : null;
+    if (!normalizedEnd || endMins === null) {
+      return { ok: false, error: 'Format jam selesai tidak valid (gunakan HH:MM).' };
+    }
+    if (endMins <= startMins) {
+      return { ok: false, error: 'Jam selesai harus lebih besar dari jam mulai.' };
+    }
+    jamSelesai = normalizedEnd;
+  } else {
+    jamSelesai = computeDefaultEndTime(jamMulai, 90);
+  }
+  const endMins = parseTimeToMinutes(jamSelesai)!;
+
+  // 1. Locate existing TeacherSchedule corresponding to `target`
+  const targetYear = resolveItemAcademicYear(target.tahun_ajaran || normYear);
+  let matchedSchedule = schedules.find(
+    (s) => s.id === target.id || s.id === `sch_from_${target.id}`
+  );
+  if (!matchedSchedule && target.hari) {
+    const semanticMatches = schedules.filter(
+      (s) =>
+        s.teacher_user_id === teacherId &&
+        s.hari === target.hari &&
+        isSameClassName(s.kelas, target.kelas) &&
+        s.mata_pelajaran.trim().toLowerCase() === target.mata_pelajaran.trim().toLowerCase() &&
+        resolveItemAcademicYear(s.tahun_ajaran) === targetYear
+    );
+    matchedSchedule =
+      semanticMatches.find((s) => !target.jam_mulai || s.jam_mulai === target.jam_mulai) ??
+      semanticMatches[0];
+  }
+
+  const otherSchedules = matchedSchedule
+    ? schedules.filter((s) => s.id !== matchedSchedule!.id)
+    : schedules;
+
+  // 2. Prevent same-teacher overlapping clash in another class at the exact same day/time
+  const teacherTimeClash = otherSchedules.find((s) => {
+    if (
+      s.hari !== hari ||
+      s.teacher_user_id !== teacherId ||
+      resolveItemAcademicYear(s.tahun_ajaran) !== normYear ||
+      (s.semester && normalizeSemester(s.semester) !== normSem)
+    ) {
+      return false;
+    }
+    if (isSameClassName(s.kelas, kelas)) return false;
+    const sStart = parseTimeToMinutes(s.jam_mulai);
+    const sEnd = parseTimeToMinutes(s.jam_selesai);
+    if (sStart === null || sEnd === null) return false;
+    return sStart < endMins && startMins < sEnd;
+  });
+  if (teacherTimeClash) {
+    return {
+      ok: false,
+      error: `Jadwal bentrok dengan ${teacherTimeClash.mata_pelajaran} kelas ${teacherTimeClash.kelas} (${teacherTimeClash.jam_mulai}–${teacherTimeClash.jam_selesai}) pada hari ${hari}.`,
+    };
+  }
+
+  // 3. Validate duplicate / overlapping same class & subject via addTeacherSchedule
+  const check = addTeacherSchedule(otherSchedules, {
+    hari,
+    teacher_user_id: teacherId,
+    teacher_name: teacherName,
+    kelas,
+    mata_pelajaran: mapel,
+    jam_mulai: jamMulai,
+    jam_selesai: jamSelesai,
+    tahun_ajaran: normYear,
+    semester: normSem,
+  });
+  if (!check.ok) {
+    return check;
+  }
+
+  const resolvedScheduleId =
+    matchedSchedule?.id ??
+    (target.id.startsWith('sch_') ? target.id : `sch_from_${target.id}`);
+
+  const updatedSchedule: TeacherSchedule = {
+    ...check.schedule,
+    id: resolvedScheduleId,
+  };
+
+  const nextSchedules = matchedSchedule
+    ? schedules.map((s) => (s.id === matchedSchedule!.id ? updatedSchedule : s))
+    : [...schedules, updatedSchedule];
+
+  // 4. Clean old mirrored SubjectAssignment(s) and upsert the updated mirror cleanly
+  const oldAssignmentIds = new Set<string>();
+  const cleanedAssignments = assignments.filter((a) => {
+    const isExactMatch =
+      a.id === target.id ||
+      a.id === `asg_from_${resolvedScheduleId}` ||
+      (matchedSchedule ? a.id === `asg_from_${matchedSchedule.id}` : false);
+    const isSemanticOldMatch =
+      a.teacher_user_id === teacherId &&
+      (!target.hari || !a.hari || a.hari === target.hari) &&
+      isSameClassName(a.kelas, target.kelas) &&
+      a.mata_pelajaran.trim().toLowerCase() === target.mata_pelajaran.trim().toLowerCase() &&
+      resolveItemAcademicYear(a.tahun_ajaran) === targetYear &&
+      (!target.jam_mulai || !a.jam_mulai || a.jam_mulai === target.jam_mulai);
+    if (isExactMatch || isSemanticOldMatch) {
+      oldAssignmentIds.add(a.id);
+      return false;
+    }
+    return true;
+  });
+
+  const mirrored = syncScheduleToSubjectAssignments(
+    cleanedAssignments,
+    updatedSchedule,
+    normSem
+  );
+  oldAssignmentIds.delete(mirrored.upsertedAssignment.id);
+
+  return {
+    ok: true,
+    schedules: nextSchedules,
+    assignments: mirrored.assignments,
+    updatedSchedule,
+    updatedAssignment: mirrored.upsertedAssignment,
+    removedAssignmentIds: Array.from(oldAssignmentIds),
+  };
+}
+
+/**
+ * Deletes a teaching schedule entry from Menu Presensi Mapel (Guru / Wali Kelas),
+ * removing both its TeacherSchedule and mirrored SubjectAssignment(s) cleanly so
+ * Master Admin's Pengaturan Jadwal, Mapel & Jadwal, and Teacher's Daftar Pelajaran stay in sync.
+ */
+export function deleteTeachingEntryBidirectional(params: {
+  schedules: TeacherSchedule[];
+  assignments: SubjectAssignment[];
+  target: SubjectAssignment;
+}): {
+  schedules: TeacherSchedule[];
+  assignments: SubjectAssignment[];
+  removedScheduleIds: string[];
+  removedAssignmentIds: string[];
+} {
+  const { schedules, assignments, target } = params;
+  const teacherId = target.teacher_user_id.trim();
+  const targetYear = resolveItemAcademicYear(target.tahun_ajaran);
+
+  const removedScheduleIds = new Set<string>();
+  const nextSchedules = schedules.filter((s) => {
+    const isIdMatch = s.id === target.id || s.id === `sch_from_${target.id}`;
+    const isSemanticMatch =
+      Boolean(target.hari) &&
+      s.hari === target.hari &&
+      s.teacher_user_id === teacherId &&
+      isSameClassName(s.kelas, target.kelas) &&
+      s.mata_pelajaran.trim().toLowerCase() === target.mata_pelajaran.trim().toLowerCase() &&
+      resolveItemAcademicYear(s.tahun_ajaran) === targetYear &&
+      (!target.jam_mulai || s.jam_mulai === target.jam_mulai);
+    if (isIdMatch || isSemanticMatch) {
+      removedScheduleIds.add(s.id);
+      return false;
+    }
+    return true;
+  });
+
+  const removedAssignmentIds = new Set<string>();
+  const nextAssignments = assignments.filter((a) => {
+    const isIdMatch =
+      a.id === target.id ||
+      a.id === `asg_from_${target.id}` ||
+      removedScheduleIds.has(`sch_from_${a.id}`) ||
+      Array.from(removedScheduleIds).some((sid) => a.id === `asg_from_${sid}`);
+    const isSemanticMatch =
+      a.teacher_user_id === teacherId &&
+      (!target.hari || !a.hari || a.hari === target.hari) &&
+      isSameClassName(a.kelas, target.kelas) &&
+      a.mata_pelajaran.trim().toLowerCase() === target.mata_pelajaran.trim().toLowerCase() &&
+      resolveItemAcademicYear(a.tahun_ajaran) === targetYear &&
+      (!target.jam_mulai || !a.jam_mulai || a.jam_mulai === target.jam_mulai);
+    if (isIdMatch || isSemanticMatch) {
+      removedAssignmentIds.add(a.id);
+      return false;
+    }
+    return true;
+  });
+
+  return {
+    schedules: nextSchedules,
+    assignments: nextAssignments,
+    removedScheduleIds: Array.from(removedScheduleIds),
+    removedAssignmentIds: Array.from(removedAssignmentIds),
   };
 }
 

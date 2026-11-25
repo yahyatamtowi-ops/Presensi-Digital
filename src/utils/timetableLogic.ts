@@ -1259,10 +1259,16 @@ export function syncTimetableConfigsFromSchedules(
       }
     }
 
+    const nowIso = new Date().toISOString();
+    const nextStamp =
+      existing?.updated_at && existing.updated_at === nowIso
+        ? `${nowIso}_${Math.random().toString(36).slice(2, 6)}`
+        : nowIso;
+
     next[key] = {
       ...hydrated,
       cells: mergedCells,
-      updated_at: new Date().toISOString(),
+      updated_at: nextStamp,
     };
   }
 
