@@ -128,6 +128,7 @@ describe('Firestore Payload Sanitization & Blueprint Compliance', () => {
         mode_presensi: 'masuk_pulang',
         jam_pulang_standar: '14:30',
         semester: 'genap',
+        script_url: '',
       },
       {
         nama_sekolah: 'Fallback',
@@ -137,12 +138,16 @@ describe('Firestore Payload Sanitization & Blueprint Compliance', () => {
         tahun_ajaran: '2026/2027',
         semester: 'ganjil',
         tema: 'indigo',
-        script_url: '',
+        script_url: 'https://script.google.com/macros/s/default/exec',
       }
     );
     assert.equal(extracted.nama_sekolah, 'SMA Cloud Sync');
     assert.equal(extracted.mode_presensi, 'masuk_pulang');
     assert.equal(extracted.jam_pulang_standar, '14:30');
     assert.equal(extracted.semester, 'genap');
+    assert.equal(
+      extracted.script_url,
+      'https://script.google.com/macros/s/default/exec'
+    );
   });
 });

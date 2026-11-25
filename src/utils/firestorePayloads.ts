@@ -412,7 +412,9 @@ export function extractSchoolSettingsFromDoc(
         ? normalizeThemeId(data.tema as AppThemeId, fallback.tema)
         : fallback.tema,
     script_url:
-      typeof data.script_url === 'string' ? data.script_url : fallback.script_url,
+      typeof data.script_url === 'string' && data.script_url.trim()
+        ? data.script_url.trim()
+        : fallback.script_url,
     no_wa_admin:
       typeof data.no_wa_admin === 'string'
         ? data.no_wa_admin

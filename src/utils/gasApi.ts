@@ -43,14 +43,15 @@ import {
   readOfflineQueueFromIdb,
 } from './offlineStore';
 import { notifyStorageWriteError } from './storageHealth';
+import { DEFAULT_GAS_WEBAPP_URL } from './startupSyncPrompt';
 
 const LEGACY_DEFAULT_SCHOOL_NAME = 'SMA Negeri 1 Nusantara';
 
 /**
- * Isi konstanta DEFAULT_SCRIPT_URL dengan Web App URL dari Google Apps Script
- * agar aplikasi langsung terhubung ke Google Sheets secara default.
+ * Web App URL default Google Apps Script agar aplikasi langsung terhubung
+ * dan tersinkronisasi otomatis ke Google Sheets di semua perangkat.
  */
-export const DEFAULT_SCRIPT_URL = '';
+export const DEFAULT_SCRIPT_URL = DEFAULT_GAS_WEBAPP_URL;
 
 const STORAGE_KEYS = {
   STUDENTS: 'presensiqr_students_v2',

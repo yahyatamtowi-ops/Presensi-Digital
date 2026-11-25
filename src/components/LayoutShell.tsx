@@ -209,18 +209,22 @@ function ConnectionPill({
   }
 
   if (cloudSync?.connected) {
+    const bothActive = status === 'connected';
     return (
       <div
         role="status"
+        data-testid="header-cloud-active-pill"
         title={
           lastSyncedAt
-            ? `Cloud Firebase aktif (${cloudSync.email || 'Google'}) · Sinkron pukul ${lastSyncedAt}`
-            : `Cloud Firebase aktif (${cloudSync.email || 'Google'})`
+            ? `Sinkronisasi otomatis Firebase${bothActive ? ' & Google Sheets' : ''} aktif · Terakhir sinkron pukul ${lastSyncedAt}`
+            : `Sinkronisasi otomatis Firebase${bothActive ? ' & Google Sheets' : ''} aktif`
         }
         className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 whitespace-nowrap shrink-0"
       >
         <Cloud className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        <span className="hidden sm:inline">Cloud Aktif (Real-Time)</span>
+        <span className="hidden sm:inline">
+          {bothActive ? 'Cloud & Sheets Aktif' : 'Cloud Aktif (Otomatis)'}
+        </span>
         <span className="sm:hidden">Cloud Aktif</span>
       </div>
     );
@@ -586,35 +590,22 @@ export function LayoutShell({
                 lastSyncedAt={lastSyncedAt}
                 cloudSync={cloudSync}
               />
-              {cloudSync && !cloudSync.connected ? (
-                <button
-                  type="button"
-                  onClick={cloudSync.onConnect}
-                  disabled={cloudSync.syncing}
-                  title="Hubungkan Cloud Firebase"
-                  aria-label="Hubungkan Cloud Firebase untuk sinkronisasi lintas perangkat"
-                  className="inline-flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-                >
-                  <Cloud className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span className="hidden sm:inline">Hubungkan Cloud</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={onSyncNow}
-                  disabled={connectionStatus === 'syncing' || cloudSync?.syncing}
-                  aria-label="Sinkronkan data sekarang"
-                  className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-                >
-                  <RefreshCw
-                    className={`h-3.5 w-3.5 shrink-0 ${
-                      connectionStatus === 'syncing' || cloudSync?.syncing ? 'animate-spin' : ''
-                    }`}
-                    aria-hidden="true"
-                  />
-                  <span className="hidden sm:inline">Sinkronkan</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={onSyncNow}
+                disabled={connectionStatus === 'syncing' || cloudSync?.syncing}
+                aria-label="Segarkan sinkronisasi data"
+                title="Sinkronisasi berjalan otomatis. Klik jika ingin menyegarkan ulang sekarang."
+                className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 shrink-0 ${
+                    connectionStatus === 'syncing' || cloudSync?.syncing ? 'animate-spin' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+                <span className="hidden sm:inline">Segarkan</span>
+              </button>
 
               {/* Master Admin Notification Bell for Wali Kelas Requests & Storage Alerts */}
               {currentRole === 'master_admin' &&

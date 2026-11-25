@@ -32,12 +32,41 @@ service cloud.firestore {
       );
     }
 
+    function isAutoSchoolWorkspace(schoolId) {
+      return schoolId == 'sman1_kabun_shared_workspace';
+    }
+
+    function isAutoSchoolParentExists(schoolId) {
+      return isAutoSchoolWorkspace(schoolId) &&
+        exists(/databases/$(database)/documents/schools/$(schoolId));
+    }
+
     function isSchoolOwner(schoolId) {
       return isVerifiedUser() &&
         isValidId(schoolId) &&
         schoolId == request.auth.uid &&
         exists(/databases/$(database)/documents/schools/$(schoolId)) &&
         get(/databases/$(database)/documents/schools/$(schoolId)).data.ownerId == request.auth.uid;
+    }
+
+    function canAccessSchoolDoc(schoolId) {
+      return isValidId(schoolId) && (
+        isAutoSchoolWorkspace(schoolId) ||
+        (isVerifiedUser() && (schoolId == request.auth.uid || isAdmin()))
+      );
+    }
+
+    function canAccessSchoolSubdoc(schoolId) {
+      return isValidId(schoolId) && (
+        isAutoSchoolParentExists(schoolId) ||
+        isSchoolOwner(schoolId) ||
+        isAdmin()
+      );
+    }
+
+    function canListSchoolResource() {
+      return resource.data.ownerId == 'sman1_kabun_shared_workspace' ||
+        (isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin()));
     }
 
     function isValidString(val, minLen, maxLen) {
@@ -132,14 +161,14 @@ service cloud.firestore {
 
     function isValidAttendanceRecord(data, schoolId) {
       return data.keys().hasAll([
-          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk',
-          'jam_pulang', 'alasan_pulang_cepat', 'status', 'keterangan',
-          'tahun_ajaran', 'updatedAt'
+          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas',
+          'jam_masuk', 'jam_pulang', 'alasan_pulang_cepat',
+          'status', 'keterangan', 'tahun_ajaran', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk',
-          'jam_pulang', 'alasan_pulang_cepat', 'status', 'keterangan',
-          'tahun_ajaran', 'updatedAt'
+          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas',
+          'jam_masuk', 'jam_pulang', 'alasan_pulang_cepat',
+          'status', 'keterangan', 'tahun_ajaran', 'updatedAt'
         ]) &&
         data.ownerId == schoolId &&
         isValidId(data.ownerId) &&
@@ -158,12 +187,8 @@ service cloud.firestore {
     }
 
     function isValidMasterSubject(data, schoolId) {
-      return data.keys().hasAll([
-          'ownerId', 'id', 'kode', 'nama', 'deskripsi', 'updatedAt'
-        ]) &&
-        data.keys().hasOnly([
-          'ownerId', 'id', 'kode', 'nama', 'deskripsi', 'updatedAt'
-        ]) &&
+      return data.keys().hasAll(['ownerId', 'id', 'kode', 'nama', 'deskripsi', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'id', 'kode', 'nama', 'deskripsi', 'updatedAt']) &&
         data.ownerId == schoolId &&
         isValidId(data.ownerId) &&
         isValidString(data.id, 1, 128) &&
@@ -175,14 +200,14 @@ service cloud.firestore {
 
     function isValidTeacherSchedule(data, schoolId) {
       return data.keys().hasAll([
-          'ownerId', 'id', 'hari', 'teacher_user_id', 'teacher_name', 'kelas',
-          'mata_pelajaran', 'jam_mulai', 'jam_selesai', 'tahun_ajaran',
-          'semester', 'updatedAt'
+          'ownerId', 'id', 'hari', 'teacher_user_id', 'teacher_name',
+          'kelas', 'mata_pelajaran', 'jam_mulai', 'jam_selesai',
+          'tahun_ajaran', 'semester', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'ownerId', 'id', 'hari', 'teacher_user_id', 'teacher_name', 'kelas',
-          'mata_pelajaran', 'jam_mulai', 'jam_selesai', 'tahun_ajaran',
-          'semester', 'updatedAt'
+          'ownerId', 'id', 'hari', 'teacher_user_id', 'teacher_name',
+          'kelas', 'mata_pelajaran', 'jam_mulai', 'jam_selesai',
+          'tahun_ajaran', 'semester', 'updatedAt'
         ]) &&
         data.ownerId == schoolId &&
         isValidId(data.ownerId) &&
@@ -230,14 +255,12 @@ service cloud.firestore {
       return data.keys().hasAll([
           'ownerId', 'id', 'assignment_id', 'tanggal', 'kelas',
           'mata_pelajaran', 'teacher_user_id', 'teacher_name', 'nis',
-          'nama', 'jam_masuk', 'status', 'keterangan', 'tahun_ajaran',
-          'updatedAt'
+          'nama', 'jam_masuk', 'status', 'keterangan', 'tahun_ajaran', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'ownerId', 'id', 'assignment_id', 'tanggal', 'kelas',
           'mata_pelajaran', 'teacher_user_id', 'teacher_name', 'nis',
-          'nama', 'jam_masuk', 'status', 'keterangan', 'tahun_ajaran',
-          'updatedAt'
+          'nama', 'jam_masuk', 'status', 'keterangan', 'tahun_ajaran', 'updatedAt'
         ]) &&
         data.ownerId == schoolId &&
         isValidId(data.ownerId) &&
@@ -259,12 +282,12 @@ service cloud.firestore {
 
     function isValidAppUserAccount(data, schoolId) {
       return data.keys().hasAll([
-          'ownerId', 'id', 'username', 'password', 'nama', 'nip',
-          'role', 'jabatan', 'kelas_binaan', 'updatedAt'
+          'ownerId', 'id', 'username', 'password', 'nama',
+          'nip', 'role', 'jabatan', 'kelas_binaan', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'ownerId', 'id', 'username', 'password', 'nama', 'nip',
-          'role', 'jabatan', 'kelas_binaan', 'foto_profil', 'updatedAt'
+          'ownerId', 'id', 'username', 'password', 'nama',
+          'nip', 'role', 'jabatan', 'kelas_binaan', 'foto_profil', 'updatedAt'
         ]) &&
         data.ownerId == schoolId &&
         isValidId(data.ownerId) &&
@@ -282,16 +305,16 @@ service cloud.firestore {
 
     function isValidLateCorrectionRequest(data, schoolId) {
       return data.keys().hasAll([
-          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk_asal',
-          'alasan', 'requested_by_user_id', 'requested_by_name', 'requested_at',
-          'status', 'resolved_by_name', 'resolved_at', 'catatan_admin',
-          'tahun_ajaran', 'updatedAt'
+          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas',
+          'jam_masuk_asal', 'alasan', 'requested_by_user_id', 'requested_by_name',
+          'requested_at', 'status', 'resolved_by_name', 'resolved_at',
+          'catatan_admin', 'tahun_ajaran', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk_asal',
-          'alasan', 'requested_by_user_id', 'requested_by_name', 'requested_at',
-          'status', 'resolved_by_name', 'resolved_at', 'catatan_admin',
-          'tahun_ajaran', 'updatedAt'
+          'ownerId', 'id', 'tanggal', 'nis', 'nama', 'kelas',
+          'jam_masuk_asal', 'alasan', 'requested_by_user_id', 'requested_by_name',
+          'requested_at', 'status', 'resolved_by_name', 'resolved_at',
+          'catatan_admin', 'tahun_ajaran', 'updatedAt'
         ]) &&
         data.ownerId == schoolId &&
         isValidId(data.ownerId) &&
@@ -335,20 +358,20 @@ service cloud.firestore {
 
     // =========================================================================
     // School Workspaces & Subcollections
+    // Supports automatic cross-device sync for the school's shared workspace
+    // ('sman1_kabun_shared_workspace') as well as verified Google-owned workspaces,
+    // with strict schema, allowlist, size, and server-timestamp enforcement.
     // =========================================================================
 
     match /schools/{schoolId} {
-      allow get: if isValidId(schoolId) && isVerifiedUser() && (schoolId == request.auth.uid || isAdmin());
-      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
-      allow create: if isValidId(schoolId) &&
-        isVerifiedUser() &&
-        (schoolId == request.auth.uid || isAdmin()) &&
+      allow get: if canAccessSchoolDoc(schoolId);
+      allow list: if canListSchoolResource();
+      allow create: if canAccessSchoolDoc(schoolId) &&
         isValidSchoolConfig(request.resource.data, schoolId) &&
         request.resource.data.createdAt == request.time &&
         request.resource.data.updatedAt == request.time;
-      allow update: if isValidId(schoolId) &&
-        isVerifiedUser() &&
-        (resource.data.ownerId == request.auth.uid || isAdmin()) &&
+      allow update: if canAccessSchoolDoc(schoolId) &&
+        (isAutoSchoolWorkspace(schoolId) || resource.data.ownerId == request.auth.uid || isAdmin()) &&
         request.resource.data.ownerId == resource.data.ownerId &&
         request.resource.data.createdAt == resource.data.createdAt &&
         request.resource.data.updatedAt == request.time &&
@@ -361,67 +384,67 @@ service cloud.firestore {
         isValidSchoolConfig(request.resource.data, schoolId);
       allow delete: if isValidId(schoolId) && isAdmin();
 
-      // Students (PII: no_wa_ortu -> strictly owner or admin)
+      // Students
       match /students/{studentId} {
-        allow get: if isValidId(schoolId) && isValidId(studentId) && (isSchoolOwner(schoolId) || isAdmin());
-        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
-        allow create: if isValidId(schoolId) && isValidId(studentId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow get: if isValidId(studentId) && canAccessSchoolSubdoc(schoolId);
+        allow list: if canListSchoolResource();
+        allow create: if isValidId(studentId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           isValidStudentRecord(request.resource.data, schoolId);
-        allow update: if isValidId(schoolId) && isValidId(studentId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow update: if isValidId(studentId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           request.resource.data.ownerId == resource.data.ownerId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'nis', 'nama', 'kelas', 'gender', 'no_wa_ortu', 'tahun_ajaran', 'updatedAt'
           ]) &&
           isValidStudentRecord(request.resource.data, schoolId);
-        allow delete: if isValidId(schoolId) && isValidId(studentId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow delete: if isValidId(studentId) && canAccessSchoolSubdoc(schoolId);
       }
 
       // Daily Attendance Records
       match /attendance/{recordId} {
-        allow get: if isValidId(schoolId) && isValidId(recordId) && (isSchoolOwner(schoolId) || isAdmin());
-        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
-        allow create: if isValidId(schoolId) && isValidId(recordId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow get: if isValidId(recordId) && canAccessSchoolSubdoc(schoolId);
+        allow list: if canListSchoolResource();
+        allow create: if isValidId(recordId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           isValidAttendanceRecord(request.resource.data, schoolId);
-        allow update: if isValidId(schoolId) && isValidId(recordId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow update: if isValidId(recordId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           request.resource.data.ownerId == resource.data.ownerId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk', 'jam_pulang',
             'alasan_pulang_cepat', 'status', 'keterangan', 'tahun_ajaran', 'updatedAt'
           ]) &&
           isValidAttendanceRecord(request.resource.data, schoolId);
-        allow delete: if isValidId(schoolId) && isValidId(recordId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow delete: if isValidId(recordId) && canAccessSchoolSubdoc(schoolId);
       }
 
       // Master Subjects
       match /subjects/{subjectId} {
-        allow get: if isValidId(schoolId) && isValidId(subjectId) && (isSchoolOwner(schoolId) || isAdmin());
-        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
-        allow create: if isValidId(schoolId) && isValidId(subjectId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow get: if isValidId(subjectId) && canAccessSchoolSubdoc(schoolId);
+        allow list: if canListSchoolResource();
+        allow create: if isValidId(subjectId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           isValidMasterSubject(request.resource.data, schoolId);
-        allow update: if isValidId(schoolId) && isValidId(subjectId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow update: if isValidId(subjectId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           request.resource.data.ownerId == resource.data.ownerId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'id', 'kode', 'nama', 'deskripsi', 'updatedAt'
           ]) &&
           isValidMasterSubject(request.resource.data, schoolId);
-        allow delete: if isValidId(schoolId) && isValidId(subjectId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow delete: if isValidId(subjectId) && canAccessSchoolSubdoc(schoolId);
       }
 
       // Teacher Schedules
       match /schedules/{scheduleId} {
-        allow get: if isValidId(schoolId) && isValidId(scheduleId) && (isSchoolOwner(schoolId) || isAdmin());
-        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
-        allow create: if isValidId(schoolId) && isValidId(scheduleId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow get: if isValidId(scheduleId) && canAccessSchoolSubdoc(schoolId);
+        allow list: if canListSchoolResource();
+        allow create: if isValidId(scheduleId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           isValidTeacherSchedule(request.resource.data, schoolId);
-        allow update: if isValidId(schoolId) && isValidId(scheduleId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow update: if isValidId(scheduleId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           request.resource.data.ownerId == resource.data.ownerId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'id', 'hari', 'teacher_user_id', 'teacher_name', 'kelas',
@@ -429,18 +452,18 @@ service cloud.firestore {
             'semester', 'updatedAt'
           ]) &&
           isValidTeacherSchedule(request.resource.data, schoolId);
-        allow delete: if isValidId(schoolId) && isValidId(scheduleId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow delete: if isValidId(scheduleId) && canAccessSchoolSubdoc(schoolId);
       }
 
       // Subject Assignments
       match /subjectAssignments/{assignmentId} {
-        allow get: if isValidId(schoolId) && isValidId(assignmentId) && (isSchoolOwner(schoolId) || isAdmin());
-        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
-        allow create: if isValidId(schoolId) && isValidId(assignmentId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow get: if isValidId(assignmentId) && canAccessSchoolSubdoc(schoolId);
+        allow list: if canListSchoolResource();
+        allow create: if isValidId(assignmentId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           isValidSubjectAssignment(request.resource.data, schoolId);
-        allow update: if isValidId(schoolId) && isValidId(assignmentId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow update: if isValidId(assignmentId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           request.resource.data.ownerId == resource.data.ownerId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'id', 'teacher_user_id', 'teacher_name', 'kelas', 'mata_pelajaran',
@@ -448,18 +471,18 @@ service cloud.firestore {
             'source', 'updatedAt'
           ]) &&
           isValidSubjectAssignment(request.resource.data, schoolId);
-        allow delete: if isValidId(schoolId) && isValidId(assignmentId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow delete: if isValidId(assignmentId) && canAccessSchoolSubdoc(schoolId);
       }
 
       // Subject Attendance Records
       match /subjectRecords/{recordId} {
-        allow get: if isValidId(schoolId) && isValidId(recordId) && (isSchoolOwner(schoolId) || isAdmin());
-        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
-        allow create: if isValidId(schoolId) && isValidId(recordId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow get: if isValidId(recordId) && canAccessSchoolSubdoc(schoolId);
+        allow list: if canListSchoolResource();
+        allow create: if isValidId(recordId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           isValidSubjectAttendanceRecord(request.resource.data, schoolId);
-        allow update: if isValidId(schoolId) && isValidId(recordId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow update: if isValidId(recordId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           request.resource.data.ownerId == resource.data.ownerId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'id', 'assignment_id', 'tanggal', 'kelas', 'mata_pelajaran',
@@ -467,36 +490,36 @@ service cloud.firestore {
             'status', 'keterangan', 'tahun_ajaran', 'updatedAt'
           ]) &&
           isValidSubjectAttendanceRecord(request.resource.data, schoolId);
-        allow delete: if isValidId(schoolId) && isValidId(recordId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow delete: if isValidId(recordId) && canAccessSchoolSubdoc(schoolId);
       }
 
-      // Internal App Role Accounts (PII / Credentials -> strictly owner or admin)
+      // Internal App Role Accounts
       match /accounts/{accountId} {
-        allow get: if isValidId(schoolId) && isValidId(accountId) && (isSchoolOwner(schoolId) || isAdmin());
-        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
-        allow create: if isValidId(schoolId) && isValidId(accountId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow get: if isValidId(accountId) && canAccessSchoolSubdoc(schoolId);
+        allow list: if canListSchoolResource();
+        allow create: if isValidId(accountId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           isValidAppUserAccount(request.resource.data, schoolId);
-        allow update: if isValidId(schoolId) && isValidId(accountId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow update: if isValidId(accountId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           request.resource.data.ownerId == resource.data.ownerId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'id', 'username', 'password', 'nama', 'nip', 'role',
             'jabatan', 'kelas_binaan', 'foto_profil', 'updatedAt'
           ]) &&
           isValidAppUserAccount(request.resource.data, schoolId);
-        allow delete: if isValidId(schoolId) && isValidId(accountId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow delete: if isValidId(accountId) && canAccessSchoolSubdoc(schoolId);
       }
 
       // Late Correction Requests (Wali Kelas -> Master Admin approval)
       match /lateCorrectionRequests/{requestId} {
-        allow get: if isValidId(schoolId) && isValidId(requestId) && (isSchoolOwner(schoolId) || isAdmin());
-        allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isAdmin());
-        allow create: if isValidId(schoolId) && isValidId(requestId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow get: if isValidId(requestId) && canAccessSchoolSubdoc(schoolId);
+        allow list: if canListSchoolResource();
+        allow create: if isValidId(requestId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           isValidLateCorrectionRequest(request.resource.data, schoolId);
-        allow update: if isValidId(schoolId) && isValidId(requestId) &&
-          (isSchoolOwner(schoolId) || isAdmin()) &&
+        allow update: if isValidId(requestId) &&
+          canAccessSchoolSubdoc(schoolId) &&
           request.resource.data.ownerId == resource.data.ownerId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk_asal',
@@ -505,7 +528,7 @@ service cloud.firestore {
             'catatan_admin', 'tahun_ajaran', 'updatedAt'
           ]) &&
           isValidLateCorrectionRequest(request.resource.data, schoolId);
-        allow delete: if isValidId(schoolId) && isValidId(requestId) && (isSchoolOwner(schoolId) || isAdmin());
+        allow delete: if isValidId(requestId) && canAccessSchoolSubdoc(schoolId);
       }
     }
   }

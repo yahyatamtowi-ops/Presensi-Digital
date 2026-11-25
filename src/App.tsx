@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, type User as FirebaseUser } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
-import { auth, signInWithGoogle, signOutFirebase } from './firebase';
+import { auth, signOutFirebase } from './firebase';
+import {
+  AUTO_WORKSPACE_DISPLAY_NAME,
+  AUTO_WORKSPACE_SUBTITLE,
+  resolveActiveCloudWorkspaceId,
+  resolveEffectiveGasScriptUrl,
+  shouldApplyCloudCollectionSnapshot,
+  shouldBridgeGasDataToFirestore,
+} from './utils/autoCloudSync';
 import {
   parseFirebaseAuthError,
   type FirebaseAuthErrorDetail,
@@ -351,14 +359,30 @@ export default function App() {
 
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [firebaseAuthReady, setFirebaseAuthReady] = useState(false);
-  const [cloudSyncing, setCloudSyncing] = useState(false);
+  const [cloudSyncing, setCloudSyncing] = useState(true);
   const [cloudConnected, setCloudConnected] = useState(false);
+  const [cloudReconnectNonce, setCloudReconnectNonce] = useState(0);
   const [cloudAuthError, setCloudAuthError] =
     useState<FirebaseAuthErrorDetail | null>(null);
   const [domainHelpModalOpen, setDomainHelpModalOpen] = useState(false);
   const [startupSyncStep, setStartupSyncStep] = useState<StartupSyncStep>('done');
   const [startupSyncInitialized, setStartupSyncInitialized] = useState(false);
   const [startupSheetsSyncing, setStartupSheetsSyncing] = useState(false);
+  const cloudConnectedRef = useRef(false);
+  cloudConnectedRef.current = cloudConnected;
+  const cloudCountsRef = useRef({
+    students: 0,
+    records: 0,
+    schedules: 0,
+    accounts: 0,
+  });
+  const cloudHasNonEmptyRef = useRef({
+    records: false,
+    schedules: false,
+    subjectAssignments: false,
+    subjectRecords: false,
+  });
+  const bridgedGasToFirestoreRef = useRef(false);
   const [fonnteConfig, setFonnteConfig] = useState<FonnteConfig>(() => loadFonnteConfig());
   const fonnteConfigRef = useRef<FonnteConfig>(fonnteConfig);
   const [fonnteSentKeys, setFonnteSentKeys] = useState<Set<string>>(() =>
@@ -714,83 +738,157 @@ export default function App() {
     return msg.includes('resource-exhausted') || msg.includes('quota exceeded');
   };
 
-  // Track Firebase Auth state for real-time cross-device cloud sync
+  // Track Firebase Auth state passively (never required for automatic school workspace sync)
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
       setFirebaseAuthReady(true);
-      if (!user) {
-        setCloudConnected(false);
-        setCloudSyncing(false);
-      }
     });
     return () => unsub();
   }, []);
 
-  // Attach real-time Firestore workspace listeners ONLY after auth is ready & user signed in
+  // Automatically connect to shared school Firestore workspace on boot (ZERO Google login prompt!)
   useEffect(() => {
-    if (!firebaseAuthReady || !firebaseUser) return;
-    if (!firebaseUser.emailVerified) {
-      pushToast({
-        type: 'warning',
-        title: 'Email Google Belum Terverifikasi',
-        description: 'Gunakan akun Google dengan email terverifikasi untuk sinkronisasi cloud.',
-      });
-      return;
-    }
-
+    const workspaceId = resolveActiveCloudWorkspaceId(firebaseUser?.uid);
     let cancelled = false;
     let unsubscribeWorkspace: (() => void) | null = null;
 
     setCloudSyncing(true);
+    setCloudAuthError(null);
 
     const bootstrapAndListen = async () => {
       try {
         const snapshot = latestFullSnapshotRef.current;
-        const { createdNew } = await ensureSchoolWorkspaceExists(
-          firebaseUser.uid,
-          snapshot
-        );
+        const effectiveScriptUrl = resolveEffectiveGasScriptUrl(snapshot.settings.script_url);
+        const normalizedSnapshot: FullLocalSchoolSnapshot = {
+          ...snapshot,
+          settings: {
+            ...snapshot.settings,
+            script_url: effectiveScriptUrl,
+          },
+        };
+
+        await ensureSchoolWorkspaceExists(workspaceId, normalizedSnapshot);
         if (cancelled) return;
 
-        unsubscribeWorkspace = subscribeToSchoolWorkspace(firebaseUser.uid, {
+        unsubscribeWorkspace = subscribeToSchoolWorkspace(workspaceId, {
           getFallbackSettings: () => latestDataRef.current.settings,
           onSettings: (cloudSettings) => {
             if (settingsSaveInFlightRef.current) return;
-            setSettings(cloudSettings);
-            saveLocalSettings(cloudSettings);
+            const resolvedSettings: SchoolSettings = {
+              ...cloudSettings,
+              script_url: resolveEffectiveGasScriptUrl(
+                cloudSettings.script_url || latestDataRef.current.settings.script_url
+              ),
+            };
+            latestDataRef.current.settings = resolvedSettings;
+            latestFullSnapshotRef.current.settings = resolvedSettings;
+            setSettings(resolvedSettings);
+            saveLocalSettings(resolvedSettings);
             saveDefaultSchoolIdentity({
-              nama_sekolah: cloudSettings.nama_sekolah,
-              logo_sekolah: cloudSettings.logo_sekolah || '',
+              nama_sekolah: resolvedSettings.nama_sekolah,
+              logo_sekolah: resolvedSettings.logo_sekolah || '',
             });
           },
           onStudents: (cloudStudents) => {
+            cloudCountsRef.current.students = cloudStudents.length;
             latestDataRef.current.students = cloudStudents;
+            latestFullSnapshotRef.current.students = cloudStudents;
             setStudents(cloudStudents);
             saveLocalStudents(cloudStudents);
           },
           onRecords: (cloudRecords) => {
+            if (
+              !shouldApplyCloudCollectionSnapshot({
+                incomingCount: cloudRecords.length,
+                localCount: latestDataRef.current.records.length,
+                hasReceivedNonEmptyCloud: cloudHasNonEmptyRef.current.records,
+                gasAutoSyncConfigured: Boolean(
+                  resolveEffectiveGasScriptUrl(latestDataRef.current.settings.script_url)
+                ),
+              })
+            ) {
+              return;
+            }
+            if (cloudRecords.length > 0) {
+              cloudHasNonEmptyRef.current.records = true;
+            }
+            cloudCountsRef.current.records = cloudRecords.length;
+            latestDataRef.current.records = cloudRecords;
+            latestFullSnapshotRef.current.records = cloudRecords;
             setRecords(cloudRecords);
             saveLocalRecords(cloudRecords);
           },
           onMasterSubjects: (cloudSubjects) => {
+            latestFullSnapshotRef.current.masterSubjects = cloudSubjects;
             setMasterSubjects(cloudSubjects);
             saveMasterSubjects(cloudSubjects);
           },
           onTeacherSchedules: (cloudSchedules) => {
+            if (
+              !shouldApplyCloudCollectionSnapshot({
+                incomingCount: cloudSchedules.length,
+                localCount: latestFullSnapshotRef.current.teacherSchedules.length,
+                hasReceivedNonEmptyCloud: cloudHasNonEmptyRef.current.schedules,
+                gasAutoSyncConfigured: Boolean(
+                  resolveEffectiveGasScriptUrl(latestDataRef.current.settings.script_url)
+                ),
+              })
+            ) {
+              return;
+            }
+            if (cloudSchedules.length > 0) {
+              cloudHasNonEmptyRef.current.schedules = true;
+            }
+            cloudCountsRef.current.schedules = cloudSchedules.length;
+            latestFullSnapshotRef.current.teacherSchedules = cloudSchedules;
             setTeacherSchedules(cloudSchedules);
             saveTeacherSchedules(cloudSchedules);
             syncTimetablesWithSchedules(cloudSchedules);
           },
           onSubjectAssignments: (cloudAssignments) => {
+            if (
+              !shouldApplyCloudCollectionSnapshot({
+                incomingCount: cloudAssignments.length,
+                localCount: latestFullSnapshotRef.current.subjectAssignments.length,
+                hasReceivedNonEmptyCloud: cloudHasNonEmptyRef.current.subjectAssignments,
+                gasAutoSyncConfigured: Boolean(
+                  resolveEffectiveGasScriptUrl(latestDataRef.current.settings.script_url)
+                ),
+              })
+            ) {
+              return;
+            }
+            if (cloudAssignments.length > 0) {
+              cloudHasNonEmptyRef.current.subjectAssignments = true;
+            }
+            latestFullSnapshotRef.current.subjectAssignments = cloudAssignments;
             setSubjectAssignments(cloudAssignments);
             saveSubjectAssignments(cloudAssignments);
           },
           onSubjectRecords: (cloudSubjectRecords) => {
+            if (
+              !shouldApplyCloudCollectionSnapshot({
+                incomingCount: cloudSubjectRecords.length,
+                localCount: latestFullSnapshotRef.current.subjectRecords.length,
+                hasReceivedNonEmptyCloud: cloudHasNonEmptyRef.current.subjectRecords,
+                gasAutoSyncConfigured: Boolean(
+                  resolveEffectiveGasScriptUrl(latestDataRef.current.settings.script_url)
+                ),
+              })
+            ) {
+              return;
+            }
+            if (cloudSubjectRecords.length > 0) {
+              cloudHasNonEmptyRef.current.subjectRecords = true;
+            }
+            latestFullSnapshotRef.current.subjectRecords = cloudSubjectRecords;
             setSubjectRecords(cloudSubjectRecords);
             saveSubjectRecords(cloudSubjectRecords);
           },
           onAccounts: (cloudAccounts) => {
+            cloudCountsRef.current.accounts = cloudAccounts.length;
+            latestFullSnapshotRef.current.accounts = cloudAccounts;
             setAccounts(cloudAccounts);
             saveUserAccounts(cloudAccounts);
             setSession((prevSession) => {
@@ -828,6 +926,7 @@ export default function App() {
             });
           },
           onLateCorrectionRequests: (cloudRequests) => {
+            latestFullSnapshotRef.current.lateCorrectionRequests = cloudRequests;
             setLateCorrectionRequests(cloudRequests);
             saveLocalLateCorrectionRequests(cloudRequests);
           },
@@ -858,26 +957,20 @@ export default function App() {
         setCloudConnected(true);
         setCloudSyncing(false);
         setLastSyncedAt(getCurrentTimeString());
-
-        if (createdNew) {
-          pushToast({
-            type: 'success',
-            title: 'Cloud Firebase Aktif',
-            description: `Data lokal (${snapshot.students.length} siswa, ${snapshot.records.length} presensi) diunggah ke Cloud dan siap dibuka di perangkat lain.`,
-          });
-        }
       } catch (err) {
         if (cancelled) return;
         setCloudConnected(false);
         setCloudSyncing(false);
-        pushToast({
-          type: 'error',
-          title: 'Gagal Menghubungkan Cloud Firebase',
-          description:
-            err instanceof Error
-              ? err.message
-              : 'Periksa koneksi internet dan coba hubungkan kembali.',
-        });
+        if (isBrowserOnline()) {
+          pushToast({
+            type: 'warning',
+            title: 'Sinkronisasi Cloud Tertunda',
+            description:
+              err instanceof Error
+                ? `${err.message} — Data tetap aman di cache lokal dan akan mencoba terhubung ulang otomatis.`
+                : 'Periksa koneksi internet. Aplikasi akan mencoba terhubung ulang otomatis.',
+          });
+        }
       }
     };
 
@@ -889,14 +982,14 @@ export default function App() {
         unsubscribeWorkspace();
       }
     };
-  }, [firebaseAuthReady, firebaseUser, pushToast]);
+  }, [firebaseUser?.uid, cloudReconnectNonce, pushToast]);
 
   const runCloudWrite = useCallback(
-    (writer: (uid: string) => Promise<void>) => {
-      const uid = firebaseUser?.uid;
-      if (!uid || !firebaseUser?.emailVerified) return;
-      void writer(uid)
+    (writer: (workspaceId: string) => Promise<void>) => {
+      const workspaceId = resolveActiveCloudWorkspaceId(firebaseUser?.uid);
+      void writer(workspaceId)
         .then(() => {
+          setCloudConnected(true);
           setLastSyncedAt(getCurrentTimeString());
         })
         .catch((err) => {
@@ -909,28 +1002,37 @@ export default function App() {
             });
             return;
           }
-          pushToast({
-            type: 'warning',
-            title: 'Perubahan Tersimpan Lokal',
-            description:
-              'Sinkronisasi cloud tertunda. Pastikan perangkat terhubung ke internet.',
-          });
+          if (isBrowserOnline()) {
+            pushToast({
+              type: 'warning',
+              title: 'Perubahan Tersimpan Lokal',
+              description:
+                'Sinkronisasi cloud tertunda. Pastikan perangkat terhubung ke internet.',
+            });
+          }
         });
     },
-    [firebaseUser, pushToast]
+    [firebaseUser?.uid, pushToast]
   );
 
+  // Automatic reconnect without Google OAuth login popup
   const handleConnectCloud = useCallback(
-    async (loginHintEmail?: string): Promise<boolean> => {
+    async (_loginHintEmail?: string): Promise<boolean> => {
       setCloudSyncing(true);
       setCloudAuthError(null);
+      setDomainHelpModalOpen(false);
       try {
-        const user = await signInWithGoogle(loginHintEmail);
-        setDomainHelpModalOpen(false);
+        const workspaceId = resolveActiveCloudWorkspaceId(firebaseUser?.uid);
+        await ensureSchoolWorkspaceExists(workspaceId, latestFullSnapshotRef.current);
+        setCloudConnected(true);
+        setCloudSyncing(false);
+        setLastSyncedAt(getCurrentTimeString());
+        setCloudReconnectNonce((n) => n + 1);
         pushToast({
           type: 'success',
-          title: 'Terhubung ke Cloud Firebase',
-          description: `Masuk sebagai ${user.email || user.displayName || 'Google'}. Data disinkronkan secara real-time lintas perangkat.`,
+          title: 'Cloud Firebase Terhubung Otomatis',
+          description:
+            'Sinkronisasi real-time lintas perangkat aktif tanpa perlu login akun Google.',
         });
         return true;
       } catch (err) {
@@ -938,39 +1040,30 @@ export default function App() {
         const hostname =
           typeof window !== 'undefined' ? window.location.hostname : 'localhost';
         const parsed = parseFirebaseAuthError(err, hostname, firebaseConfig.projectId);
-        if (parsed.isUserCancelled) {
-          return false;
-        }
         setCloudAuthError(parsed);
-        if (parsed.isUnauthorizedDomain) {
-          setDomainHelpModalOpen(true);
-        }
         pushToast({
           type: 'error',
-          title: parsed.title,
-          description: parsed.description,
+          title: 'Gagal Menghubungkan Cloud Firebase',
+          description:
+            err instanceof Error
+              ? err.message
+              : 'Periksa koneksi internet dan coba lagi.',
         });
         return false;
       }
     },
-    [pushToast]
+    [firebaseUser?.uid, pushToast]
   );
 
   const handleDisconnectCloud = useCallback(async () => {
     setCloudSyncing(true);
     try {
-      await signOutFirebase();
-      setCloudConnected(false);
+      await signOutFirebase().catch(() => {});
+      setCloudReconnectNonce((n) => n + 1);
       pushToast({
         type: 'info',
-        title: 'Koneksi Cloud Diputuskan',
-        description: 'Aplikasi kembali ke penyimpanan lokal di perangkat ini.',
-      });
-    } catch (err) {
-      pushToast({
-        type: 'error',
-        title: 'Gagal Memutuskan Cloud',
-        description: err instanceof Error ? err.message : 'Coba lagi beberapa saat.',
+        title: 'Koneksi Cloud Disegarkan',
+        description: 'Sinkronisasi otomatis Firebase tetap aktif untuk seluruh perangkat sekolah.',
       });
     } finally {
       setCloudSyncing(false);
@@ -978,15 +1071,12 @@ export default function App() {
   }, [pushToast]);
 
   const handlePushLocalToCloud = useCallback(async () => {
-    const uid = firebaseUser?.uid;
-    if (!uid) {
-      await handleConnectCloud();
-      return;
-    }
+    const workspaceId = resolveActiveCloudWorkspaceId(firebaseUser?.uid);
     setCloudSyncing(true);
     try {
       const snapshot = latestFullSnapshotRef.current;
-      await pushFullLocalStateToCloud(uid, snapshot, false);
+      await pushFullLocalStateToCloud(workspaceId, snapshot, false);
+      setCloudConnected(true);
       setLastSyncedAt(getCurrentTimeString());
       pushToast({
         type: 'success',
@@ -1002,7 +1092,7 @@ export default function App() {
     } finally {
       setCloudSyncing(false);
     }
-  }, [firebaseUser, handleConnectCloud, pushToast]);
+  }, [firebaseUser?.uid, pushToast]);
 
   const syncFromGas = useCallback(
     async (
@@ -1334,6 +1424,36 @@ export default function App() {
           }
         }
 
+        const gasResultSummary = {
+          ok: true,
+          hasRemoteData: remote.hasRemoteData,
+          studentsCount: remote.students.length,
+          recordsCount: remote.records.length,
+          accountsCount: syncedAccountsCount,
+          schedulesCount: remote.teacherSchedules.length,
+          subjectRecordsCount: remote.subjectRecords.length,
+        };
+
+        // Bridge Google Sheets data -> Firestore automatically once if Firestore workspace is still empty,
+        // or when an explicit forcePullRemote sync runs, without creating ping-pong loops.
+        if (
+          shouldBridgeGasDataToFirestore({
+            cloudConnected: cloudConnectedRef.current,
+            alreadyBridged: bridgedGasToFirestoreRef.current,
+            forcePullRemote,
+            gasResult: gasResultSummary,
+            cloudCountsBeforeGas: cloudCountsRef.current,
+          })
+        ) {
+          bridgedGasToFirestoreRef.current = true;
+          const workspaceId = resolveActiveCloudWorkspaceId(firebaseUser?.uid);
+          void pushFullLocalStateToCloud(workspaceId, latestFullSnapshotRef.current, false).catch(
+            () => {
+              // Keep silent; local and Sheets data remain intact
+            }
+          );
+        }
+
         setConnectionStatus(flushResult.remaining > 0 ? 'error' : 'connected');
         setLastSyncedAt(getCurrentTimeString());
         if (!silent && flushResult.remaining === 0) {
@@ -1352,15 +1472,7 @@ export default function App() {
             });
           }
         }
-        return {
-          ok: true,
-          hasRemoteData: remote.hasRemoteData,
-          studentsCount: remote.students.length,
-          recordsCount: remote.records.length,
-          accountsCount: syncedAccountsCount,
-          schedulesCount: remote.teacherSchedules.length,
-          subjectRecordsCount: remote.subjectRecords.length,
-        };
+        return gasResultSummary;
       } catch (err) {
         setConnectionStatus(!isBrowserOnline() ? 'offline' : 'error');
         if (!silent) {
@@ -1483,6 +1595,9 @@ export default function App() {
 
     const handleBrowserOnline = () => {
       setIsOnline(true);
+      if (!cloudConnectedRef.current) {
+        setCloudReconnectNonce((n) => n + 1);
+      }
       void flushOfflineQueueNow({ fromReconnect: true });
     };
 
@@ -1774,7 +1889,7 @@ export default function App() {
         });
         return false;
       }
-      // Persist the entered URL locally (and mirror to Cloud Firebase if connected)
+      // Persist the entered URL locally and mirror to Cloud Firebase automatically
       if (latestFullSnapshotRef.current.settings.script_url.trim() !== trimmed) {
         const linkedSettings: SchoolSettings = {
           ...latestFullSnapshotRef.current.settings,
@@ -1784,10 +1899,8 @@ export default function App() {
         latestFullSnapshotRef.current.settings = linkedSettings;
         setSettings(linkedSettings);
         saveLocalSettings(linkedSettings);
-        const uid = firebaseUser?.uid;
-        if (uid && firebaseUser?.emailVerified) {
-          void saveSchoolSettingsToCloud(uid, linkedSettings).catch(() => {});
-        }
+        const workspaceId = resolveActiveCloudWorkspaceId(firebaseUser?.uid);
+        void saveSchoolSettingsToCloud(workspaceId, linkedSettings).catch(() => {});
       }
       lastLocalSettingsSaveAtRef.current = 0;
       lastLocalAccountsSaveAtRef.current = 0;
@@ -1797,17 +1910,17 @@ export default function App() {
       const syncResult = await syncFromGas(trimmed, false, { forcePullRemote: true });
       return syncResult.ok;
     },
-    [firebaseUser, pushToast, syncFromGas]
+    [firebaseUser?.uid, pushToast, syncFromGas]
   );
 
-  // Trigger two-step first-open sync prompt once splash finishes and Firebase Auth state is known
+  // Automatic sync is always enabled on startup — never interrupt with manual Firebase/Sheets login modal
   useEffect(() => {
     if (showSplash || !firebaseAuthReady || startupSyncInitialized) return;
-    const isFirebaseLinked = cloudConnected || Boolean(firebaseUser);
     const nextStep = resolveInitialStartupSyncStep({
-      firebaseConnected: isFirebaseLinked,
-      sheetsUrl: settings.script_url,
+      firebaseConnected: true,
+      sheetsUrl: resolveEffectiveGasScriptUrl(settings.script_url),
       dismissed: false,
+      autoCloudEnabled: true,
     });
     setStartupSyncStep(nextStep);
     setStartupSyncInitialized(true);
@@ -1815,22 +1928,19 @@ export default function App() {
     showSplash,
     firebaseAuthReady,
     startupSyncInitialized,
-    cloudConnected,
-    firebaseUser,
     settings.script_url,
   ]);
 
-  // Automatically advance from Step 1 (Firebase) to Step 2 (Google Apps Script) once Firebase is verified
   useEffect(() => {
     if (startupSyncStep !== 'firebase') return;
-    if (!cloudConnected && !firebaseUser) return;
+    if (!cloudConnected) return;
     setStartupSyncStep((prev) =>
       resolveNextStartupSyncStep(prev, {
         firebaseConnected: true,
-        sheetsConnected: false,
+        sheetsConnected: true,
       })
     );
-  }, [startupSyncStep, cloudConnected, firebaseUser]);
+  }, [startupSyncStep, cloudConnected]);
 
   const handleStartupConfirmFirebase = useCallback(
     async (loginHintEmail: string): Promise<boolean> => {
@@ -3086,27 +3196,26 @@ export default function App() {
         });
       }
 
-      const uid = firebaseUser?.uid;
-      if (uid && firebaseUser?.emailVerified) {
-        try {
-          await saveSchoolSettingsToCloud(uid, newSettings);
-          setLastSyncedAt(getCurrentTimeString());
-        } catch (err) {
-          if (isQuotaExceededError(err)) {
-            pushToast({
-              type: 'warning',
-              title: 'Kuota Gratis Firestore Tercapai',
-              description:
-                'Pengaturan dan logo tersimpan lokal, namun sinkronisasi Cloud tertunda hingga kuota reset.',
-            });
-          } else {
-            pushToast({
-              type: 'warning',
-              title: 'Pengaturan Tersimpan Lokal',
-              description:
-                'Sinkronisasi pengaturan ke Cloud Firebase tertunda. Cek koneksi internet Anda.',
-            });
-          }
+      const workspaceId = resolveActiveCloudWorkspaceId(firebaseUser?.uid);
+      try {
+        await saveSchoolSettingsToCloud(workspaceId, newSettings);
+        setCloudConnected(true);
+        setLastSyncedAt(getCurrentTimeString());
+      } catch (err) {
+        if (isQuotaExceededError(err)) {
+          pushToast({
+            type: 'warning',
+            title: 'Kuota Gratis Firestore Tercapai',
+            description:
+              'Pengaturan dan logo tersimpan lokal, namun sinkronisasi Cloud tertunda hingga kuota reset.',
+          });
+        } else if (isBrowserOnline()) {
+          pushToast({
+            type: 'warning',
+            title: 'Pengaturan Tersimpan Lokal',
+            description:
+              'Sinkronisasi pengaturan ke Cloud Firebase tertunda. Cek koneksi internet Anda.',
+          });
         }
       }
 
@@ -3157,14 +3266,13 @@ export default function App() {
         description: `"${saved.nama_sekolah}" dan logo saat ini telah dijadikan default aplikasi.`,
       });
 
-      const uid = firebaseUser?.uid;
-      if (uid && firebaseUser?.emailVerified) {
-        try {
-          await saveSchoolSettingsToCloud(uid, nextSettings);
-          setLastSyncedAt(getCurrentTimeString());
-        } catch {
-          // Already saved locally
-        }
+      const workspaceId = resolveActiveCloudWorkspaceId(firebaseUser?.uid);
+      try {
+        await saveSchoolSettingsToCloud(workspaceId, nextSettings);
+        setCloudConnected(true);
+        setLastSyncedAt(getCurrentTimeString());
+      } catch {
+        // Already saved locally
       }
 
       if (nextSettings.script_url.trim()) {
@@ -4625,14 +4733,15 @@ export default function App() {
             void flushOfflineQueueNow();
             return;
           }
+          if (!cloudConnected) {
+            void handleConnectCloud();
+          }
           if (settings.script_url.trim()) {
             void syncFromGas(settings.script_url, false, { forcePullRemote: true });
-          } else if (!cloudConnected) {
-            void handleConnectCloud();
-          } else {
+          } else if (cloudConnected) {
             pushToast({
               type: 'success',
-              title: 'Cloud Firebase Tersinkron Real-Time',
+              title: 'Cloud Firebase Tersinkron Otomatis',
               description:
                 'Semua data pada perangkat ini aktif tersinkron otomatis melalui Cloud Firebase.',
             });
@@ -4641,7 +4750,7 @@ export default function App() {
         cloudSync={{
           connected: cloudConnected,
           syncing: cloudSyncing,
-          email: firebaseUser?.email ?? null,
+          email: AUTO_WORKSPACE_SUBTITLE,
           onConnect: () => void handleConnectCloud(),
         }}
         onReplayVoice={handleReplayVoice}
@@ -4869,8 +4978,8 @@ export default function App() {
             cloudSync={{
               connected: cloudConnected,
               syncing: cloudSyncing,
-              email: firebaseUser?.email ?? null,
-              displayName: firebaseUser?.displayName ?? null,
+              email: AUTO_WORKSPACE_SUBTITLE,
+              displayName: AUTO_WORKSPACE_DISPLAY_NAME,
               lastSyncedAt,
               quota: firestoreQuota,
               authError: cloudAuthError,

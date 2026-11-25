@@ -42,11 +42,20 @@ describe('Firestore Security Rules & Blueprint Invariants', () => {
       'match /subjectAssignments/{assignmentId}',
       'match /subjectRecords/{recordId}',
       'match /accounts/{accountId}',
+      'match /lateCorrectionRequests/{requestId}',
     ];
     assert.equal(Object.keys(blueprint.firestore).length, collectionSegments.length);
     for (const seg of collectionSegments) {
       assert.ok(rules.includes(seg), `Missing rule block for ${seg}`);
     }
+  });
+
+  it('enforces automatic shared school workspace scoping without blanket open writes', () => {
+    const rules = fs.readFileSync(rulesPath, 'utf8');
+    assert.match(rules, /sman1_kabun_shared_workspace/);
+    assert.match(rules, /function isAutoSchoolWorkspace\(schoolId\)/);
+    assert.match(rules, /function isAutoSchoolParentExists\(schoolId\)/);
+    assert.doesNotMatch(rules, /allow\s+(read|get|list|write|create|update|delete)\s*:\s*if\s+true\s*;/);
   });
 
   it('enforces Pillar 8 (Query Enforcer) with no get() inside allow list', () => {
@@ -55,7 +64,7 @@ describe('Firestore Security Rules & Blueprint Invariants', () => {
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l.startsWith('allow list:'));
-    assert.ok(listLines.length >= 9, 'Expected allow list rule for every collection');
+    assert.ok(listLines.length >= 10, 'Expected allow list rule for every collection');
     for (const line of listLines) {
       assert.ok(!line.includes('get('), `Forbidden get() in allow list: ${line}`);
       assert.ok(!line.includes('isSchoolOwner('), `Forbidden get()-backed helper in allow list: ${line}`);
@@ -65,9 +74,9 @@ describe('Firestore Security Rules & Blueprint Invariants', () => {
   it('enforces immutable ownerId and affectedKeys allowlists on every update rule', () => {
     const rules = fs.readFileSync(rulesPath, 'utf8');
     const updateMatches = rules.match(/affectedKeys\(\)\.hasOnly\(/g) ?? [];
-    assert.ok(updateMatches.length >= 8, 'Every mutable collection must use affectedKeys().hasOnly(...)');
+    assert.ok(updateMatches.length >= 9, 'Every mutable collection must use affectedKeys().hasOnly(...)');
     const ownerImmutableMatches =
       rules.match(/request\.resource\.data\.ownerId == resource\.data\.ownerId/g) ?? [];
-    assert.ok(ownerImmutableMatches.length >= 8, 'Every mutable collection must lock ownerId');
+    assert.ok(ownerImmutableMatches.length >= 9, 'Every mutable collection must lock ownerId');
   });
 });

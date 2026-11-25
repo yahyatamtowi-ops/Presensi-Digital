@@ -58,6 +58,15 @@ test('startupSyncPrompt', async (t) => {
       }),
       'done'
     );
+    assert.equal(
+      resolveInitialStartupSyncStep({
+        firebaseConnected: false,
+        sheetsUrl: '',
+        dismissed: false,
+        autoCloudEnabled: true,
+      }),
+      'done'
+    );
   });
 
   await t.test('advances from Firebase step to Google Apps Script step once Firebase is verified', () => {

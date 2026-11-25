@@ -731,7 +731,7 @@
       "schema": {
         "$ref": "#/entities/SchoolConfig"
       },
-      "description": "Dokumen konfigurasi utama workspace sekolah per pemilik Google Auth UID."
+      "description": "Dokumen konfigurasi utama workspace sekolah untuk sinkronisasi otomatis lintas perangkat (shared workspace sekolah atau Google Auth UID)."
     },
     "/schools/{schoolId}/students/{studentId}": {
       "schema": {

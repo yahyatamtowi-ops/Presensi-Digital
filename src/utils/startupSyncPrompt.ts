@@ -21,8 +21,9 @@ export function resolveInitialStartupSyncStep(params: {
   firebaseConnected: boolean;
   sheetsUrl: string;
   dismissed: boolean;
+  autoCloudEnabled?: boolean;
 }): StartupSyncStep {
-  if (params.dismissed) {
+  if (params.dismissed || params.autoCloudEnabled) {
     return 'done';
   }
   const hasSheetsUrl = Boolean((params.sheetsUrl || '').trim());

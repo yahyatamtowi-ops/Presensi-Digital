@@ -57,7 +57,7 @@ import {
   type AppBackupPayload,
   type LastBackupMeta,
 } from '../utils/backupStorage';
-import { DEFAULT_SCRIPT_URL, GOOGLE_APPS_SCRIPT_TEMPLATE } from '../utils/gasApi';
+import { GOOGLE_APPS_SCRIPT_TEMPLATE } from '../utils/gasApi';
 import { DEFAULT_SCHOOL_LOGO, DEFAULT_SCHOOL_NAME } from '../utils/seedData';
 import { normalizeSemester, validateTransparentPngFile } from '../utils/subjectAttendance';
 import { normalizeThemeId, THEME_PRESETS } from '../utils/themes';
@@ -1003,11 +1003,11 @@ export function SettingsView({
                               }`}
                               aria-hidden="true"
                             />
-                            {cloudSync.connected ? 'Terhubung Real-Time' : 'Belum Terhubung'}
+                            {cloudSync.connected ? 'Terhubung Otomatis' : 'Menghubungkan...'}
                           </span>
                         </div>
                         <p className="text-xs text-slate-500 leading-relaxed">
-                          Hubungkan dengan akun Google yang sama di komputer, tablet, atau HP lain agar data tersinkron secara real-time.
+                          Terhubung otomatis ke Cloud Firebase sekolah tanpa perlu login akun Google. Seluruh perangkat tersinkron secara real-time.
                         </p>
                       </div>
 
@@ -1168,10 +1168,10 @@ export function SettingsView({
                         <div className="rounded-xl bg-emerald-50/70 border border-emerald-200/80 p-3.5 sm:p-4 flex flex-col gap-3">
                           <div className="min-w-0 w-full">
                             <p className="text-xs font-semibold text-emerald-900 truncate">
-                              {cloudSync.displayName || 'Akun Google Terhubung'}
+                              {cloudSync.displayName || 'Sinkronisasi Otomatis Sekolah (Firebase Cloud)'}
                             </p>
-                            <p className="text-xs font-mono text-emerald-700 truncate mt-0.5">
-                              {cloudSync.email}
+                            <p className="text-xs font-medium text-emerald-700 mt-0.5">
+                              {cloudSync.email || 'Terhubung otomatis tanpa login Google'}
                             </p>
                             {cloudSync.lastSyncedAt && (
                               <p className="text-[11px] text-emerald-700/85 mt-1 leading-relaxed">
@@ -1187,22 +1187,14 @@ export function SettingsView({
                               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-emerald-300 bg-white text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-50 transition-colors whitespace-nowrap"
                             >
                               <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
-                              <span>{cloudSync.syncing ? 'Menyinkronkan...' : 'Kirim Data Lokal ke Cloud'}</span>
-                            </button>
-                            <button
-                              type="button"
-                              disabled={cloudSync.syncing}
-                              onClick={() => void cloudSync.onDisconnect()}
-                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-200 bg-white text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50 transition-colors whitespace-nowrap"
-                            >
-                              <span>Putuskan Cloud</span>
+                              <span>{cloudSync.syncing ? 'Menyinkronkan...' : 'Sinkronkan Ulang ke Cloud'}</span>
                             </button>
                           </div>
                         </div>
                       ) : (
                         <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-3.5 sm:p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
                           <p className="text-xs text-slate-600 leading-relaxed flex-1 min-w-0">
-                            Data saat ini tersimpan lokal di browser ini. Masuk dengan akun Google sekolah untuk mengaktifkan penyimpanan cloud Firebase dan sinkronisasi lintas perangkat.
+                            Menghubungkan otomatis ke Cloud Firebase sekolah tanpa login Google. Jika koneksi internet sempat terputus, klik tombol di samping untuk menyambungkan ulang.
                           </p>
                           <button
                             type="button"
@@ -1211,7 +1203,7 @@ export function SettingsView({
                             className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors shrink-0 self-start xl:self-auto whitespace-nowrap"
                           >
                             <Cloud className="h-4 w-4" aria-hidden="true" />
-                            <span>{cloudSync.syncing ? 'Menghubungkan...' : 'Hubungkan Akun Google (Firebase)'}</span>
+                            <span>{cloudSync.syncing ? 'Menghubungkan...' : 'Hubungkan Ulang Cloud'}</span>
                           </button>
                         </div>
                       )}
@@ -1421,15 +1413,8 @@ export function SettingsView({
                       placeholder="https://script.google.com/macros/s/AKfycb.../exec"
                       className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     />
-                    <p className="text-xs text-slate-500 mt-1.5">
-                      Kosongkan URL untuk menjalankan mode lokal dengan cache{' '}
-                      <span className="font-mono text-slate-700">localStorage</span>.
-                      {DEFAULT_SCRIPT_URL ? (
-                        <span>
-                          {' '}
-                          Default URL kode: <span className="font-mono">{DEFAULT_SCRIPT_URL}</span>
-                        </span>
-                      ) : null}
+                    <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+                      URL Google Apps Script sudah terpasang dan tersinkronisasi otomatis. Ubah hanya jika Anda menggunakan deployment Spreadsheet baru.
                     </p>
                   </div>
 
@@ -1493,18 +1478,14 @@ export function SettingsView({
                     )}
                   </div>
 
-                  <div className="rounded-xl border border-indigo-200/70 bg-indigo-50/40 p-3.5 space-y-1">
-                    <p className="text-xs font-semibold text-indigo-950">
-                      Cara Menyamakan Data di Perangkat Lain
+                  <div className="rounded-xl border border-emerald-200/80 bg-emerald-50/50 p-3.5 space-y-1">
+                    <p className="text-xs font-semibold text-emerald-950">
+                      Sinkronisasi Otomatis Aktif di Semua Perangkat
                     </p>
-                    <p className="text-[11px] text-indigo-900/85 leading-relaxed">
-                      Tempelkan <strong>Web App URL</strong> yang sama di perangkat lain lalu klik <strong>Tarik Semua Data dari Spreadsheet</strong> agar seluruh 8 sheet langsung tersinkron tanpa menimpa data Spreadsheet.
+                    <p className="text-[11px] text-emerald-900/85 leading-relaxed">
+                      Web App URL Google Spreadsheet sudah terpasang otomatis. Data disinkronkan secara otomatis saat aplikasi dibuka, setiap ada perubahan, setiap 10 detik, dan saat koneksi internet kembali—tanpa perlu klik sinkronisasi manual.
                     </p>
                   </div>
-
-                  <p className="text-[11px] text-slate-500 leading-relaxed">
-                    Sinkronisasi berjalan otomatis setiap 10 detik, saat membuka tab, dan mengirim ulang antrean offline saat koneksi kembali.
-                  </p>
 
                   {renderSaveFooter()}
                 </section>
