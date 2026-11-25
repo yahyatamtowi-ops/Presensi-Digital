@@ -2,7 +2,7 @@ import {
   validateFonnteTokenInput,
   type FonnteConfig,
   type FonnteStatusResponse,
-} from './fonntePacing';
+} from './fonntePacing.ts';
 
 export const PRIMARY_FONNTE_ENV_KEYS = ['FONNTE_TOKEN', 'FONNTE_PRIMARY_TOKEN'] as const;
 export const BACKUP_2_FONNTE_ENV_KEYS = ['FONNTE_TOKEN_2'] as const;
