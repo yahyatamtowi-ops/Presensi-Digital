@@ -35,6 +35,7 @@ import {
   getPeriodDateRange,
   getTodayDateString,
   isBeforeCheckoutTime,
+  isSameClassName,
   type DailyRecapRow,
 } from '../utils/attendanceLogic';
 import { generateRecapPdf } from '../utils/recapPdf';
@@ -233,7 +234,9 @@ export function RecapView({
   const filteredDailyRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return allDailyRows.filter((row) => {
-      const matchesClass = effectiveClassFilter === 'ALL' || row.kelas === effectiveClassFilter;
+      const matchesClass =
+        effectiveClassFilter === 'ALL' ||
+        isSameClassName(row.kelas, effectiveClassFilter);
       const matchesStatus =
         statusFilter === 'ALL'
           ? true
@@ -252,7 +255,9 @@ export function RecapView({
   const filteredPeriodRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return allPeriodRows.filter((row) => {
-      const matchesClass = effectiveClassFilter === 'ALL' || row.kelas === effectiveClassFilter;
+      const matchesClass =
+        effectiveClassFilter === 'ALL' ||
+        isSameClassName(row.kelas, effectiveClassFilter);
       const matchesQuery =
         !q || row.nama.toLowerCase().includes(q) || row.nis.toLowerCase().includes(q);
       if (!matchesClass || !matchesQuery) return false;
@@ -327,11 +332,11 @@ export function RecapView({
 
   const myLateRequests = useMemo(() => {
     if (!isWaliKelas || !currentSession) return [];
-    const clsNorm = (assignedClass || currentSession.kelas_binaan || '').trim().toLowerCase();
+    const targetCls = (assignedClass || currentSession.kelas_binaan || '').trim();
     return lateCorrectionRequests.filter(
       (req) =>
         req.requested_by_user_id === currentSession.userId ||
-        (clsNorm && req.kelas.trim().toLowerCase() === clsNorm)
+        (targetCls && isSameClassName(req.kelas, targetCls))
     );
   }, [isWaliKelas, currentSession, assignedClass, lateCorrectionRequests]);
 
@@ -639,7 +644,7 @@ export function RecapView({
       const matched = accounts.find(
         (a) =>
           a.role === 'wali_kelas' &&
-          (a.kelas_binaan || '').trim().toLowerCase() === targetClass.toLowerCase()
+          isSameClassName(a.kelas_binaan, targetClass)
       );
       if (matched) {
         return {

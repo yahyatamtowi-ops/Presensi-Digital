@@ -37,7 +37,13 @@ import {
   getTimetableConfigKey,
   hydrateTimetableCellsFromSchedules,
   makeTimetableCellKey,
+  parseTimetableCellKey,
 } from '../utils/timetableLogic';
+import {
+  isSameClassName,
+  normalizeClassNameKey,
+  resolveCanonicalClassName,
+} from '../utils/attendanceLogic';
 import {
   downloadTimetableMatrixTemplate,
   parseTimetableMatrixFile,
@@ -114,11 +120,26 @@ export function TimetableMatrixView({
     const key = getTimetableConfigKey(year, semester);
     const saved = storedConfigs[key];
     if (saved) {
+      const normalizedCells: Record<string, TimetableConfig['cells'][string]> = {};
+      for (const [rawKey, val] of Object.entries(saved.cells || {})) {
+        const parsed = parseTimetableCellKey(rawKey);
+        const canonicalKey =
+          parsed && availableClasses.length > 0
+            ? makeTimetableCellKey(
+                parsed.hari,
+                parsed.jamKe,
+                resolveCanonicalClassName(parsed.kelas, availableClasses)
+              )
+            : rawKey;
+        if (!normalizedCells[canonicalKey]) {
+          normalizedCells[canonicalKey] = { ...val };
+        }
+      }
       return {
         ...saved,
         istirahat: saved.istirahat.map((b) => ({ ...b })),
         custom_classes: [...(saved.custom_classes || [])],
-        cells: { ...saved.cells },
+        cells: normalizedCells,
       };
     }
     const base = createDefaultTimetableConfig(
@@ -126,11 +147,22 @@ export function TimetableMatrixView({
       semester,
       settings.batas_jam_masuk || '07:15'
     );
-    return hydrateTimetableCellsFromSchedules(base, existingSchedules, false);
+    return hydrateTimetableCellsFromSchedules(
+      base,
+      existingSchedules,
+      false,
+      availableClasses
+    );
   };
 
   const [draft, setDraft] = useState<TimetableConfig>(() =>
     buildDraftForKey(selectedYear, selectedSemester, timetableConfigs, schedules)
+  );
+  const [durasiInput, setDurasiInput] = useState<string>(() =>
+    String(draft.durasi_jp_menit)
+  );
+  const [jumlahJpInput, setJumlahJpInput] = useState<string>(() =>
+    String(draft.jumlah_jp)
   );
 
   const storedConfigStamp = timetableConfigs[configKey]?.updated_at ?? '';
@@ -144,9 +176,15 @@ export function TimetableMatrixView({
     ) {
       return;
     }
-    setDraft(
-      buildDraftForKey(selectedYear, selectedSemester, timetableConfigs, schedules)
+    const nextDraft = buildDraftForKey(
+      selectedYear,
+      selectedSemester,
+      timetableConfigs,
+      schedules
     );
+    setDraft(nextDraft);
+    setDurasiInput(String(nextDraft.durasi_jp_menit));
+    setJumlahJpInput(String(nextDraft.jumlah_jp));
     setHasUnsavedChanges(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configKey, storedConfigStamp]);
@@ -188,11 +226,24 @@ export function TimetableMatrixView({
     return Array.from(map.values()).sort((a, b) => a.nama.localeCompare(b.nama));
   }, [masterSubjects, draft.cells]);
 
-  // Class columns for the table (students + schedules + custom added classes, fallback to default classes if school is still empty)
+  // Class columns for the table (students + schedules + custom added classes, deduplicated by canonical key)
   const activeClasses = useMemo(() => {
-    const set = new Set<string>();
+    const byKey = new Map<string, string>();
+    const addClass = (raw: string) => {
+      const trimmed = raw.trim();
+      if (!trimmed) return;
+      const canonical =
+        availableClasses.length > 0
+          ? resolveCanonicalClassName(trimmed, availableClasses)
+          : trimmed;
+      const key = normalizeClassNameKey(canonical) || canonical.toLowerCase();
+      if (!byKey.has(key)) {
+        byKey.set(key, canonical);
+      }
+    };
+
     for (const c of availableClasses) {
-      if (c.trim()) set.add(c.trim());
+      addClass(c);
     }
     for (const s of schedules) {
       if (
@@ -200,16 +251,16 @@ export function TimetableMatrixView({
         (!s.semester || normalizeSemester(s.semester) === selectedSemester) &&
         s.kelas.trim()
       ) {
-        set.add(s.kelas.trim());
+        addClass(s.kelas);
       }
     }
     for (const c of draft.custom_classes || []) {
-      if (c.trim()) set.add(c.trim());
+      addClass(c);
     }
-    if (set.size === 0) {
-      for (const c of DEFAULT_TIMETABLE_CLASSES) set.add(c);
+    if (byKey.size === 0) {
+      for (const c of DEFAULT_TIMETABLE_CLASSES) addClass(c);
     }
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b));
   }, [availableClasses, schedules, selectedYear, selectedSemester, draft.custom_classes]);
 
   const schoolDays = useMemo(
@@ -292,18 +343,83 @@ export function TimetableMatrixView({
     persistAndSyncDraft(nextDraft, undefined, true);
   }
 
+  /**
+   * Updates bell-schedule settings (Jam Mulai Sekolah, Durasi 1 JP, Jumlah Jam, Istirahat).
+   * Re-maps existing TeacherSchedules onto the new 1/2/3+ JP slot grid immediately without
+   * overwriting TeacherSchedules mid-edit, so changing e.g. 45 -> 35 menit cleanly places
+   * 07:30-08:40 on Jam ke-1 (07:30-08:05) and Jam ke-2 (08:05-08:40).
+   */
+  function updateBellDraft(
+    patch: Partial<TimetableConfig>,
+    remapExistingSchedules = true
+  ) {
+    const lockedBase: TimetableConfig = {
+      ...draft,
+      ...patch,
+      bell_locked_by_admin: true,
+    };
+
+    const scopedSchedules = schedules.filter(
+      (s) =>
+        s.tahun_ajaran === selectedYear &&
+        (!s.semester || normalizeSemester(s.semester) === selectedSemester)
+    );
+
+    const nextDraft =
+      remapExistingSchedules && scopedSchedules.length > 0
+        ? hydrateTimetableCellsFromSchedules(
+            lockedBase,
+            scopedSchedules,
+            true,
+            availableClasses,
+            true
+          )
+        : lockedBase;
+
+    setDraft(nextDraft);
+    setDurasiInput(String(nextDraft.durasi_jp_menit));
+    setJumlahJpInput(String(nextDraft.jumlah_jp));
+    setHasUnsavedChanges(true);
+  }
+
+  function commitDurasiInput(raw: string) {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || raw.trim() === '') {
+      setDurasiInput(String(draft.durasi_jp_menit));
+      return;
+    }
+    const clamped = Math.max(15, Math.min(180, Math.round(parsed)));
+    setDurasiInput(String(clamped));
+    if (clamped !== draft.durasi_jp_menit) {
+      updateBellDraft({ durasi_jp_menit: clamped }, true);
+    }
+  }
+
+  function commitJumlahJpInput(raw: string) {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || raw.trim() === '') {
+      setJumlahJpInput(String(draft.jumlah_jp));
+      return;
+    }
+    const clamped = Math.max(1, Math.min(16, Math.round(parsed)));
+    setJumlahJpInput(String(clamped));
+    if (clamped !== draft.jumlah_jp) {
+      updateBellDraft({ jumlah_jp: clamped }, false);
+    }
+  }
+
   function handleBreakChange(
     breakId: string,
     patch: Partial<TimetableBreak>
   ) {
-    const nextDraft: TimetableConfig = {
-      ...draft,
-      istirahat: draft.istirahat.map((b) =>
-        b.id === breakId ? { ...b, ...patch } : b
-      ),
-    };
-    setDraft(nextDraft);
-    persistAndSyncDraft(nextDraft, undefined, true);
+    updateBellDraft(
+      {
+        istirahat: draft.istirahat.map((b) =>
+          b.id === breakId ? { ...b, ...patch } : b
+        ),
+      },
+      true
+    );
   }
 
   function handleAddBreak() {
@@ -319,36 +435,36 @@ export function TimetableMatrixView({
       : defaultStart === '14:00'
         ? '14:15'
         : '10:15';
-    const nextDraft: TimetableConfig = {
-      ...draft,
-      istirahat: [
-        ...draft.istirahat,
-        {
-          id: `brk_${Date.now()}_${nextNum}`,
-          label: `Istirahat ${nextNum}`,
-          jam_mulai: defaultStart,
-          jam_selesai: defaultEnd,
-        },
-      ],
-    };
-    setDraft(nextDraft);
-    persistAndSyncDraft(nextDraft, undefined, true);
+    updateBellDraft(
+      {
+        istirahat: [
+          ...draft.istirahat,
+          {
+            id: `brk_${Date.now()}_${nextNum}`,
+            label: `Istirahat ${nextNum}`,
+            jam_mulai: defaultStart,
+            jam_selesai: defaultEnd,
+          },
+        ],
+      },
+      true
+    );
   }
 
   function handleRemoveBreak(breakId: string) {
-    const nextDraft: TimetableConfig = {
-      ...draft,
-      istirahat: draft.istirahat.filter((b) => b.id !== breakId),
-    };
-    setDraft(nextDraft);
-    persistAndSyncDraft(nextDraft, undefined, true);
+    updateBellDraft(
+      {
+        istirahat: draft.istirahat.filter((b) => b.id !== breakId),
+      },
+      true
+    );
   }
 
   function handleAddCustomClass(e: React.FormEvent) {
     e.preventDefault();
     const cleaned = newClassName.trim();
     if (!cleaned) return;
-    if (activeClasses.some((c) => c.toLowerCase() === cleaned.toLowerCase())) {
+    if (activeClasses.some((c) => isSameClassName(c, cleaned))) {
       setNewClassName('');
       return;
     }
@@ -374,10 +490,30 @@ export function TimetableMatrixView({
       delete nextCells[key];
     } else {
       const existing = draft.cells[key];
+      let defaultTeacherId = existing?.teacher_user_id;
+      let defaultTeacherName = existing?.teacher_name;
+
+      if (!defaultTeacherId && teachingAccounts.length > 0) {
+        // Avoid auto-assigning a teacher who is already teaching in another class at this exact (hari, jamKe)
+        const busyTeacherIds = new Set<string>();
+        for (const otherCls of activeClasses) {
+          if (isSameClassName(otherCls, kelas)) continue;
+          const otherCell = draft.cells[makeTimetableCellKey(hari, jamKe, otherCls)];
+          if (otherCell?.mata_pelajaran?.trim() && otherCell.teacher_user_id?.trim()) {
+            busyTeacherIds.add(otherCell.teacher_user_id.trim().toLowerCase());
+          }
+        }
+        const freeTeacher = teachingAccounts.find(
+          (t) => !busyTeacherIds.has(t.id.trim().toLowerCase())
+        );
+        defaultTeacherId = freeTeacher?.id;
+        defaultTeacherName = freeTeacher?.nama;
+      }
+
       nextCells[key] = {
         mata_pelajaran: mataPelajaran.trim(),
-        teacher_user_id: existing?.teacher_user_id || teachingAccounts[0]?.id,
-        teacher_name: existing?.teacher_name || teachingAccounts[0]?.nama,
+        teacher_user_id: defaultTeacherId,
+        teacher_name: defaultTeacherName,
       };
     }
     const nextDraft: TimetableConfig = { ...draft, cells: nextCells };
@@ -421,8 +557,16 @@ export function TimetableMatrixView({
   }
 
   function handleLoadFromTeacherSchedules() {
-    const nextDraft = hydrateTimetableCellsFromSchedules(draft, schedules, true);
+    const nextDraft = hydrateTimetableCellsFromSchedules(
+      draft,
+      schedules,
+      true,
+      availableClasses,
+      Boolean(draft.bell_locked_by_admin)
+    );
     setDraft(nextDraft);
+    setDurasiInput(String(nextDraft.durasi_jp_menit));
+    setJumlahJpInput(String(nextDraft.jumlah_jp));
     persistAndSyncDraft(nextDraft, undefined, false);
   }
 
@@ -691,7 +835,10 @@ export function TimetableMatrixView({
               type="time"
               value={draft.jam_mulai_sekolah}
               onChange={(e) =>
-                updateDraft({ jam_mulai_sekolah: e.target.value || '07:15' })
+                updateBellDraft(
+                  { jam_mulai_sekolah: e.target.value || '07:15' },
+                  true
+                )
               }
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
@@ -710,17 +857,31 @@ export function TimetableMatrixView({
               min={15}
               max={180}
               step={5}
-              value={draft.durasi_jp_menit}
-              onChange={(e) =>
-                updateDraft({
-                  durasi_jp_menit: Math.max(
-                    15,
-                    Math.min(180, Number(e.target.value) || 45)
-                  ),
-                })
-              }
+              value={durasiInput}
+              onChange={(e) => {
+                const val = e.target.value;
+                setDurasiInput(val);
+                const parsed = Number(val);
+                if (val.trim() !== '' && Number.isFinite(parsed) && parsed >= 15 && parsed <= 180) {
+                  updateBellDraft({ durasi_jp_menit: Math.round(parsed) }, true);
+                }
+              }}
+              onBlur={() => commitDurasiInput(durasiInput)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitDurasiInput(durasiInput);
+                }
+              }}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-mono tabular-nums text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
+            <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] leading-tight text-slate-500 font-mono">
+              <span className="whitespace-nowrap">1 JP={draft.durasi_jp_menit}m</span>
+              <span aria-hidden="true">·</span>
+              <span className="whitespace-nowrap">2 JP={draft.durasi_jp_menit * 2}m</span>
+              <span aria-hidden="true">·</span>
+              <span className="whitespace-nowrap">3 JP={draft.durasi_jp_menit * 3}m</span>
+            </p>
           </div>
 
           <div>
@@ -735,15 +896,22 @@ export function TimetableMatrixView({
               type="number"
               min={1}
               max={16}
-              value={draft.jumlah_jp}
-              onChange={(e) =>
-                updateDraft({
-                  jumlah_jp: Math.max(
-                    1,
-                    Math.min(16, Number(e.target.value) || 8)
-                  ),
-                })
-              }
+              value={jumlahJpInput}
+              onChange={(e) => {
+                const val = e.target.value;
+                setJumlahJpInput(val);
+                const parsed = Number(val);
+                if (val.trim() !== '' && Number.isFinite(parsed) && parsed >= 1 && parsed <= 16) {
+                  updateBellDraft({ jumlah_jp: Math.round(parsed) }, false);
+                }
+              }}
+              onBlur={() => commitJumlahJpInput(jumlahJpInput)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitJumlahJpInput(jumlahJpInput);
+                }
+              }}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-mono tabular-nums text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
           </div>

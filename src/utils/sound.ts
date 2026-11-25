@@ -1,8 +1,33 @@
+import {
+  buildClientTtsEndpointUrl,
+  isLikelyMp3Audio,
+  sanitizeTtsText,
+  splitTtsChunks,
+} from './ttsText';
+
+const TTS_CACHE_NAME = 'presensi-tts-v1';
+const MAX_MEMORY_CLIPS = 48;
+
+// Minimal valid 44-byte silent PCM WAV (1 sample at 8kHz) used to unlock HTMLAudioElement
+// inside a real user gesture on iPadOS Safari & Android Tablet browsers.
+const SILENT_WAV_DATA_URI =
+  'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+
 let audioCtx: AudioContext | null = null;
+let sharedHtmlAudio: HTMLAudioElement | null = null;
+let htmlAudioUnlocked = false;
+let audioContextUnlocked = false;
 let cachedVoices: SpeechSynthesisVoice[] = [];
 let speechEngineInitialized = false;
 let speechUnlocked = false;
 let pendingWelcomeText: string | null = null;
+let playbackGeneration = 0;
+let activeBufferSource: AudioBufferSourceNode | null = null;
+let activeBlobUrl: string | null = null;
+let preloadedSchoolKey: string | null = null;
+
+const memoryAudioCache = new Map<string, ArrayBuffer>();
+const inflightAudioFetches = new Map<string, Promise<ArrayBuffer | null>>();
 const activeUtterances = new Set<SpeechSynthesisUtterance>();
 
 export interface VoiceLike {
@@ -34,14 +59,16 @@ export interface PickVoiceOptions {
   isOffline?: boolean;
 }
 
+export interface UnlockSpeechOptions {
+  /** Skip queueing a silent SpeechSynthesisUtterance when real speech is about to start immediately. */
+  skipSpeechPrimer?: boolean;
+  /** Whether to immediately speak any deferred welcome greeting during this unlock call. Defaults to true. */
+  consumePendingWelcome?: boolean;
+}
+
 /**
- * Selects the best female Indonesian voice across Desktop, Android (Chrome/Samsung TTS),
- * and iOS/iPadOS (Safari Damayanti).
- *
- * When offline (`isOffline: true`), strictly avoids cloud-only (`localService: false`)
- * voices such as "Google Bahasa Indonesia" that fail offline and cause browsers to
- * silently fall back to an English/male OS default voice (e.g. Microsoft David).
- * Never hijacks Indonesian text with an English voice.
+ * Selects the best female Indonesian fallback voice for browser SpeechSynthesis
+ * (used only when offline AND the unified MP3 voice clip is not yet cached).
  */
 export function pickFemaleIndonesianVoice<T extends VoiceLike>(
   voices: T[],
@@ -55,18 +82,18 @@ export function pickFemaleIndonesianVoice<T extends VoiceLike>(
   const indonesianVoices = voices.filter((v) => isIndonesianLangTag(v.lang));
   const localIndonesianVoices = indonesianVoices.filter((v) => v.localService !== false);
 
-  // 1. Explicit Indonesian female local voice (always #1 for both online & offline reliability)
+  // 1. Explicit Indonesian female local voice
   const idFemaleLocal = localIndonesianVoices.find(
     (v) => FEMALE_VOICE_HINT.test(v.name) && !MALE_VOICE_HINT.test(v.name)
   );
   if (idFemaleLocal) return { voice: idFemaleLocal, isExplicitFemale: true };
 
   if (isOffline) {
-    // 2 (Offline). Non-male local Indonesian voice (e.g. Android/Samsung/Windows local id-ID)
+    // 2 (Offline). Non-male local Indonesian voice
     const idNonMaleLocal = localIndonesianVoices.find((v) => !MALE_VOICE_HINT.test(v.name));
     if (idNonMaleLocal) return { voice: idNonMaleLocal, isExplicitFemale: false };
 
-    // 3 (Offline). Local Malay female/non-male voice (pronounces Indonesian cleanly offline)
+    // 3 (Offline). Local Malay female/non-male voice
     const localMalayVoices = voices.filter(
       (v) => v.localService !== false && MALAY_LANG_REGEX.test((v.lang || '').trim())
     );
@@ -78,17 +105,16 @@ export function pickFemaleIndonesianVoice<T extends VoiceLike>(
     const msNonMaleLocal = localMalayVoices.find((v) => !MALE_VOICE_HINT.test(v.name));
     if (msNonMaleLocal) return { voice: msNonMaleLocal, isExplicitFemale: false };
 
-    // 4 (Offline). Any local Indonesian voice (will be pitch-adjusted upward for female contour)
+    // 4 (Offline). Any local Indonesian voice (pitch-adjusted upward)
     if (localIndonesianVoices.length > 0) {
       return { voice: localIndonesianVoices[0], isExplicitFemale: false };
     }
 
-    // 5 (Offline). Never choose a cloud-only voice or English voice when offline;
-    // return null so utterance.lang = 'id-ID' lets the OS native Indonesian engine handle it.
+    // 5 (Offline). Never choose a cloud-only or English voice when offline
     return { voice: null, isExplicitFemale: false };
   }
 
-  // Online priority: explicit Indonesian female voice (including Google Bahasa Indonesia cloud)
+  // Online priority: explicit Indonesian female voice (including Google Bahasa Indonesia)
   const idFemaleAny = indonesianVoices.find(
     (v) => FEMALE_VOICE_HINT.test(v.name) && !MALE_VOICE_HINT.test(v.name)
   );
@@ -108,29 +134,458 @@ export function pickFemaleIndonesianVoice<T extends VoiceLike>(
 
   // 4. Close Malay female voice as fallback if OS lacks id-ID pack
   const msFemale = voices.find(
-    (v) =>
-      MALAY_LANG_REGEX.test((v.lang || '').trim()) &&
-      !MALE_VOICE_HINT.test(v.name)
+    (v) => MALAY_LANG_REGEX.test((v.lang || '').trim()) && !MALE_VOICE_HINT.test(v.name)
   );
   if (msFemale) return { voice: msFemale, isExplicitFemale: FEMALE_VOICE_HINT.test(msFemale.name) };
 
-  // 5. Leave voice null so Android/iOS native TTS uses utterance.lang = 'id-ID'
+  // 5. Leave voice null so OS native TTS uses utterance.lang = 'id-ID'
   return { voice: null, isExplicitFemale: false };
 }
 
-function getAudioContext(): AudioContext | null {
+function getAudioContext(resumeIfSuspended = true): AudioContext | null {
   if (typeof window === 'undefined') return null;
   const Ctx =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctx) return null;
   if (!audioCtx) {
-    audioCtx = new Ctx();
+    try {
+      audioCtx = new Ctx();
+    } catch {
+      return null;
+    }
   }
-  if (audioCtx.state === 'suspended') {
-    audioCtx.resume().catch(() => {});
+  if (resumeIfSuspended && audioCtx.state === 'suspended') {
+    void audioCtx.resume().then(() => {
+      if (audioCtx && audioCtx.state === 'running') {
+        audioContextUnlocked = true;
+      }
+    }).catch(() => {});
+  } else if (audioCtx.state === 'running') {
+    audioContextUnlocked = true;
   }
   return audioCtx;
+}
+
+function getSharedHtmlAudio(): HTMLAudioElement | null {
+  if (typeof window === 'undefined' || typeof Audio === 'undefined') return null;
+  if (!sharedHtmlAudio) {
+    const el = new Audio();
+    el.preload = 'auto';
+    // Required for iOS/iPadOS Safari inline audio playback without fullscreen takeover
+    el.setAttribute('playsinline', 'true');
+    el.setAttribute('webkit-playsinline', 'true');
+    sharedHtmlAudio = el;
+  }
+  return sharedHtmlAudio;
+}
+
+function revokeActiveBlobUrl(): void {
+  if (activeBlobUrl) {
+    try {
+      URL.revokeObjectURL(activeBlobUrl);
+    } catch {
+      // Ignore revoke errors
+    }
+    activeBlobUrl = null;
+  }
+}
+
+/**
+ * Unlocks Web Audio API (AudioContext) AND reusable HTMLAudioElement synchronously
+ * inside a real user gesture (click / touchend / keydown) so iPadOS Safari,
+ * Android Chrome Tablets, Samsung Internet, and HP browsers reliably play audio.
+ */
+function unlockAudioHardware(): void {
+  try {
+    const ctx = getAudioContext(true);
+    if (ctx) {
+      const needsSilentUnlock = !audioContextUnlocked || ctx.state !== 'running';
+      if (ctx.state === 'suspended') {
+        void ctx.resume().then(() => {
+          if (audioCtx && audioCtx.state === 'running') {
+            audioContextUnlocked = true;
+          }
+        }).catch(() => {});
+      }
+      if (needsSilentUnlock) {
+        // Play a 1-sample silent AudioBuffer synchronously inside the user gesture
+        // to permanently unlock Web Audio playback on iOS/iPadOS Safari & Android Tablets.
+        const silentBuffer = ctx.createBuffer(1, 1, 22050);
+        const source = ctx.createBufferSource();
+        source.buffer = silentBuffer;
+        source.connect(ctx.destination);
+        source.start(0);
+        if (ctx.state === 'running') {
+          audioContextUnlocked = true;
+        }
+      }
+    }
+  } catch {
+    // Ignore AudioContext unlock errors
+  }
+
+  try {
+    const el = getSharedHtmlAudio();
+    if (el && !htmlAudioUnlocked) {
+      el.muted = true;
+      el.src = SILENT_WAV_DATA_URI;
+      const playPromise = el.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        void playPromise
+          .then(() => {
+            htmlAudioUnlocked = true;
+            try {
+              el.pause();
+              el.currentTime = 0;
+              el.muted = false;
+            } catch {
+              // Ignore reset quirks
+            }
+          })
+          .catch(() => {
+            el.muted = false;
+          });
+      } else {
+        htmlAudioUnlocked = true;
+        el.muted = false;
+      }
+    }
+  } catch {
+    // Ignore HTMLAudioElement unlock errors
+  }
+}
+
+function setMemoryCachedClip(key: string, buffer: ArrayBuffer): void {
+  if (memoryAudioCache.size >= MAX_MEMORY_CLIPS) {
+    const oldest = memoryAudioCache.keys().next().value;
+    if (oldest !== undefined) {
+      memoryAudioCache.delete(oldest);
+    }
+  }
+  memoryAudioCache.set(key, buffer);
+}
+
+async function readFromBrowserCache(url: string): Promise<ArrayBuffer | null> {
+  if (typeof window === 'undefined' || !('caches' in window)) return null;
+  try {
+    const cache = await window.caches.open(TTS_CACHE_NAME);
+    const matched = await cache.match(url);
+    if (!matched || !matched.ok) return null;
+    const buf = await matched.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    if (bytes.length < 128 || !isLikelyMp3Audio(bytes)) return null;
+    return buf;
+  } catch {
+    return null;
+  }
+}
+
+async function writeToBrowserCache(url: string, buffer: ArrayBuffer): Promise<void> {
+  if (typeof window === 'undefined' || !('caches' in window)) return;
+  try {
+    const cache = await window.caches.open(TTS_CACHE_NAME);
+    const response = new Response(buffer.slice(0), {
+      status: 200,
+      headers: {
+        'Content-Type': 'audio/mpeg',
+        'Cache-Control': 'public, max-age=86400',
+      },
+    });
+    await cache.put(url, response);
+  } catch {
+    // Ignore Cache Storage quota / private browsing errors
+  }
+}
+
+/**
+ * Fetches (or reads from memory/Cache Storage) the unified Google Bahasa Indonesia
+ * female MP3 audio clip for a sanitized text chunk via same-origin /api/tts.
+ */
+async function loadUnifiedVoiceClip(
+  chunk: string,
+  options?: { cacheOnly?: boolean }
+): Promise<ArrayBuffer | null> {
+  const clean = sanitizeTtsText(chunk, 200);
+  if (!clean) return null;
+
+  const memHit = memoryAudioCache.get(clean);
+  if (memHit) return memHit;
+
+  const endpointUrl = buildClientTtsEndpointUrl(clean);
+  const cacheHit = await readFromBrowserCache(endpointUrl);
+  if (cacheHit) {
+    setMemoryCachedClip(clean, cacheHit);
+    return cacheHit;
+  }
+
+  if (options?.cacheOnly || isVoiceOfflineContext() || typeof fetch !== 'function') {
+    return null;
+  }
+
+  const existingInflight = inflightAudioFetches.get(clean);
+  if (existingInflight) {
+    return existingInflight;
+  }
+
+  const fetchTask = (async (): Promise<ArrayBuffer | null> => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(endpointUrl, {
+        method: 'GET',
+        cache: 'force-cache',
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const contentType = (response.headers.get('content-type') || '').toLowerCase();
+      if (contentType && !contentType.includes('audio') && !contentType.includes('octet-stream')) {
+        return null;
+      }
+      const buffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      if (bytes.length < 128 || !isLikelyMp3Audio(bytes)) {
+        return null;
+      }
+      setMemoryCachedClip(clean, buffer);
+      void writeToBrowserCache(endpointUrl, buffer);
+      return buffer;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
+      inflightAudioFetches.delete(clean);
+    }
+  })();
+
+  inflightAudioFetches.set(clean, fetchTask);
+  return fetchTask;
+}
+
+/**
+ * Stops any currently playing MP3 voice clip or browser SpeechSynthesis utterance.
+ */
+export function stopAllVoicePlayback(): void {
+  playbackGeneration += 1;
+
+  if (activeBufferSource) {
+    try {
+      activeBufferSource.onended = null;
+      activeBufferSource.stop();
+      activeBufferSource.disconnect();
+    } catch {
+      // Ignore already-stopped source errors
+    }
+    activeBufferSource = null;
+  }
+
+  if (sharedHtmlAudio) {
+    try {
+      sharedHtmlAudio.onended = null;
+      sharedHtmlAudio.onerror = null;
+      sharedHtmlAudio.pause();
+      sharedHtmlAudio.currentTime = 0;
+    } catch {
+      // Ignore HTMLAudioElement stop errors
+    }
+  }
+  revokeActiveBlobUrl();
+
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+        window.speechSynthesis.cancel();
+      }
+    } catch {
+      // Ignore speechSynthesis cancel errors
+    }
+  }
+}
+
+type ClipPlaybackResult = 'played' | 'cancelled' | 'blocked' | 'failed';
+
+async function playSingleBufferViaWebAudio(
+  buffer: ArrayBuffer,
+  generation: number,
+  onStart?: () => void
+): Promise<ClipPlaybackResult> {
+  const ctx = getAudioContext(true);
+  if (!ctx) return 'failed';
+
+  if (ctx.state === 'suspended') {
+    try {
+      await ctx.resume();
+    } catch {
+      return 'blocked';
+    }
+  }
+
+  if (generation !== playbackGeneration) return 'cancelled';
+  if (ctx.state !== 'running') return 'blocked';
+
+  audioContextUnlocked = true;
+
+  let decoded: AudioBuffer;
+  try {
+    // Always pass a copy (.slice(0)) because decodeAudioData detaches the ArrayBuffer in Safari/Chrome
+    decoded = await ctx.decodeAudioData(buffer.slice(0));
+  } catch {
+    return 'failed';
+  }
+
+  if (generation !== playbackGeneration) return 'cancelled';
+
+  return new Promise<ClipPlaybackResult>((resolve) => {
+    try {
+      const source = ctx.createBufferSource();
+      source.buffer = decoded;
+      source.connect(ctx.destination);
+      activeBufferSource = source;
+
+      source.onended = () => {
+        if (activeBufferSource === source) {
+          activeBufferSource = null;
+        }
+        resolve(generation === playbackGeneration ? 'played' : 'cancelled');
+      };
+
+      onStart?.();
+      source.start(0);
+    } catch {
+      activeBufferSource = null;
+      resolve('failed');
+    }
+  });
+}
+
+async function playSingleBufferViaHtmlAudio(
+  buffer: ArrayBuffer,
+  generation: number,
+  onStart?: () => void
+): Promise<ClipPlaybackResult> {
+  const el = getSharedHtmlAudio();
+  if (!el || typeof URL === 'undefined' || typeof Blob === 'undefined') {
+    return 'failed';
+  }
+
+  revokeActiveBlobUrl();
+  const blob = new Blob([buffer.slice(0)], { type: 'audio/mpeg' });
+  const blobUrl = URL.createObjectURL(blob);
+  activeBlobUrl = blobUrl;
+
+  return new Promise<ClipPlaybackResult>((resolve) => {
+    let settled = false;
+    const finish = (result: ClipPlaybackResult) => {
+      if (settled) return;
+      settled = true;
+      el.onended = null;
+      el.onerror = null;
+      el.onplaying = null;
+      if (activeBlobUrl === blobUrl) {
+        revokeActiveBlobUrl();
+      }
+      resolve(result);
+    };
+
+    el.muted = false;
+    el.volume = 1;
+    el.onplaying = () => {
+      htmlAudioUnlocked = true;
+      onStart?.();
+    };
+    el.onended = () => finish(generation === playbackGeneration ? 'played' : 'cancelled');
+    el.onerror = () => finish('failed');
+    el.src = blobUrl;
+
+    try {
+      const playPromise = el.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        void playPromise
+          .then(() => {
+            htmlAudioUnlocked = true;
+            onStart?.();
+          })
+          .catch((err: unknown) => {
+            const name = err instanceof Error ? err.name : '';
+            if (name === 'NotAllowedError') {
+              finish('blocked');
+            } else {
+              finish('failed');
+            }
+          });
+      } else {
+        htmlAudioUnlocked = true;
+        onStart?.();
+      }
+    } catch {
+      finish('failed');
+    }
+  });
+}
+
+/**
+ * Plays one or more Indonesian text chunks using the unified /api/tts female MP3 voice.
+ * Uses Web Audio API (AudioContext) first and automatically falls back to HTMLAudioElement.
+ */
+async function playUnifiedIndonesianMp3Chunks(
+  chunks: string[],
+  options?: {
+    fromUserGesture?: boolean;
+    cacheOnly?: boolean;
+    onStart?: () => void;
+  }
+): Promise<ClipPlaybackResult> {
+  if (chunks.length === 0) return 'failed';
+
+  stopAllVoicePlayback();
+  const generation = playbackGeneration;
+
+  if (options?.fromUserGesture) {
+    unlockAudioHardware();
+  }
+
+  // Prefetch all chunks concurrently so multi-sentence reminders have zero awkward gaps
+  const buffers = await Promise.all(
+    chunks.map((chunk) => loadUnifiedVoiceClip(chunk, { cacheOnly: options?.cacheOnly }))
+  );
+
+  if (generation !== playbackGeneration) return 'cancelled';
+  if (buffers.some((b) => !b)) {
+    return 'failed';
+  }
+
+  let notifiedStart = false;
+  const triggerStartOnce = () => {
+    if (!notifiedStart) {
+      notifiedStart = true;
+      speechUnlocked = true;
+      options?.onStart?.();
+    }
+  };
+
+  for (const buf of buffers) {
+    if (!buf) return 'failed';
+    if (generation !== playbackGeneration) return 'cancelled';
+
+    // Try Web Audio API first (best reliability on iPadOS Safari, Android Tablets, HP, and Desktop)
+    const webAudioResult = await playSingleBufferViaWebAudio(buf, generation, triggerStartOnce);
+    if (webAudioResult === 'played' || webAudioResult === 'cancelled') {
+      continue;
+    }
+
+    // Fallback to unlocked HTMLAudioElement (helps on browsers with AudioContext codec quirks)
+    const htmlAudioResult = await playSingleBufferViaHtmlAudio(buf, generation, triggerStartOnce);
+    if (htmlAudioResult === 'played' || htmlAudioResult === 'cancelled') {
+      continue;
+    }
+
+    if (webAudioResult === 'blocked' || htmlAudioResult === 'blocked') {
+      return 'blocked';
+    }
+    return 'failed';
+  }
+
+  return 'played';
 }
 
 function refreshVoices(): SpeechSynthesisVoice[] {
@@ -159,10 +614,7 @@ function createIndonesianFemaleUtterance(
   });
 
   utterance.lang = voice?.lang || 'id-ID';
-  // Slightly calmer rate offline so local OS Indonesian TTS articulates every syllable clearly
   utterance.rate = useOfflineMode ? Math.min(rate, 0.95) : rate;
-  // Use natural female pitch when an explicit female voice (e.g. Damayanti/Gadis/idc) is active,
-  // and elevated female contour on generic/local fallback voices so it stays unmistakably female.
   utterance.pitch = isExplicitFemale ? 1.1 : 1.26;
   utterance.volume = 1;
   if (voice) {
@@ -216,11 +668,14 @@ function retainAndSpeak(
   }
 }
 
-function queueSpeakCleanly(
+/**
+ * Browser SpeechSynthesis fallback (used ONLY when offline & uncached, or if /api/tts is unreachable).
+ * Always waits 80ms after synth.cancel() so Android Chrome Tablets and iPadOS Safari never drop the new utterance.
+ */
+function queueSpeechSynthesisFallback(
   text: string,
   opts?: {
     rate?: number;
-    fromUserGesture?: boolean;
     forceOfflineLocal?: boolean;
     onStart?: () => void;
     onError?: () => void;
@@ -231,7 +686,6 @@ function queueSpeakCleanly(
   if (!synth) return;
 
   const rate = opts?.rate ?? 0.97;
-  const fromGesture = Boolean(opts?.fromUserGesture);
   const forceOfflineLocal = opts?.forceOfflineLocal;
 
   const runSpeak = (retryWithLocal = false) => {
@@ -241,8 +695,6 @@ function queueSpeakCleanly(
     retainAndSpeak(synth, utterance, {
       onStart: opts?.onStart,
       onError: () => {
-        // If a cloud voice failed (e.g. sudden internet drop before navigator.onLine updated),
-        // automatically retry once with a strictly local Indonesian female voice.
         if (!retryWithLocal && !isLocalVoice) {
           runSpeak(true);
           return;
@@ -252,36 +704,58 @@ function queueSpeakCleanly(
     });
   };
 
-  // On iOS Safari & Android Chrome, calling cancel() synchronously right before speak()
-  // can cancel the newly queued utterance. Only cancel if actually speaking/pending,
-  // and inside a user gesture call speak() synchronously to keep gesture activation valid.
   if (synth.speaking || synth.pending) {
     try {
       synth.cancel();
     } catch {
       // Ignore cancel errors
     }
-    if (fromGesture) {
-      runSpeak();
-    } else {
-      setTimeout(() => runSpeak(), 60);
-    }
+    setTimeout(() => runSpeak(), 80);
     return;
   }
 
   runSpeak();
 }
 
+function queueMultipleSpeechSynthesisFallback(messages: string[]): void {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+  const synth = window.speechSynthesis;
+  if (!synth) return;
+
+  const speakQueue = () => {
+    for (const msg of messages) {
+      const { utterance } = createIndonesianFemaleUtterance(msg, 0.96);
+      retainAndSpeak(synth, utterance);
+    }
+  };
+
+  if (synth.speaking || synth.pending) {
+    try {
+      synth.cancel();
+    } catch {
+      // Ignore cancel errors
+    }
+    setTimeout(speakQueue, 80);
+    return;
+  }
+
+  speakQueue();
+}
+
 /**
- * Unlocks Web Audio & SpeechSynthesis inside a real mobile/tablet user gesture
- * (click / touchend / pointerdown / keydown). If a welcome greeting was blocked
- * by mobile autoplay policies, it speaks immediately inside this gesture.
+ * Unlocks Web Audio, HTMLAudioElement, and SpeechSynthesis inside a real mobile/tablet user gesture
+ * (click / touchend / keydown). When `skipSpeechPrimer` is true (e.g. tapping the Speaker icon or
+ * OpeningSplash), avoids queueing a silent SpeechSynthesis utterance that could race with real playback.
  */
-export function unlockSpeechForMobile(): void {
-  try {
-    getAudioContext();
-  } catch {
-    // Ignore audio context errors
+export function unlockSpeechForMobile(options?: UnlockSpeechOptions): void {
+  unlockAudioHardware();
+
+  const shouldConsumePending = options?.consumePendingWelcome !== false;
+  if (shouldConsumePending && pendingWelcomeText) {
+    const textToSpeak = pendingWelcomeText;
+    pendingWelcomeText = null;
+    speakFemaleIndonesian(textToSpeak, true);
+    return;
   }
 
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
@@ -290,20 +764,12 @@ export function unlockSpeechForMobile(): void {
 
   refreshVoices();
 
-  if (pendingWelcomeText) {
-    const textToSpeak = pendingWelcomeText;
-    pendingWelcomeText = null;
-    queueSpeakCleanly(textToSpeak, { rate: 0.96, fromUserGesture: true });
-    return;
-  }
-
-  if (!speechUnlocked) {
+  if (!options?.skipSpeechPrimer && !speechUnlocked) {
     speechUnlocked = true;
     try {
       if (synth.paused) {
         synth.resume();
       }
-      // Prime iOS/Android speech engine with a silent zero-volume utterance inside gesture
       if (!synth.speaking && !synth.pending) {
         const primer = new SpeechSynthesisUtterance(' ');
         primer.lang = 'id-ID';
@@ -318,8 +784,9 @@ export function unlockSpeechForMobile(): void {
 }
 
 /**
- * Eagerly preloads browser voices (Android/iOS load voices asynchronously)
- * and registers one-time mobile gesture unlock hooks (touchend + click + keydown).
+ * Eagerly preloads browser fallback voices and registers mobile/tablet gesture unlock hooks
+ * (`touchend`, `click`, `keydown` — intentionally omitting `pointerdown` so iPadOS Safari
+ * never consumes the gesture before `touchend` unlocks AudioContext).
  */
 export function initSpeechEngine(): void {
   if (typeof window === 'undefined' || speechEngineInitialized) return;
@@ -338,8 +805,9 @@ export function initSpeechEngine(): void {
   }
 
   const handleMobileGesture = () => {
-    unlockSpeechForMobile();
-    if (!pendingWelcomeText && speechUnlocked) {
+    unlockSpeechForMobile({ skipSpeechPrimer: true });
+    // Keep gesture listeners attached until AudioContext is genuinely running AND no welcome is pending
+    if (audioContextUnlocked && !pendingWelcomeText) {
       window.removeEventListener('touchend', handleMobileGesture, true);
       window.removeEventListener('click', handleMobileGesture, true);
       window.removeEventListener('keydown', handleMobileGesture, true);
@@ -351,9 +819,41 @@ export function initSpeechEngine(): void {
   window.addEventListener('keydown', handleMobileGesture, { capture: true, passive: true });
 }
 
+/**
+ * Quietly preloads core school female voice clips into memory & Cache Storage
+ * so HP, Tablet, and Laptop speak instantaneously (even if Wi-Fi later drops).
+ */
+export function preloadSchoolVoiceClips(namaSekolah: string): void {
+  if (typeof window === 'undefined' || isVoiceOfflineContext()) return;
+  const schoolKey = (namaSekolah || '').trim() || 'Sekolah';
+  if (preloadedSchoolKey === schoolKey) return;
+  preloadedSchoolKey = schoolKey;
+
+  const corePhrases = [
+    buildWelcomeGreetingText(schoolKey),
+    'Presensi Berhasil',
+    buildCheckoutSuccessText(),
+    'Presensi Ganda, Data Ditolak',
+    buildOfflineAttendanceSpeechText('masuk', 'Hadir'),
+    buildOfflineAttendanceSpeechText('masuk', 'Terlambat'),
+    buildOfflineAttendanceSpeechText('pulang'),
+  ];
+
+  void (async () => {
+    for (const phrase of corePhrases) {
+      if (isVoiceOfflineContext()) break;
+      const chunks = splitTtsChunks(phrase);
+      for (const chunk of chunks) {
+        if (isVoiceOfflineContext()) break;
+        await loadUnifiedVoiceClip(chunk).catch(() => null);
+      }
+    }
+  })();
+}
+
 export function playSuccessBeep(): void {
   try {
-    const ctx = getAudioContext();
+    const ctx = getAudioContext(true);
     if (!ctx) return;
 
     const now = ctx.currentTime;
@@ -381,59 +881,40 @@ export function speakFemaleIndonesian(
   fromUserGesture = false,
   options?: { forceOfflineLocal?: boolean }
 ): void {
+  const cleanText = sanitizeTtsText(text);
+  if (!cleanText || typeof window === 'undefined') return;
+
   try {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      return;
-    }
-
     initSpeechEngine();
-    const synth = window.speechSynthesis;
-    if (!synth) return;
-
-    const forceOfflineLocal = options?.forceOfflineLocal;
-
-    // Inside a real user tap (tablet/HP), speak immediately without waiting for async voiceschanged
     if (fromUserGesture) {
-      queueSpeakCleanly(text, {
-        rate: forceOfflineLocal ? 0.95 : 0.98,
-        fromUserGesture: true,
-        forceOfflineLocal,
-      });
-      return;
+      unlockAudioHardware();
     }
 
-    const voices = refreshVoices();
-    if (voices.length === 0 && 'onvoiceschanged' in synth) {
-      let triggered = false;
-      const handleVoices = () => {
-        if (triggered) return;
-        triggered = true;
-        synth.removeEventListener?.('voiceschanged', handleVoices);
-        queueSpeakCleanly(text, {
-          rate: forceOfflineLocal ? 0.95 : 0.98,
-          forceOfflineLocal,
-        });
-      };
-      synth.addEventListener?.('voiceschanged', handleVoices);
-      setTimeout(() => {
-        if (!triggered) {
-          triggered = true;
-          synth.removeEventListener?.('voiceschanged', handleVoices);
-          queueSpeakCleanly(text, {
-            rate: forceOfflineLocal ? 0.95 : 0.98,
-            forceOfflineLocal,
-          });
+    const chunks = splitTtsChunks(cleanText);
+    const cacheOnly = Boolean(options?.forceOfflineLocal) || isVoiceOfflineContext();
+
+    void playUnifiedIndonesianMp3Chunks(chunks, {
+      fromUserGesture,
+      cacheOnly,
+    })
+      .then((result) => {
+        if (result === 'played' || result === 'cancelled') {
+          return;
         }
-      }, 220);
-      return;
-    }
-
-    queueSpeakCleanly(text, {
-      rate: forceOfflineLocal ? 0.95 : 0.98,
-      forceOfflineLocal,
-    });
+        // Fallback to local Indonesian SpeechSynthesis only if MP3 voice failed or is uncached offline
+        queueSpeechSynthesisFallback(cleanText, {
+          rate: options?.forceOfflineLocal ? 0.95 : 0.98,
+          forceOfflineLocal: options?.forceOfflineLocal,
+        });
+      })
+      .catch(() => {
+        queueSpeechSynthesisFallback(cleanText, {
+          rate: options?.forceOfflineLocal ? 0.95 : 0.98,
+          forceOfflineLocal: options?.forceOfflineLocal,
+        });
+      });
   } catch {
-    // Ignore speech synthesis errors
+    // Ignore speech errors in restricted environments
   }
 }
 
@@ -445,8 +926,8 @@ export function buildCheckoutSuccessText(): string {
 }
 
 /**
- * Pure Bahasa Indonesia speech copy for offline attendance so local Indonesian
- * female TTS articulates every word clearly without English loanword glitches.
+ * Pure Bahasa Indonesia speech copy for offline attendance so voice playback
+ * articulates every word clearly without English loanword glitches.
  */
 export function buildOfflineAttendanceSpeechText(
   scanType: 'masuk' | 'pulang',
@@ -484,7 +965,7 @@ export function speakOfflineAttendanceNotification(
 
 export function playWarningBeep(): void {
   try {
-    const ctx = getAudioContext();
+    const ctx = getAudioContext(true);
     if (!ctx) return;
 
     const now = ctx.currentTime;
@@ -508,58 +989,29 @@ export function playWarningBeep(): void {
 }
 
 export function speakFemaleIndonesianMessages(messages: string[]): void {
-  const cleanMessages = messages.map((m) => m.trim()).filter(Boolean);
-  if (cleanMessages.length === 0) return;
+  const cleanMessages = messages.map((m) => sanitizeTtsText(m)).filter(Boolean);
+  if (cleanMessages.length === 0 || typeof window === 'undefined') return;
 
   try {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      return;
-    }
-
     initSpeechEngine();
-    const synth = window.speechSynthesis;
-    if (!synth) return;
+    const allChunks = cleanMessages.flatMap((msg) => splitTtsChunks(msg));
+    const cacheOnly = isVoiceOfflineContext();
 
-    const speakAll = () => {
-      try {
-        if (synth.speaking || synth.pending) {
-          synth.cancel();
+    void playUnifiedIndonesianMp3Chunks(allChunks, {
+      fromUserGesture: false,
+      cacheOnly,
+    })
+      .then((result) => {
+        if (result === 'played' || result === 'cancelled') {
+          return;
         }
-        const runQueue = () => {
-          for (const msg of cleanMessages) {
-            const { utterance } = createIndonesianFemaleUtterance(msg, 0.96);
-            retainAndSpeak(synth, utterance);
-          }
-        };
-        setTimeout(runQueue, 60);
-      } catch {
-        // Ignore TTS failures in headless or unsupported browsers
-      }
-    };
-
-    const currentVoices = refreshVoices();
-    if (currentVoices.length === 0 && 'onvoiceschanged' in synth) {
-      let triggered = false;
-      const handleVoices = () => {
-        if (triggered) return;
-        triggered = true;
-        synth.removeEventListener?.('voiceschanged', handleVoices);
-        speakAll();
-      };
-      synth.addEventListener?.('voiceschanged', handleVoices);
-      setTimeout(() => {
-        if (!triggered) {
-          triggered = true;
-          synth.removeEventListener?.('voiceschanged', handleVoices);
-          speakAll();
-        }
-      }, 220);
-      return;
-    }
-
-    speakAll();
+        queueMultipleSpeechSynthesisFallback(cleanMessages);
+      })
+      .catch(() => {
+        queueMultipleSpeechSynthesisFallback(cleanMessages);
+      });
   } catch {
-    // Ignore speech synthesis errors
+    // Ignore speech errors
   }
 }
 
@@ -586,23 +1038,34 @@ export function speakWelcomeGreeting(
   fromUserGesture = false
 ): string {
   const text = buildWelcomeGreetingText(namaSekolah);
+  if (typeof window === 'undefined') return text;
+
   try {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      return text;
-    }
-
     initSpeechEngine();
-    const synth = window.speechSynthesis;
-    if (!synth) return text;
+    const chunks = splitTtsChunks(text);
 
-    // If invoked directly from a user tap (e.g. tapping splash or speaker button on tablet/HP),
-    // speak synchronously so iOS Safari and Android Chrome allow audio playback immediately.
+    // Direct user tap (e.g., tapping the top-right Speaker button or OpeningSplash on Tablet/HP):
+    // unlock hardware synchronously and play the exact same Google Bahasa Indonesia female MP3.
     if (fromUserGesture) {
       pendingWelcomeText = null;
-      queueSpeakCleanly(text, { rate: 0.96, fromUserGesture: true });
+      unlockAudioHardware();
+      void playUnifiedIndonesianMp3Chunks(chunks, {
+        fromUserGesture: true,
+        cacheOnly: isVoiceOfflineContext(),
+      })
+        .then((result) => {
+          if (result === 'played' || result === 'cancelled') return;
+          queueSpeechSynthesisFallback(text, { rate: 0.96 });
+        })
+        .catch(() => {
+          queueSpeechSynthesisFallback(text, { rate: 0.96 });
+        });
       return text;
     }
 
+    // Automatic greeting after splash fade-out:
+    // attempt unified MP3 playback; if mobile/tablet autoplay policy blocks it,
+    // arm a one-time touchend/click/keydown unlock so the very first tap speaks immediately.
     let started = false;
     let fallbackAttached = false;
 
@@ -611,16 +1074,17 @@ export function speakWelcomeGreeting(
       fallbackAttached = false;
       window.removeEventListener('touchend', handleFirstInteraction, true);
       window.removeEventListener('click', handleFirstInteraction, true);
-      window.removeEventListener('pointerdown', handleFirstInteraction, true);
       window.removeEventListener('keydown', handleFirstInteraction, true);
     };
 
     const handleFirstInteraction = () => {
       cleanupFallback();
-      if (!started) {
+      if (!started && pendingWelcomeText) {
+        const queuedText = pendingWelcomeText;
         pendingWelcomeText = null;
         started = true;
-        queueSpeakCleanly(text, { rate: 0.96, fromUserGesture: true });
+        unlockAudioHardware();
+        speakFemaleIndonesian(queuedText, true);
       }
     };
 
@@ -628,19 +1092,12 @@ export function speakWelcomeGreeting(
       if (fallbackAttached || started) return;
       fallbackAttached = true;
       pendingWelcomeText = text;
-      // Listen on touchend & click in capture phase so iOS Safari & Android Chrome
-      // accept the user gesture and play the female voice immediately on first tap.
       window.addEventListener('touchend', handleFirstInteraction, {
         capture: true,
         once: true,
         passive: true,
       });
       window.addEventListener('click', handleFirstInteraction, {
-        capture: true,
-        once: true,
-        passive: true,
-      });
-      window.addEventListener('pointerdown', handleFirstInteraction, {
         capture: true,
         once: true,
         passive: true,
@@ -652,54 +1109,57 @@ export function speakWelcomeGreeting(
       });
     };
 
-    const attemptAutoSpeak = () => {
-      queueSpeakCleanly(text, {
-        rate: 0.96,
-        fromUserGesture: false,
-        onStart: () => {
+    void playUnifiedIndonesianMp3Chunks(chunks, {
+      fromUserGesture: false,
+      cacheOnly: isVoiceOfflineContext(),
+      onStart: () => {
+        started = true;
+        pendingWelcomeText = null;
+        cleanupFallback();
+      },
+    })
+      .then((result) => {
+        if (result === 'played' || result === 'cancelled') {
           started = true;
           pendingWelcomeText = null;
           cleanupFallback();
-        },
-        onError: () => {
-          if (!started) {
+          return;
+        }
+        if (result === 'blocked') {
+          attachFallback();
+          return;
+        }
+        // Only if offline/uncached or /api/tts failed, try SpeechSynthesis fallback
+        queueSpeechSynthesisFallback(text, {
+          rate: 0.96,
+          onStart: () => {
+            started = true;
+            pendingWelcomeText = null;
+            cleanupFallback();
+          },
+          onError: () => {
+            if (!started) {
+              attachFallback();
+            }
+          },
+        });
+        setTimeout(() => {
+          const synthSpeaking =
+            typeof window !== 'undefined' &&
+            'speechSynthesis' in window &&
+            window.speechSynthesis.speaking;
+          if (!started && !synthSpeaking) {
             attachFallback();
           }
-        },
-      });
-
-      // On Android & iOS, autoplay speech fails silently without firing onerror.
-      // Check after 550ms and arm mobile touch/click unlock fallback.
-      setTimeout(() => {
-        if (!started && !synth.speaking) {
+        }, 550);
+      })
+      .catch(() => {
+        if (!started) {
           attachFallback();
         }
-      }, 550);
-    };
-
-    const currentVoices = refreshVoices();
-    if (currentVoices.length === 0 && 'onvoiceschanged' in synth) {
-      let triggered = false;
-      const handleVoices = () => {
-        if (triggered) return;
-        triggered = true;
-        synth.removeEventListener?.('voiceschanged', handleVoices);
-        attemptAutoSpeak();
-      };
-      synth.addEventListener?.('voiceschanged', handleVoices);
-      setTimeout(() => {
-        if (!triggered) {
-          triggered = true;
-          synth.removeEventListener?.('voiceschanged', handleVoices);
-          attemptAutoSpeak();
-        }
-      }, 220);
-      return text;
-    }
-
-    attemptAutoSpeak();
+      });
   } catch {
-    // Ignore speech synthesis errors in restricted browsers
+    // Ignore errors in restricted browsers
   }
 
   return text;

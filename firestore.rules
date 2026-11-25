@@ -264,7 +264,7 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'ownerId', 'id', 'username', 'password', 'nama', 'nip',
-          'role', 'jabatan', 'kelas_binaan', 'updatedAt'
+          'role', 'jabatan', 'kelas_binaan', 'foto_profil', 'updatedAt'
         ]) &&
         data.ownerId == schoolId &&
         isValidId(data.ownerId) &&
@@ -276,6 +276,7 @@ service cloud.firestore {
         isValidRole(data.role) &&
         isValidString(data.jabatan, 1, 120) &&
         isValidString(data.kelas_binaan, 0, 64) &&
+        (!('foto_profil' in data) || isValidString(data.foto_profil, 0, 150000)) &&
         data.updatedAt == request.time;
     }
 
@@ -481,7 +482,7 @@ service cloud.firestore {
           request.resource.data.ownerId == resource.data.ownerId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'id', 'username', 'password', 'nama', 'nip', 'role',
-            'jabatan', 'kelas_binaan', 'updatedAt'
+            'jabatan', 'kelas_binaan', 'foto_profil', 'updatedAt'
           ]) &&
           isValidAppUserAccount(request.resource.data, schoolId);
         allow delete: if isValidId(schoolId) && isValidId(accountId) && (isSchoolOwner(schoolId) || isAdmin());

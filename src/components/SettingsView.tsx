@@ -872,7 +872,7 @@ export function SettingsView({
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-5">
       <datalist id="class-suggestions">
         {availableClasses.map((cls) => (
           <option key={cls} value={cls} />
@@ -885,18 +885,18 @@ export function SettingsView({
         ))}
       </datalist>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 items-start">
         {/* Sub-Menu Navigation Rail */}
         <aside
           aria-label="Sub menu pengaturan"
-          className="lg:col-span-3 lg:sticky lg:top-20 bg-white rounded-2xl border border-slate-200/80 p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]"
+          className="lg:col-span-3 lg:sticky lg:top-20 bg-white rounded-2xl border border-slate-200/80 p-2.5 sm:p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]"
         >
-          <div className="px-2.5 pt-1 pb-2.5 border-b border-slate-100 mb-2 flex items-center justify-between gap-2">
+          <div className="px-2 pt-0.5 pb-2 border-b border-slate-100 mb-2 flex items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               Kategori Pengaturan
             </p>
             {isDirty && (
-              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200">
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
                 Belum disimpan
               </span>
             )}
@@ -905,7 +905,7 @@ export function SettingsView({
           <div
             role="tablist"
             aria-label="Daftar sub menu pengaturan"
-            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-1 gap-1.5"
+            className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-1 gap-1.5"
           >
             {SETTINGS_SUBMENUS.map(({ id, label, desc, Icon, usesFormSave }) => {
               const isActive = activeSubMenu === id;
@@ -917,14 +917,14 @@ export function SettingsView({
                   aria-selected={isActive}
                   data-settings-submenu={id}
                   onClick={() => setActiveSubMenu(id)}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                  className={`flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
                     isActive
                       ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-xs'
                       : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
                   }`}
                 >
                   <div
-                    className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 ${
+                    className={`h-7 w-7 sm:h-8 sm:w-8 rounded-lg flex items-center justify-center shrink-0 ${
                       isActive
                         ? 'bg-indigo-600 text-white'
                         : 'bg-slate-100 text-slate-500'
@@ -942,7 +942,7 @@ export function SettingsView({
                         />
                       )}
                     </div>
-                    <p className="text-[11px] text-slate-500 truncate hidden sm:block">
+                    <p className="text-[11px] text-slate-500 truncate hidden lg:block">
                       {desc}
                     </p>
                   </div>
@@ -956,25 +956,23 @@ export function SettingsView({
         <div
           role="tabpanel"
           aria-label={currentSubMenuMeta.label}
-          className="lg:col-span-9 space-y-6 min-w-0"
+          className="lg:col-span-9 space-y-4 sm:space-y-5 min-w-0"
         >
           {currentSubMenuMeta.usesFormSave && (
-            <form onSubmit={handleSubmit} className="space-y-6">
+            <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-5">
               {/* SUB-MENU: KONEKSI CLOUD FIREBASE & GOOGLE SHEETS */}
               {activeSubMenu === 'koneksi' && (
-                <div className="space-y-6">
+                <div className="space-y-4 sm:space-y-5">
                   {cloudSync && (
-                    <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-                      <div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-3">
-                        <div className="flex items-start gap-3 min-w-0 flex-1">
-                          <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-                            <Cloud className="h-5 w-5" aria-hidden="true" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h2 className="text-base font-semibold text-slate-900">
-                                Sinkronisasi Cloud Lintas Perangkat (Firebase)
-                              </h2>
+                    <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-3.5">
+                      <div className="space-y-1.5">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <div className="h-9 w-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                              <Cloud className="h-4 w-4" aria-hidden="true" />
+                            </div>
+                            <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug min-w-0 flex-1">
+                              <span>Sinkronisasi Cloud Lintas Perangkat (Firebase)</span>
                               <button
                                 type="button"
                                 data-testid="btn-info-firebase-domain"
@@ -982,7 +980,7 @@ export function SettingsView({
                                 aria-expanded={showFirebaseDomainInfo}
                                 title="Klik untuk melihat domain aplikasi & panduan Authorized Domains Firebase"
                                 onClick={() => setShowFirebaseDomainInfo((v) => !v)}
-                                className={`h-6 w-6 rounded-full inline-flex items-center justify-center transition-colors shrink-0 ${
+                                className={`h-6 w-6 rounded-full inline-flex items-center justify-center align-middle ml-1.5 transition-colors ${
                                   showFirebaseDomainInfo
                                     ? 'bg-indigo-600 text-white'
                                     : 'bg-slate-100 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600'
@@ -990,27 +988,27 @@ export function SettingsView({
                               >
                                 <Info className="h-3.5 w-3.5" aria-hidden="true" />
                               </button>
-                            </div>
-                            <p className="text-xs text-slate-500 mt-0.5">
-                              Hubungkan dengan akun Google yang sama di komputer, tablet, atau HP lain agar seluruh data tetap terhubung secara real-time.
-                            </p>
+                            </h2>
                           </div>
-                        </div>
-                        <span
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border whitespace-nowrap shrink-0 ${
-                            cloudSync.connected
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              : 'bg-slate-50 text-slate-600 border-slate-200'
-                          }`}
-                        >
                           <span
-                            className={`h-2 w-2 rounded-full ${
-                              cloudSync.connected ? 'bg-emerald-500' : 'bg-slate-400'
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border whitespace-nowrap shrink-0 self-start sm:self-auto ${
+                              cloudSync.connected
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-slate-50 text-slate-600 border-slate-200'
                             }`}
-                            aria-hidden="true"
-                          />
-                          {cloudSync.connected ? 'Terhubung Real-Time' : 'Belum Terhubung'}
-                        </span>
+                          >
+                            <span
+                              className={`h-2 w-2 rounded-full ${
+                                cloudSync.connected ? 'bg-emerald-500' : 'bg-slate-400'
+                              }`}
+                              aria-hidden="true"
+                            />
+                            {cloudSync.connected ? 'Terhubung Real-Time' : 'Belum Terhubung'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 leading-relaxed">
+                          Hubungkan dengan akun Google yang sama di komputer, tablet, atau HP lain agar data tersinkron secara real-time.
+                        </p>
                       </div>
 
                       {showFirebaseDomainInfo && (
@@ -1167,8 +1165,8 @@ export function SettingsView({
                       )}
 
                       {cloudSync.connected ? (
-                        <div className="rounded-xl bg-emerald-50/70 border border-emerald-200/80 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="min-w-0">
+                        <div className="rounded-xl bg-emerald-50/70 border border-emerald-200/80 p-3.5 sm:p-4 flex flex-col gap-3">
+                          <div className="min-w-0 w-full">
                             <p className="text-xs font-semibold text-emerald-900 truncate">
                               {cloudSync.displayName || 'Akun Google Terhubung'}
                             </p>
@@ -1176,17 +1174,17 @@ export function SettingsView({
                               {cloudSync.email}
                             </p>
                             {cloudSync.lastSyncedAt && (
-                              <p className="text-[11px] text-emerald-700/80 mt-1">
-                                Pembaruan terakhir pukul {cloudSync.lastSyncedAt} · Data siswa, presensi masuk/pulang, alasan pulang cepat, jadwal mapel, pengaturan &amp; akun tersinkron otomatis.
+                              <p className="text-[11px] text-emerald-700/85 mt-1 leading-relaxed">
+                                Pembaruan terakhir pukul {cloudSync.lastSyncedAt} · Seluruh data siswa, presensi, jadwal, pengaturan &amp; akun tersinkron otomatis.
                               </p>
                             )}
                           </div>
-                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <div className="flex flex-wrap items-center gap-2">
                             <button
                               type="button"
                               disabled={cloudSync.syncing}
                               onClick={() => void cloudSync.onPushLocalToCloud()}
-                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-emerald-300 bg-white text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-emerald-300 bg-white text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-50 transition-colors whitespace-nowrap"
                             >
                               <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
                               <span>{cloudSync.syncing ? 'Menyinkronkan...' : 'Kirim Data Lokal ke Cloud'}</span>
@@ -1195,22 +1193,22 @@ export function SettingsView({
                               type="button"
                               disabled={cloudSync.syncing}
                               onClick={() => void cloudSync.onDisconnect()}
-                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-200 bg-white text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50 transition-colors"
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-200 bg-white text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50 transition-colors whitespace-nowrap"
                             >
                               <span>Putuskan Cloud</span>
                             </button>
                           </div>
                         </div>
                       ) : (
-                        <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <p className="text-xs text-slate-600 leading-relaxed">
-                            Data saat ini tersimpan di browser perangkat ini. Klik tombol di samping dan masuk dengan akun Google sekolah untuk mengaktifkan penyimpanan cloud Firebase dan sinkronisasi otomatis antar perangkat.
+                        <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-3.5 sm:p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                          <p className="text-xs text-slate-600 leading-relaxed flex-1 min-w-0">
+                            Data saat ini tersimpan lokal di browser ini. Masuk dengan akun Google sekolah untuk mengaktifkan penyimpanan cloud Firebase dan sinkronisasi lintas perangkat.
                           </p>
                           <button
                             type="button"
                             disabled={cloudSync.syncing}
                             onClick={() => void cloudSync.onConnect()}
-                            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors shrink-0"
+                            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors shrink-0 self-start xl:self-auto whitespace-nowrap"
                           >
                             <Cloud className="h-4 w-4" aria-hidden="true" />
                             <span>{cloudSync.syncing ? 'Menghubungkan...' : 'Hubungkan Akun Google (Firebase)'}</span>
@@ -1224,25 +1222,25 @@ export function SettingsView({
                   {cloudSync && (
                     <section
                       aria-label="Penggunaan Kuota Gratis Firestore"
-                      className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4"
+                      className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-3.5"
                     >
-                      <div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-3">
-                        <div className="flex items-start gap-3 min-w-0 flex-1">
-                          <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-                            <Database className="h-5 w-5" aria-hidden="true" />
-                          </div>
-                          <div className="min-w-0">
-                            <h2 className="text-base font-semibold text-slate-900">
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                              <Database className="h-4 w-4" aria-hidden="true" />
+                            </div>
+                            <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug">
                               Penggunaan Poin Gratis Firestore (Spark Plan)
                             </h2>
-                            <p className="text-xs text-slate-500 mt-0.5">
-                              Pantau estimasi pemakaian harian (Baca, Tulis, Hapus) dan kapasitas penyimpanan gratis Cloud Firestore agar tidak melewati batas maksimum.
-                            </p>
                           </div>
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium bg-slate-50 text-slate-600 border border-slate-200 whitespace-nowrap shrink-0">
+                            Periode: {cloudSync.quota.quotaDate} (PT)
+                          </span>
                         </div>
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-medium bg-slate-50 text-slate-600 border border-slate-200 whitespace-nowrap shrink-0">
-                          Periode: {cloudSync.quota.quotaDate} (PT)
-                        </span>
+                        <p className="text-xs text-slate-500 leading-relaxed">
+                          Pantau estimasi pemakaian harian (Baca, Tulis, Hapus) dan kapasitas penyimpanan gratis Cloud Firestore.
+                        </p>
                       </div>
 
                       {(() => {
@@ -1393,21 +1391,19 @@ export function SettingsView({
                     </section>
                   )}
 
-                  <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-                          <Cloud className="h-5 w-5" aria-hidden="true" />
+                  <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-3.5">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2.5">
+                        <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                          <Cloud className="h-4 w-4" aria-hidden="true" />
                         </div>
-                        <div>
-                          <h2 className="text-base font-semibold text-slate-900">
-                            Koneksi Database Google Sheets (Sinkronisasi Penuh)
-                          </h2>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            Terhubung ke 8 sheet otomatis: <strong>Siswa</strong>, <strong>Presensi</strong>, <strong>Pengaturan</strong> (termasuk bagian Akun: <span className="font-mono">jumlah_akun</span>, <span className="font-mono">daftar_akun</span>, <span className="font-mono">akun_akses</span>), <strong>Akun</strong> (tabel detail Akun &amp; Akses), <strong>MasterMapel</strong>, <strong>JadwalGuru</strong>, <strong>MapelKelas</strong>, dan <strong>PresensiMapel</strong>.
-                          </p>
-                        </div>
+                        <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug">
+                          Koneksi Database Google Sheets (Sinkronisasi Penuh)
+                        </h2>
                       </div>
+                      <p className="text-xs text-slate-500 leading-relaxed">
+                        Terhubung otomatis ke 8 sheet: <strong>Siswa</strong>, <strong>Presensi</strong>, <strong>Pengaturan</strong>, <strong>Akun</strong>, <strong>MasterMapel</strong>, <strong>JadwalGuru</strong>, <strong>MapelKelas</strong>, dan <strong>PresensiMapel</strong>.
+                      </p>
                     </div>
 
                   <div>
@@ -1497,17 +1493,17 @@ export function SettingsView({
                     )}
                   </div>
 
-                  <div className="rounded-xl border border-indigo-200/70 bg-indigo-50/40 p-3.5 space-y-1.5">
+                  <div className="rounded-xl border border-indigo-200/70 bg-indigo-50/40 p-3.5 space-y-1">
                     <p className="text-xs font-semibold text-indigo-950">
-                      Cara Menyamakan 100% Data di Perangkat Lain (HP / Tablet / Laptop Baru)
+                      Cara Menyamakan Data di Perangkat Lain
                     </p>
                     <p className="text-[11px] text-indigo-900/85 leading-relaxed">
-                      Di perangkat lain, tempelkan <strong>Web App URL</strong> yang sama di atas lalu klik <strong>Tarik Semua Data dari Spreadsheet</strong> (atau klik <strong>Simpan Pengaturan</strong>). Sistem secara otomatis menarik seluruh 8 sheet — <em>Siswa, Presensi, Pengaturan Sekolah (nama, logo, kepala sekolah, TTD/cap, jam masuk/pulang, tema), Akun &amp; Akses, MasterMapel, JadwalGuru, MapelKelas, dan PresensiMapel</em> — tanpa menimpa data yang sudah ada di Spreadsheet.
+                      Tempelkan <strong>Web App URL</strong> yang sama di perangkat lain lalu klik <strong>Tarik Semua Data dari Spreadsheet</strong> agar seluruh 8 sheet langsung tersinkron tanpa menimpa data Spreadsheet.
                     </p>
                   </div>
 
-                  <p className="text-[11px] text-slate-500">
-                    Sinkronisasi berjalan otomatis secara real-time setiap 10 detik, saat membuka tab, dan otomatis mengirim ulang antrean penyimpanan offline begitu koneksi internet kembali.
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    Sinkronisasi berjalan otomatis setiap 10 detik, saat membuka tab, dan mengirim ulang antrean offline saat koneksi kembali.
                   </p>
 
                   {renderSaveFooter()}
@@ -1517,24 +1513,24 @@ export function SettingsView({
 
               {/* SUB-MENU: PROFIL & SEKOLAH */}
               {activeSubMenu === 'profil' && (
-                <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-5">
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-                      <Building2 className="h-5 w-5" aria-hidden="true" />
-                    </div>
-                    <div>
-                      <h2 className="text-base font-semibold text-slate-900">
+                <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                        <Building2 className="h-4 w-4" aria-hidden="true" />
+                      </div>
+                      <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug">
                         Profil Sekolah &amp; Tahun Ajaran
                       </h2>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        Atur identitas sekolah, logo resmi untuk kartu E-Card/PDF, dan tahun ajaran aktif.
-                      </p>
                     </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Atur identitas sekolah, logo resmi untuk kartu E-Card/PDF, dan tahun ajaran aktif.
+                    </p>
                   </div>
 
                   {/* Edit Logo Sekolah */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200/80">
-            <div className="h-16 w-16 rounded-2xl border border-slate-200 bg-white flex items-center justify-center shrink-0 overflow-hidden p-1.5">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3.5 p-3.5 sm:p-4 rounded-xl bg-slate-50 border border-slate-200/80">
+            <div className="h-14 w-14 sm:h-16 sm:w-16 rounded-2xl border border-slate-200 bg-white flex items-center justify-center shrink-0 overflow-hidden p-1.5">
               <img
                 src={formState.logo_sekolah || DEFAULT_SCHOOL_LOGO}
                 alt="Preview Logo Sekolah"
@@ -1544,8 +1540,8 @@ export function SettingsView({
             <div className="flex-1 min-w-0 space-y-2">
               <div>
                 <p className="text-xs font-semibold text-slate-900">Logo Sekolah</p>
-                <p className="text-[11px] text-slate-500">
-                  Logo default aplikasi menggunakan lambang resmi SMA Negeri 1 Kabun. Anda dapat mengganti dengan gambar PNG, JPG, atau SVG lain.
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  Default menggunakan lambang resmi SMA Negeri 1 Kabun. Unggah gambar PNG, JPG, atau SVG untuk mengganti.
                 </p>
               </div>
               {logoError && (
@@ -1664,18 +1660,18 @@ export function SettingsView({
             </div>
           </div>
 
-          <p className="text-[11px] text-slate-500 -mt-2">
-            Saat Tahun Ajaran diubah, data siswa dan presensi tahun ajaran sebelumnya tidak ditampilkan kepada Wali Kelas, Guru, dan Pemindai QR (kecuali diakses oleh Master Admin).
+          <p className="text-[11px] text-slate-500 -mt-1.5 leading-relaxed">
+            Mengubah Tahun Ajaran akan menyembunyikan data tahun sebelumnya dari Wali Kelas, Guru, dan Pemindai QR (tetap dapat diakses Master Admin).
           </p>
 
           {/* Pengesahan E-Card: Nama & NIP Kepala Sekolah, TTD PNG & Cap Sekolah PNG */}
-          <div className="pt-4 border-t border-slate-100 space-y-4">
+          <div className="pt-3.5 border-t border-slate-100 space-y-3.5">
             <div>
               <h3 className="text-sm font-semibold text-slate-900">
                 Pengesahan E-Card (Kepala Sekolah, NIP, TTD &amp; Cap Sekolah)
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Nama, NIP, TTD Kepala Sekolah, dan Cap Sekolah (PNG transparan) akan disematkan di sisi kiri bawah tulisan Siswa Putra/Siswa Putri pada Kartu Tanda Siswa Elektronik agar ukuran QR Code tetap maksimal.
+              <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                Disematkan pada sisi kiri bawah Kartu Tanda Siswa Elektronik (PNG transparan) agar ukuran QR Code tetap maksimal.
               </p>
             </div>
 
@@ -1742,12 +1738,12 @@ export function SettingsView({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
               {/* Upload TTD Kepala Sekolah PNG Transparan */}
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-3">
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-2.5">
                 <div className="flex items-center gap-3">
                   <div
-                    className="h-16 w-24 rounded-xl border border-slate-200 bg-white flex items-center justify-center shrink-0 overflow-hidden p-1.5"
+                    className="h-12 w-20 rounded-xl border border-slate-200 bg-white flex items-center justify-center shrink-0 overflow-hidden p-1.5"
                     style={{
                       backgroundImage:
                         'linear-gradient(45deg, #f1f5f9 25%, transparent 25%), linear-gradient(-45deg, #f1f5f9 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #f1f5f9 75%), linear-gradient(-45deg, transparent 75%, #f1f5f9 75%)',
@@ -1762,7 +1758,7 @@ export function SettingsView({
                         className="max-h-full max-w-full object-contain"
                       />
                     ) : (
-                      <PenTool className="h-6 w-6 text-slate-400" aria-hidden="true" />
+                      <PenTool className="h-5 w-5 text-slate-400" aria-hidden="true" />
                     )}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -1770,7 +1766,7 @@ export function SettingsView({
                       TTD Kepala Sekolah (PNG)
                     </p>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Wajib file <span className="font-mono">.png</span> latar belakang transparan.
+                      File <span className="font-mono">.png</span> latar transparan.
                     </p>
                   </div>
                 </div>
@@ -1782,7 +1778,7 @@ export function SettingsView({
                 )}
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer">
+                  <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer whitespace-nowrap">
                     <Upload className="h-3.5 w-3.5 text-indigo-600" aria-hidden="true" />
                     <span>
                       {formState.ttd_kepala_sekolah ? 'Ganti TTD PNG' : 'Unggah TTD PNG'}
@@ -1803,7 +1799,7 @@ export function SettingsView({
                         setTtdError(null);
                         updateFormField({ ttd_kepala_sekolah: '' });
                       }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs font-medium text-rose-600 hover:bg-rose-50"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs font-medium text-rose-600 hover:bg-rose-50 whitespace-nowrap"
                     >
                       <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                       <span>Hapus TTD</span>
@@ -1813,10 +1809,10 @@ export function SettingsView({
               </div>
 
               {/* Upload Cap Sekolah PNG Transparan */}
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-3">
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-2.5">
                 <div className="flex items-center gap-3">
                   <div
-                    className="h-16 w-16 rounded-xl border border-slate-200 bg-white flex items-center justify-center shrink-0 overflow-hidden p-1.5"
+                    className="h-12 w-12 rounded-xl border border-slate-200 bg-white flex items-center justify-center shrink-0 overflow-hidden p-1.5"
                     style={{
                       backgroundImage:
                         'linear-gradient(45deg, #f1f5f9 25%, transparent 25%), linear-gradient(-45deg, #f1f5f9 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #f1f5f9 75%), linear-gradient(-45deg, transparent 75%, #f1f5f9 75%)',
@@ -1831,7 +1827,7 @@ export function SettingsView({
                         className="max-h-full max-w-full object-contain"
                       />
                     ) : (
-                      <Stamp className="h-6 w-6 text-slate-400" aria-hidden="true" />
+                      <Stamp className="h-5 w-5 text-slate-400" aria-hidden="true" />
                     )}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -1839,7 +1835,7 @@ export function SettingsView({
                       Cap / Stempel Sekolah (PNG)
                     </p>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Wajib file <span className="font-mono">.png</span> latar belakang transparan.
+                      File <span className="font-mono">.png</span> latar transparan.
                     </p>
                   </div>
                 </div>
@@ -1851,7 +1847,7 @@ export function SettingsView({
                 )}
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer">
+                  <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer whitespace-nowrap">
                     <Upload className="h-3.5 w-3.5 text-indigo-600" aria-hidden="true" />
                     <span>
                       {formState.cap_sekolah ? 'Ganti Cap PNG' : 'Unggah Cap PNG'}
@@ -1872,7 +1868,7 @@ export function SettingsView({
                         setCapError(null);
                         updateFormField({ cap_sekolah: '' });
                       }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs font-medium text-rose-600 hover:bg-rose-50"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-xs font-medium text-rose-600 hover:bg-rose-50 whitespace-nowrap"
                     >
                       <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                       <span>Hapus Cap</span>
@@ -1889,17 +1885,17 @@ export function SettingsView({
               formState.cap_sekolah) && (
               <div
                 data-testid="principal-ecard-preview"
-                className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl border border-indigo-200/80 bg-indigo-50/40"
+                className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 p-3.5 sm:p-4 rounded-xl border border-indigo-200/80 bg-indigo-50/40"
               >
-                <div className="space-y-0.5 max-w-xs">
+                <div className="space-y-1 min-w-0 flex-1">
                   <p className="text-xs font-semibold text-slate-900">
                     Pratinjau Susunan Kartu Tanda Siswa (E-Card)
                   </p>
-                  <p className="text-[11px] text-slate-500">
-                    Ukuran standar KTP (8,56 × 5,4 cm) dengan nama siswa 1 baris. TTD, Cap, Nama, dan NIP Kepala Sekolah ditempatkan di kiri bawah agar QR Code tetap besar dan mudah dipindai.
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    Ukuran standar KTP (8,56 × 5,4 cm). TTD, Cap, Nama, dan NIP Kepala Sekolah ditempatkan di kiri bawah agar QR Code tetap besar dan mudah dipindai.
                   </p>
                 </div>
-                <div className="bg-white rounded-xl border border-slate-200 px-3.5 py-3 flex items-center justify-between gap-4 w-[280px] aspect-[85.6/54] shrink-0">
+                <div className="bg-white rounded-xl border border-slate-200 px-3.5 py-3 flex items-center justify-between gap-4 w-full max-w-[280px] aspect-[85.6/54] shrink-0">
                   <div className="min-w-0 flex-1 text-left">
                     <p className="text-[10px] font-bold text-slate-900 whitespace-nowrap truncate">
                       Ahmad Fauzi Pratama
@@ -1961,26 +1957,26 @@ export function SettingsView({
 
               {/* SUB-MENU: JADWAL PRESENSI (MASUK & PULANG) */}
               {activeSubMenu === 'jadwal' && (
-                <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-                        <Clock className="h-5 w-5" aria-hidden="true" />
-                      </div>
-                      <div>
-                        <h2 className="text-base font-semibold text-slate-900">
+                <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                          <Clock className="h-4 w-4" aria-hidden="true" />
+                        </div>
+                        <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug">
                           Jadwal Presensi Siswa (Masuk &amp; Pulang)
                         </h2>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          Pilih mode pemindaian harian dan tentukan batas jam masuk serta jam pulang standar.
-                        </p>
                       </div>
+                      <span className="text-[11px] font-mono tabular-nums px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 font-medium whitespace-nowrap">
+                        {formState.mode_presensi === 'masuk_pulang'
+                          ? `Aktif: Masuk (${formState.batas_jam_masuk || '07:15'}) & Pulang (${formState.jam_pulang_standar || '15:00'})`
+                          : `Aktif: Masuk Saja (${formState.batas_jam_masuk || '07:15'})`}
+                      </span>
                     </div>
-                    <span className="text-[11px] font-mono tabular-nums px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 font-medium">
-                      {formState.mode_presensi === 'masuk_pulang'
-                        ? `Aktif: Masuk (${formState.batas_jam_masuk || '07:15'}) & Pulang (${formState.jam_pulang_standar || '15:00'})`
-                        : `Aktif: Masuk Saja (${formState.batas_jam_masuk || '07:15'})`}
-                    </span>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Pilih mode pemindaian harian dan tentukan batas jam masuk serta jam pulang standar.
+                    </p>
                   </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2095,21 +2091,19 @@ export function SettingsView({
 
               {/* SUB-MENU: TAMPILAN & TEMA */}
               {activeSubMenu === 'tema' && (
-                <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-                        <Palette className="h-5 w-5" aria-hidden="true" />
+                <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                        <Palette className="h-4 w-4" aria-hidden="true" />
                       </div>
-                      <div>
-                        <h2 className="text-base font-semibold text-slate-900">
-                          Tema &amp; Warna Aplikasi ({THEME_PRESETS.length} Pilihan)
-                        </h2>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          Klik warna untuk pratinjau langsung, lalu tekan Simpan Pengaturan.
-                        </p>
-                      </div>
+                      <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug">
+                        Tema &amp; Warna Aplikasi ({THEME_PRESETS.length} Pilihan)
+                      </h2>
                     </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Klik warna untuk pratinjau langsung, lalu tekan Simpan Pengaturan.
+                    </p>
                   </div>
 
             {/* Tema Terang */}
@@ -2118,7 +2112,7 @@ export function SettingsView({
                 <Sun className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
                 <span>Mode Terang ({LIGHT_THEMES.length} Variasi)</span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                 {LIGHT_THEMES.map((theme) => {
                   const active = formState.tema === theme.id;
                   return (
@@ -2131,7 +2125,7 @@ export function SettingsView({
                         onPreviewTheme(theme.id);
                       }}
                       aria-pressed={active}
-                      className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-left transition-all ${
+                      className={`flex items-center gap-2 p-2 sm:p-2.5 rounded-xl border text-left transition-all ${
                         active
                           ? 'border-indigo-500 bg-indigo-50/50 ring-2 ring-indigo-500/20'
                           : 'border-slate-200 bg-white hover:bg-slate-50'
@@ -2209,18 +2203,18 @@ export function SettingsView({
             </div>
 
             {/* Tampilan Identitas Pembuat Aplikasi di Bagian Bawah Menu Bar */}
-            <div className="pt-4 border-t border-slate-200/80">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl border border-slate-200/80 bg-slate-50/70">
-                <div className="space-y-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-900">
+            <div className="pt-3.5 border-t border-slate-200/80">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-3.5 sm:p-4 rounded-xl border border-slate-200/80 bg-slate-50/70">
+                <div className="space-y-0.5 min-w-0 flex-1">
+                  <p className="text-xs sm:text-sm font-semibold text-slate-900">
                     Tampilkan Kredit Pembuat di Bagian Bawah Menu Bar
                   </p>
                   <p className="text-xs text-slate-600 leading-relaxed">
-                    Menampilkan tulisan{' '}
+                    Menampilkan{' '}
                     <span className="font-semibold text-slate-800">
                       &ldquo;Application Created By: Tamtowi Yahya&rdquo;
                     </span>{' '}
-                    pada bagian bawah Menu Bar. Nonaktifkan tombol di samping jika ingin menghilangkannya, lalu tekan Simpan Pengaturan.
+                    di bagian bawah Menu Bar.
                   </p>
                 </div>
 
@@ -2293,33 +2287,33 @@ export function SettingsView({
           {/* SUB-MENU: BACKUP & RESET (External / Local Computer Storage Backup & Restore + Reset) */}
           {activeSubMenu === 'backup' && (
             <>
-      <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-              <HardDrive className="h-5 w-5" aria-hidden="true" />
-            </div>
-            <div>
-              <h2 className="text-base font-semibold text-slate-900">
-                Penyimpanan Eksternal & Backup Komputer (Master Admin)
+      <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-3.5">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                <HardDrive className="h-4 w-4" aria-hidden="true" />
+              </div>
+              <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug">
+                Penyimpanan Eksternal &amp; Backup Komputer
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Simpan seluruh data aplikasi (siswa, presensi, pengaturan, logo, dan akun) ke laptop, komputer, atau flashdisk/harddisk eksternal.
-              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono tabular-nums text-slate-600 shrink-0">
+              <span className="px-2 py-0.5 rounded-lg bg-slate-100 border border-slate-200/70 whitespace-nowrap">
+                {totalStudentsCount} siswa
+              </span>
+              <span className="px-2 py-0.5 rounded-lg bg-slate-100 border border-slate-200/70 whitespace-nowrap">
+                {totalRecordsCount} presensi
+              </span>
+              <span className="px-2 py-0.5 rounded-lg bg-slate-100 border border-slate-200/70 whitespace-nowrap">
+                {accounts.length} akun
+              </span>
             </div>
           </div>
-
-          <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono tabular-nums text-slate-600 shrink-0">
-            <span className="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200/70">
-              {totalStudentsCount} siswa
-            </span>
-            <span className="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200/70">
-              {totalRecordsCount} presensi
-            </span>
-            <span className="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200/70">
-              {accounts.length} akun
-            </span>
-          </div>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Simpan cadangan seluruh data aplikasi (siswa, presensi, pengaturan, logo, dan akun) ke komputer atau penyimpanan eksternal.
+          </p>
         </div>
 
         {lastBackupMeta && (
@@ -2346,31 +2340,31 @@ export function SettingsView({
         {externalStorage && (
           <div
             data-testid="external-storage-summary"
-            className="p-4 rounded-xl border border-slate-200/80 bg-slate-50/60 space-y-3.5"
+            className="p-3.5 sm:p-4 rounded-xl border border-slate-200/80 bg-slate-50/60 space-y-3"
           >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Database className="h-4 w-4 text-indigo-600 shrink-0" aria-hidden="true" />
-                <div>
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Database className="h-4 w-4 text-indigo-600 shrink-0" aria-hidden="true" />
                   <p className="text-xs font-semibold text-slate-900">
-                    Kapasitas Penyimpanan (Storage Terpakai &amp; Tersisa)
-                  </p>
-                  <p className="text-[11px] text-slate-500">
-                    Klik tombol ikon <strong className="font-mono text-slate-700">i</strong> pada tiap bagian untuk melihat penjelasan atau gunakan tombol bersihkan storage.
+                    Kapasitas Penyimpanan (Terpakai &amp; Tersisa)
                   </p>
                 </div>
+                {onRefreshStorageEstimate && (
+                  <button
+                    type="button"
+                    data-testid="btn-refresh-storage"
+                    onClick={onRefreshStorageEstimate}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-[11px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <RefreshCw className="h-3 w-3" aria-hidden="true" />
+                    <span>Perbarui Info</span>
+                  </button>
+                )}
               </div>
-              {onRefreshStorageEstimate && (
-                <button
-                  type="button"
-                  data-testid="btn-refresh-storage"
-                  onClick={onRefreshStorageEstimate}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-[11px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
-                >
-                  <RefreshCw className="h-3 w-3" aria-hidden="true" />
-                  <span>Perbarui Info</span>
-                </button>
-              )}
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                Klik ikon <strong className="font-mono text-slate-700">i</strong> pada tiap bagian untuk penjelasan detail.
+              </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -2392,11 +2386,9 @@ export function SettingsView({
                 return (
                   <div className="p-3.5 rounded-xl border border-slate-200/80 bg-white space-y-2.5 flex flex-col justify-between">
                     <div className="space-y-2.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-xs font-semibold text-slate-900 truncate">
-                            Penyimpanan Perangkat / Eksternal
-                          </span>
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-xs font-semibold text-slate-900 leading-snug min-w-0">
+                          <span>Penyimpanan Perangkat / Eksternal</span>
                           <button
                             type="button"
                             data-testid="btn-info-storage-device"
@@ -2404,7 +2396,7 @@ export function SettingsView({
                             aria-label="Informasi Penyimpanan Perangkat / Eksternal"
                             title="Klik untuk melihat penjelasan Penyimpanan Perangkat / Eksternal"
                             onClick={() => setShowDeviceStorageInfo((prev) => !prev)}
-                            className={`inline-flex items-center justify-center h-6 w-6 rounded-full border transition-colors shrink-0 ${
+                            className={`inline-flex items-center justify-center align-middle ml-1.5 h-5 w-5 rounded-full border transition-colors ${
                               showDeviceStorageInfo
                                 ? 'bg-indigo-600 border-indigo-600 text-white'
                                 : 'bg-white border-slate-200 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200'
@@ -2412,7 +2404,7 @@ export function SettingsView({
                           >
                             <Info className="h-3 w-3" aria-hidden="true" />
                           </button>
-                        </div>
+                        </p>
                         <span
                           className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold font-mono tabular-nums shrink-0 ${badgeClass}`}
                         >
@@ -2487,15 +2479,15 @@ export function SettingsView({
                     </div>
 
                     {onClearStorage && (
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-                        <span className="text-[10px] text-slate-500">
-                          Cache offline &amp; antrean sementara
+                      <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] text-slate-500">
+                          Cache offline &amp; antrean
                         </span>
                         <button
                           type="button"
                           data-testid="btn-clear-device-storage"
                           onClick={() => setConfirmClearStorageScope('device_cache')}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 transition-colors shrink-0"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 transition-colors shrink-0 whitespace-nowrap"
                         >
                           <Trash2 className="h-3 w-3" aria-hidden="true" />
                           <span>Bersihkan Cache</span>
@@ -2524,11 +2516,9 @@ export function SettingsView({
                 return (
                   <div className="p-3.5 rounded-xl border border-slate-200/80 bg-white space-y-2.5 flex flex-col justify-between">
                     <div className="space-y-2.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-xs font-semibold text-slate-900 truncate">
-                            Storage Lokal Aplikasi (IndexedDB Maksimal)
-                          </span>
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-xs font-semibold text-slate-900 leading-snug min-w-0">
+                          <span>Storage Lokal Aplikasi (IndexedDB)</span>
                           <button
                             type="button"
                             data-testid="btn-info-storage-local"
@@ -2536,7 +2526,7 @@ export function SettingsView({
                             aria-label="Informasi Storage Lokal Aplikasi"
                             title="Klik untuk melihat penjelasan Storage Lokal Aplikasi"
                             onClick={() => setShowLocalStorageInfo((prev) => !prev)}
-                            className={`inline-flex items-center justify-center h-6 w-6 rounded-full border transition-colors shrink-0 ${
+                            className={`inline-flex items-center justify-center align-middle ml-1.5 h-5 w-5 rounded-full border transition-colors ${
                               showLocalStorageInfo
                                 ? 'bg-indigo-600 border-indigo-600 text-white'
                                 : 'bg-white border-slate-200 text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200'
@@ -2544,7 +2534,7 @@ export function SettingsView({
                           >
                             <Info className="h-3 w-3" aria-hidden="true" />
                           </button>
-                        </div>
+                        </p>
                         <span
                           className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold font-mono tabular-nums shrink-0 ${badgeClass}`}
                         >
@@ -2625,15 +2615,15 @@ export function SettingsView({
                     </div>
 
                     {onClearStorage && (
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-                        <span className="text-[10px] text-slate-500">
-                          Kosongkan seluruh data lokal perangkat
+                      <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] text-slate-500">
+                          Hapus semua data lokal
                         </span>
                         <button
                           type="button"
                           data-testid="btn-clear-local-storage"
                           onClick={() => setConfirmClearStorageScope('app_local')}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 transition-colors shrink-0"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 transition-colors shrink-0 whitespace-nowrap"
                         >
                           <Trash2 className="h-3 w-3" aria-hidden="true" />
                           <span>Bersihkan Storage</span>
@@ -2826,36 +2816,34 @@ export function SettingsView({
       </section>
 
       {/* Data Maintenance Section: Hapus Presensi per Tahun Ajaran, Reset Semua Presensi & Muat Data Demo */}
-      <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
-            <AlertTriangle className="h-5 w-5" aria-hidden="true" />
-          </div>
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">
+      <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-3.5">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2.5">
+            <div className="h-9 w-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+              <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+            </div>
+            <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug">
               Pemeliharaan &amp; Reset Data
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Hapus data presensi siswa per tahun ajaran untuk menghemat ruang storage, kosongkan seluruh riwayat presensi, atau muat data demo.
-            </p>
           </div>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Hapus presensi per tahun ajaran untuk hemat storage, kosongkan riwayat presensi, atau muat data demo.
+          </p>
         </div>
 
         {/* Hapus Data Presensi Siswa per Tahun Ajaran */}
         {onDeleteAttendanceByAcademicYear && (
           <div
             data-testid="section-delete-attendance-by-year"
-            className="p-4 rounded-xl border border-amber-200/90 bg-amber-50/40 space-y-3"
+            className="p-3.5 sm:p-4 rounded-xl border border-amber-200/90 bg-amber-50/40 space-y-3"
           >
-            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
-              <div>
-                <p className="text-sm font-semibold text-slate-900">
-                  Hapus Data Presensi Siswa per Tahun Ajaran (Hemat Storage)
-                </p>
-                <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                  Pilih tahun ajaran tertentu untuk menghapus seluruh catatan presensi harian &amp; presensi mata pelajaran pada tahun ajaran tersebut saja. Data siswa dan tahun ajaran lainnya tetap tersimpan aman.
-                </p>
-              </div>
+            <div>
+              <p className="text-sm font-semibold text-slate-900">
+                Hapus Presensi per Tahun Ajaran (Hemat Storage)
+              </p>
+              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                Hapus seluruh presensi harian &amp; mapel pada tahun ajaran terpilih saja. Data siswa dan tahun ajaran lain tetap aman.
+              </p>
             </div>
 
             {academicYearAttendanceStats.length === 0 ? (
@@ -2907,20 +2895,20 @@ export function SettingsView({
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 text-xs">
-                      <div className="px-3 py-2 rounded-lg bg-white border border-slate-200/80">
-                        <p className="text-[11px] text-slate-500">Presensi Harian</p>
+                      <div className="px-2.5 py-2 rounded-lg bg-white border border-slate-200/80">
+                        <p className="text-[11px] text-slate-500">Harian</p>
                         <p className="font-mono tabular-nums font-semibold text-slate-900">
                           {selectedStat.dailyCount} data
                         </p>
                       </div>
-                      <div className="px-3 py-2 rounded-lg bg-white border border-slate-200/80">
-                        <p className="text-[11px] text-slate-500">Presensi Mapel</p>
+                      <div className="px-2.5 py-2 rounded-lg bg-white border border-slate-200/80">
+                        <p className="text-[11px] text-slate-500">Mapel</p>
                         <p className="font-mono tabular-nums font-semibold text-slate-900">
                           {selectedStat.subjectCount} data
                         </p>
                       </div>
-                      <div className="px-3 py-2 rounded-lg bg-white border border-slate-200/80">
-                        <p className="text-[11px] text-slate-500">Estimasi Ruang Bebas</p>
+                      <div className="px-2.5 py-2 rounded-lg bg-white border border-slate-200/80">
+                        <p className="text-[11px] text-slate-500">Ruang Bebas</p>
                         <p className="font-mono tabular-nums font-semibold text-emerald-700">
                           ~{formatBytesReadable(selectedStat.estimatedBytes)}
                         </p>
@@ -2933,13 +2921,13 @@ export function SettingsView({
           </div>
         )}
 
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl border border-rose-200/80 bg-rose-50/40">
-          <div>
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 p-3.5 sm:p-4 rounded-xl border border-rose-200/80 bg-rose-50/40">
+          <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-slate-900">
               Reset Semua Data Presensi
             </p>
-            <p className="text-xs text-slate-600 mt-0.5">
-              Menghapus seluruh catatan kehadiran siswa (Dashboard & Rekap kembali kosong). Data siswa & pengaturan tetap aman.
+            <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+              Menghapus seluruh catatan kehadiran siswa (Dashboard &amp; Rekap kembali kosong). Data siswa &amp; pengaturan tetap aman.
             </p>
           </div>
 
@@ -2947,7 +2935,7 @@ export function SettingsView({
             <button
               type="button"
               onClick={() => setConfirmResetAttendance(true)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-rose-300 bg-white text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors shrink-0"
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl border border-rose-300 bg-white text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors shrink-0 self-start xl:self-auto whitespace-nowrap"
             >
               <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Reset Semua Data Presensi</span>
@@ -2960,14 +2948,14 @@ export function SettingsView({
                   onResetAllAttendance();
                   setConfirmResetAttendance(false);
                 }}
-                className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700"
+                className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 whitespace-nowrap"
               >
                 Ya, Hapus Semua Presensi
               </button>
               <button
                 type="button"
                 onClick={() => setConfirmResetAttendance(false)}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:bg-slate-50"
+                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:bg-slate-50 whitespace-nowrap"
               >
                 Batal
               </button>
@@ -2975,12 +2963,12 @@ export function SettingsView({
           )}
         </div>
 
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl border border-slate-200/80 bg-slate-50/60">
-          <div>
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 p-3.5 sm:p-4 rounded-xl border border-slate-200/80 bg-slate-50/60">
+          <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-slate-900">
               Muat Data Contoh (Simulasi)
             </p>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
               Isi daftar siswa dan riwayat presensi contoh secara instan jika belum memiliki file import Excel.
             </p>
           </div>
@@ -2989,7 +2977,7 @@ export function SettingsView({
             <button
               type="button"
               onClick={() => setConfirmResetDemo(true)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shrink-0"
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shrink-0 whitespace-nowrap"
             >
               <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Muat Data Demo</span>
@@ -3002,14 +2990,14 @@ export function SettingsView({
                   onResetDemo();
                   setConfirmResetDemo(false);
                 }}
-                className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700"
+                className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap"
               >
                 Ya, Muat Demo
               </button>
               <button
                 type="button"
                 onClick={() => setConfirmResetDemo(false)}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:bg-slate-50"
+                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:bg-slate-50 whitespace-nowrap"
               >
                 Batal
               </button>
@@ -3022,54 +3010,54 @@ export function SettingsView({
 
           {/* SUB-MENU: AKUN LOGIN */}
           {activeSubMenu === 'akun' && (
-      <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-            <ShieldCheck className="h-5 w-5" aria-hidden="true" />
-          </div>
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">
-              Akun & Akses (Master Admin, Kepala Sekolah, Wali Kelas & Guru)
+      <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-3.5">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2.5">
+            <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+              <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+            </div>
+            <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug">
+              Akun &amp; Akses (Master Admin, Kepala Sekolah, Wali Kelas &amp; Guru)
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Setiap penambahan, perubahan, hapus akun, maupun reset password otomatis disinkronkan ke tab <span className="font-mono font-semibold text-slate-700">Akun</span> serta bagian Akun (<span className="font-mono text-slate-700">jumlah_akun</span>, <span className="font-mono text-slate-700">daftar_akun</span>, <span className="font-mono text-slate-700">akun_akses</span>) pada sheet <span className="font-mono font-semibold text-slate-700">Pengaturan</span> di Google Spreadsheet &amp; Firebase Cloud.
-            </p>
           </div>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Perubahan akun dan password otomatis disinkronkan ke tab <span className="font-mono font-semibold text-slate-700">Akun</span> &amp; <span className="font-mono font-semibold text-slate-700">Pengaturan</span> di Google Spreadsheet serta Firebase Cloud.
+          </p>
         </div>
 
         {/* Status Koneksi Google Spreadsheet (Sheet Akun) */}
         {!settings.script_url.trim() ? (
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200 bg-slate-50/80">
-            <div className="flex items-start gap-2.5">
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200 bg-slate-50/80">
+            <div className="flex items-start gap-2.5 min-w-0 flex-1">
               <FileSpreadsheet className="h-4 w-4 text-slate-500 mt-0.5 shrink-0" aria-hidden="true" />
-              <div>
-                <p className="text-xs font-semibold text-slate-800">
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-slate-800 leading-snug">
                   Google Spreadsheet Belum Terhubung
                 </p>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  Tambahkan Web App URL Google Apps Script agar Data Akun & Akses tersimpan otomatis ke tab <span className="font-mono">Akun</span> di Spreadsheet.
+                <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                  Tambahkan Web App URL Google Apps Script agar Data Akun &amp; Akses tersimpan otomatis ke tab <span className="font-mono">Akun</span> di Spreadsheet.
                 </p>
               </div>
             </div>
             <button
               type="button"
               onClick={() => setActiveSubMenu('koneksi')}
-              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors shrink-0"
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors shrink-0 self-start xl:self-auto whitespace-nowrap"
             >
               <Cloud className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Atur URL Spreadsheet</span>
             </button>
           </div>
         ) : sheetsSupportsAkun === false ? (
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-amber-300 bg-amber-50/80">
-            <div className="flex items-start gap-2.5">
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 p-3.5 rounded-xl border border-amber-300 bg-amber-50/80">
+            <div className="flex items-start gap-2.5 min-w-0 flex-1">
               <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" aria-hidden="true" />
-              <div>
-                <p className="text-xs font-semibold text-amber-900">
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-amber-900 leading-snug">
                   Skrip Code.gs di Spreadsheet Masih Versi Lama (Sheet Akun Belum Aktif)
                 </p>
-                <p className="text-[11px] text-amber-800 mt-0.5">
-                  Salin kode <span className="font-mono font-semibold">Code.gs</span> terbaru lalu lakukan <strong>Deploy → Kelola deployment → Versi baru</strong> di Apps Script agar tab <span className="font-mono font-semibold">Akun</span> dibuat dan tersinkron otomatis.
+                <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                  Salin <span className="font-mono font-semibold">Code.gs</span> terbaru lalu lakukan <strong>Deploy → Kelola deployment → Versi baru</strong> agar tab <span className="font-mono font-semibold">Akun</span> aktif.
                 </p>
               </div>
             </div>
@@ -3079,28 +3067,28 @@ export function SettingsView({
                 setActiveSubMenu('koneksi');
                 setShowScriptGuide(true);
               }}
-              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors shrink-0"
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors shrink-0 self-start xl:self-auto whitespace-nowrap"
             >
               <Code2 className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Buka & Salin Code.gs Terbaru</span>
+              <span>Buka &amp; Salin Code.gs</span>
             </button>
           </div>
         ) : (
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/70">
-            <div className="flex items-start gap-2.5">
+          <div className="flex flex-col gap-2.5 p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/70">
+            <div className="flex items-start gap-2.5 min-w-0 w-full">
               <FileSpreadsheet className="h-4 w-4 text-emerald-700 mt-0.5 shrink-0" aria-hidden="true" />
-              <div>
-                <p className="text-xs font-semibold text-emerald-900">
-                  Terhubung ke Sheet <span className="font-mono">Akun</span> &amp; Sheet <span className="font-mono">Pengaturan</span> di Google Spreadsheet
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-emerald-900 leading-snug">
+                  Terhubung ke Sheet <span className="font-mono">Akun</span> &amp; <span className="font-mono">Pengaturan</span> di Google Spreadsheet
                 </p>
-                <p className="text-[11px] text-emerald-800/90 mt-0.5">
+                <p className="text-[11px] text-emerald-800/90 mt-0.5 leading-relaxed">
                   {syncingAccounts
-                    ? 'Menyinkronkan daftar akun ke Sheet Akun & Sheet Pengaturan...'
-                    : `Sinkronisasi 2 arah aktif untuk ${accounts.length} akun terdaftar (tersimpan di Sheet Akun & baris akun_akses pada Sheet Pengaturan).`}
+                    ? 'Menyinkronkan daftar akun ke Google Spreadsheet...'
+                    : `Sinkronisasi 2 arah aktif untuk ${accounts.length} akun terdaftar.`}
                 </p>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 sm:pl-6">
               {onPushAccountsToSheets && (
                 <button
                   type="button"
@@ -3113,7 +3101,7 @@ export function SettingsView({
                       setSyncingAccounts(false);
                     }
                   }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-60 transition-colors"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-60 transition-colors whitespace-nowrap"
                 >
                   <UploadCloud className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>{syncingAccounts ? 'Mengirim...' : 'Kirim Akun ke Spreadsheet'}</span>
@@ -3131,7 +3119,7 @@ export function SettingsView({
                       setSyncingAccounts(false);
                     }
                   }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-300 bg-white text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60 transition-colors"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-300 bg-white text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60 transition-colors whitespace-nowrap"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${syncingAccounts ? 'animate-spin' : ''}`} aria-hidden="true" />
                   <span>Muat dari Spreadsheet</span>
@@ -3208,7 +3196,7 @@ export function SettingsView({
           </table>
         </div>
 
-        <form onSubmit={handleAddAccount} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5 pt-2">
+        <form onSubmit={handleAddAccount} className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-2.5 pt-2">
           <input
             type="text"
             value={newUsername}
@@ -3455,16 +3443,16 @@ export function SettingsView({
           type="button"
           onClick={() => setShowScriptGuide((v) => !v)}
           aria-expanded={showScriptGuide}
-          className="w-full px-6 py-4 flex items-center justify-between gap-4 text-left hover:bg-slate-50/70 transition-colors"
+          className="w-full px-4 py-3.5 sm:px-5 sm:py-4 flex items-center justify-between gap-3 text-left hover:bg-slate-50/70 transition-colors"
         >
-          <div className="flex items-center gap-3">
-            <Code2 className="h-5 w-5 text-indigo-600 shrink-0" aria-hidden="true" />
-            <div>
-              <p className="text-sm font-semibold text-slate-900">
-                Panduan & Template Kode Google Apps Script (Code.gs)
+          <div className="flex items-start gap-2.5 min-w-0 flex-1">
+            <Code2 className="h-4 w-4 sm:h-5 sm:w-5 text-indigo-600 shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="text-xs sm:text-sm font-semibold text-slate-900 leading-snug">
+                Panduan &amp; Template Kode Google Apps Script (Code.gs)
               </p>
-              <p className="text-xs text-slate-500">
-                Salin skrip siap pakai untuk sinkronisasi 8 sheet (Siswa, Presensi, Pengaturan, Akun, MasterMapel, JadwalGuru, MapelKelas, PresensiMapel)
+              <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5 leading-relaxed">
+                Salin skrip siap pakai untuk sinkronisasi otomatis 8 sheet Google Spreadsheet.
               </p>
             </div>
           </div>
@@ -3476,7 +3464,7 @@ export function SettingsView({
         </button>
 
         {showScriptGuide && (
-          <div className="px-6 pb-6 pt-2 border-t border-slate-100 space-y-3">
+          <div className="px-4 pb-4 sm:px-5 sm:pb-5 pt-2 border-t border-slate-100 space-y-3">
             <ol className="list-decimal list-inside text-xs text-slate-600 space-y-1">
               <li>Buka Google Sheets Anda, lalu pilih menu <strong>Extensions &gt; Apps Script</strong>.</li>
               <li>Tempel seluruh kode berikut ke dalam file <code className="font-mono text-slate-800">Code.gs</code>, lalu simpan. Sheet <strong>Siswa, Presensi, Pengaturan, Akun, MasterMapel, JadwalGuru, MapelKelas, PresensiMapel</strong> akan dibuat otomatis.</li>

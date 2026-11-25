@@ -37,7 +37,13 @@ import type {
   TeacherSchedule,
   UserAccount,
 } from '../types';
-import { extractNisFromQrPayload, getTodayDateString } from '../utils/attendanceLogic';
+import {
+  extractNisFromQrPayload,
+  getTodayDateString,
+  isSameClassName,
+  normalizeClassNameKey,
+  resolveCanonicalClassName,
+} from '../utils/attendanceLogic';
 import {
   computeSubjectSessionSummary,
   formatIndonesianDateWithDay,
@@ -256,22 +262,32 @@ export function SubjectAttendanceView({
   // =========================================================================
   // MASTER ADMIN DERIVED DATA
   // =========================================================================
-  const adminAvailableClasses = useMemo(() => {
+  const canonicalStudentClasses = useMemo(() => {
     const set = new Set<string>();
-    for (const a of dateAssignments) {
-      if (a.kelas.trim()) set.add(a.kelas.trim());
+    for (const s of students) {
+      if (s.kelas.trim()) set.add(s.kelas.trim());
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [dateAssignments]);
+  }, [students]);
+
+  const adminAvailableClasses = useMemo(() => {
+    const byKey = new Map<string, string>();
+    for (const a of dateAssignments) {
+      const trimmed = a.kelas.trim();
+      if (!trimmed) continue;
+      const canonical = resolveCanonicalClassName(trimmed, canonicalStudentClasses);
+      const key = normalizeClassNameKey(canonical) || canonical.toLowerCase();
+      if (!byKey.has(key)) byKey.set(key, canonical);
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b));
+  }, [dateAssignments, canonicalStudentClasses]);
 
   // Reset class filter if selected class does not exist on the newly picked date
   useEffect(() => {
     if (!isMasterAdmin) return;
     if (
       adminFilterClass !== 'ALL' &&
-      !adminAvailableClasses.some(
-        (c) => c.toLowerCase() === adminFilterClass.toLowerCase()
-      )
+      !adminAvailableClasses.some((c) => isSameClassName(c, adminFilterClass))
     ) {
       setAdminFilterClass('ALL');
     }
@@ -279,8 +295,7 @@ export function SubjectAttendanceView({
 
   const adminSubjectsForClass = useMemo(() => {
     if (adminFilterClass === 'ALL') return dateAssignments;
-    const norm = adminFilterClass.trim().toLowerCase();
-    return dateAssignments.filter((a) => a.kelas.trim().toLowerCase() === norm);
+    return dateAssignments.filter((a) => isSameClassName(a.kelas, adminFilterClass));
   }, [dateAssignments, adminFilterClass]);
 
   // Reset subject filter if selected subject does not exist on the newly picked date/class
@@ -301,9 +316,8 @@ export function SubjectAttendanceView({
 
   const adminRecapCards = useMemo(() => {
     return adminFilteredAssignments.map((asg) => {
-      const normKelas = asg.kelas.trim().toLowerCase();
       const clsStudents = students
-        .filter((s) => s.kelas.trim().toLowerCase() === normKelas)
+        .filter((s) => isSameClassName(s.kelas, asg.kelas))
         .sort((a, b) => a.nama.localeCompare(b.nama));
       const sesRecs = getRecordsForAssignmentOnDate(records, asg, selectedDate);
       const recMap = new Map<string, SubjectAttendanceRecord>();
@@ -373,9 +387,8 @@ export function SubjectAttendanceView({
   // Students belonging to activeAssignment.kelas
   const classStudents = useMemo(() => {
     if (!activeAssignment) return [];
-    const norm = activeAssignment.kelas.trim().toLowerCase();
     return students
-      .filter((s) => s.kelas.trim().toLowerCase() === norm)
+      .filter((s) => isSameClassName(s.kelas, activeAssignment.kelas))
       .sort((a, b) => a.nama.localeCompare(b.nama));
   }, [students, activeAssignment]);
 
@@ -402,9 +415,8 @@ export function SubjectAttendanceView({
   const assignmentCounts = useMemo(() => {
     const map = new Map<string, { present: number; total: number }>();
     for (const asg of dateAssignments) {
-      const normClass = asg.kelas.trim().toLowerCase();
-      const clsStudents = students.filter(
-        (s) => s.kelas.trim().toLowerCase() === normClass
+      const clsStudents = students.filter((s) =>
+        isSameClassName(s.kelas, asg.kelas)
       );
       const sesRecs = getRecordsForAssignmentOnDate(records, asg, selectedDate);
       const present = sesRecs.filter(

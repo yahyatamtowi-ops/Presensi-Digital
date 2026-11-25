@@ -12,7 +12,9 @@ import type {
 import {
   getCurrentTimeString,
   getTodayDateString,
+  isSameClassName,
   normalizeAttendanceStatus,
+  normalizeClassNameKey,
   normalizeTimeHHMM,
   parseTimeToMinutes,
   resolveItemAcademicYear,
@@ -417,19 +419,34 @@ export function addTeacherSchedule(
     return { ok: false, error: 'Jam selesai harus lebih akhir daripada jam mulai.' };
   }
 
-  const duplicate = existing.some(
-    (s) =>
-      s.hari === hari &&
-      s.teacher_user_id === teacherId &&
-      s.kelas.trim().toLowerCase() === kelas.toLowerCase() &&
-      s.mata_pelajaran.trim().toLowerCase() === mapel.toLowerCase() &&
-      resolveItemAcademicYear(s.tahun_ajaran) === tahunAjaran &&
-      (!semester || !s.semester || s.semester === semester)
-  );
+  const duplicate = existing.some((s) => {
+    if (
+      s.hari !== hari ||
+      s.teacher_user_id !== teacherId ||
+      !isSameClassName(s.kelas, kelas) ||
+      s.mata_pelajaran.trim().toLowerCase() !== mapel.toLowerCase() ||
+      resolveItemAcademicYear(s.tahun_ajaran) !== tahunAjaran ||
+      (semester && s.semester && s.semester !== semester)
+    ) {
+      return false;
+    }
+    const existingStart = parseTimeToMinutes(s.jam_mulai);
+    const existingEnd = parseTimeToMinutes(s.jam_selesai);
+    if (
+      existingStart !== null &&
+      existingEnd !== null &&
+      startMins !== null &&
+      endMins !== null
+    ) {
+      // Only treat as duplicate when the time ranges actually overlap
+      return existingStart < endMins && startMins < existingEnd;
+    }
+    return true;
+  });
   if (duplicate) {
     return {
       ok: false,
-      error: `Jadwal ${mapel} kelas ${kelas} untuk ${teacherName} pada hari ${hari} sudah terdaftar.`,
+      error: `Jadwal ${mapel} kelas ${kelas} untuk ${teacherName} pada hari ${hari} di jam tersebut sudah terdaftar.`,
     };
   }
 
@@ -752,7 +769,7 @@ export function addSubjectAssignment(
   const duplicate = existing.some(
     (a) =>
       a.teacher_user_id === teacherId &&
-      a.kelas.trim().toLowerCase() === kelas.toLowerCase() &&
+      isSameClassName(a.kelas, kelas) &&
       a.mata_pelajaran.trim().toLowerCase() === mapel.toLowerCase() &&
       resolveItemAcademicYear(a.tahun_ajaran) === tahunAjaran &&
       (!hari || !a.hari || a.hari === hari)
@@ -832,7 +849,7 @@ export function resolveAssignmentsForDate(params: {
 
   const byKey = new Map<string, SubjectAssignment>();
   const makeKey = (tId: string, kelas: string, mapel: string) =>
-    `${tId.trim().toLowerCase()}|${kelas.trim().toLowerCase()}|${mapel.trim().toLowerCase()}`;
+    `${tId.trim().toLowerCase()}|${normalizeClassNameKey(kelas) || kelas.trim().toLowerCase()}|${mapel.trim().toLowerCase()}`;
 
   // 1. Authoritative schedules from Master Admin (Mapel & Jadwal)
   for (const sch of schedules) {
@@ -912,13 +929,12 @@ export function getRecordsForAssignmentOnDate(
   assignment: SubjectAssignment,
   selectedDate: string
 ): SubjectAttendanceRecord[] {
-  const normKelas = assignment.kelas.trim().toLowerCase();
   const normMapel = assignment.mata_pelajaran.trim().toLowerCase();
   return records.filter(
     (r) =>
       r.tanggal === selectedDate &&
       (r.assignment_id === assignment.id ||
-        (r.kelas.trim().toLowerCase() === normKelas &&
+        (isSameClassName(r.kelas, assignment.kelas) &&
           r.mata_pelajaran.trim().toLowerCase() === normMapel &&
           r.teacher_user_id === assignment.teacher_user_id))
   );
@@ -959,8 +975,7 @@ export function processSubjectQrScan(params: {
     return { ok: false, reason: 'not_found', nis };
   }
 
-  const assignmentClassNorm = params.assignment.kelas.trim().toLowerCase();
-  if (student.kelas.trim().toLowerCase() !== assignmentClassNorm) {
+  if (!isSameClassName(student.kelas, params.assignment.kelas)) {
     return { ok: false, reason: 'wrong_class', nis: student.nis, student };
   }
 
@@ -1162,7 +1177,7 @@ function makeSchedulePairKey(item: {
   return [
     (item.hari || '').trim().toLowerCase(),
     item.teacher_user_id.trim().toLowerCase(),
-    item.kelas.trim().toLowerCase(),
+    normalizeClassNameKey(item.kelas) || item.kelas.trim().toLowerCase(),
     item.mata_pelajaran.trim().toLowerCase(),
     resolveItemAcademicYear(item.tahun_ajaran).toLowerCase(),
     item.semester ? normalizeSemester(item.semester) : 'any',
@@ -1177,7 +1192,7 @@ function scheduleMatchesAssignment(
   if (sch.teacher_user_id.trim().toLowerCase() !== asg.teacher_user_id.trim().toLowerCase()) {
     return false;
   }
-  if (sch.kelas.trim().toLowerCase() !== asg.kelas.trim().toLowerCase()) return false;
+  if (!isSameClassName(sch.kelas, asg.kelas)) return false;
   if (sch.mata_pelajaran.trim().toLowerCase() !== asg.mata_pelajaran.trim().toLowerCase()) {
     return false;
   }

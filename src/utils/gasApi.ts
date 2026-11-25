@@ -511,13 +511,13 @@ export function sanitizeStudents(rawList: unknown): Student[] {
     if (!item || typeof item !== 'object') continue;
     const obj = item as Record<string, unknown>;
     const nis = getFieldCaseInsensitive(obj, ['nis', 'nisn']);
-    const nama = getFieldCaseInsensitive(obj, ['nama', 'nama_siswa']);
+    const nama = getFieldCaseInsensitive(obj, ['nama', 'nama_siswa', 'nama_lengkap', 'name']);
     if (!nis) continue;
-    const kelas = getFieldCaseInsensitive(obj, ['kelas']);
+    const kelas = getFieldCaseInsensitive(obj, ['kelas', 'class', 'rombel', 'nama_kelas']);
     const genderRaw = getFieldCaseInsensitive(obj, ['gender', 'jenis_kelamin', 'l_p']);
     const gender: 'L' | 'P' = /^p/i.test(genderRaw) ? 'P' : 'L';
     const no_wa_ortu = getFieldCaseInsensitive(obj, ['no_wa_ortu', 'wa_ortu', 'no_wa']);
-    const tahun_ajaran = getFieldCaseInsensitive(obj, ['tahun_ajaran']);
+    const tahun_ajaran = getFieldCaseInsensitive(obj, ['tahun_ajaran', 'tahunajaran', 'ta']);
 
     const dedupeKey = nis.toLowerCase();
     const existingIdx = indexByNis.get(dedupeKey);
@@ -739,12 +739,14 @@ export function sanitizeAccounts(rawList: unknown): UserAccount[] {
     const nip = getFieldCaseInsensitive(obj, ['nip']);
     const kelasBinaan =
       role === 'wali_kelas'
-        ? getFieldCaseInsensitive(obj, ['kelas_binaan', 'kelas'])
+        ? getFieldCaseInsensitive(obj, ['kelas_binaan', 'kelas', 'rombel', 'kelas_wali'])
         : '';
     const id =
       getFieldCaseInsensitive(obj, ['id']) || `usr_${unameKey.replace(/[^a-z0-9]/g, '_')}`;
     const jabatan =
       getFieldCaseInsensitive(obj, ['jabatan']) || formatRoleLabel(role, kelasBinaan);
+
+    const fotoProfil = getFieldCaseInsensitive(obj, ['foto_profil', 'foto', 'avatar']);
 
     out.push({
       id,
@@ -755,6 +757,7 @@ export function sanitizeAccounts(rawList: unknown): UserAccount[] {
       role,
       jabatan,
       ...(kelasBinaan ? { kelas_binaan: kelasBinaan } : {}),
+      ...(fotoProfil ? { foto_profil: fotoProfil } : {}),
     });
   }
   return out;
@@ -1248,7 +1251,7 @@ export const GOOGLE_APPS_SCRIPT_TEMPLATE = `// Salin kode ini ke Google Apps Scr
 
 var HEADERS_SISWA = ['nis', 'nama', 'kelas', 'gender', 'no_wa_ortu', 'tahun_ajaran'];
 var HEADERS_PRESENSI = ['id', 'tanggal', 'nis', 'nama', 'kelas', 'jam_masuk', 'jam_pulang', 'status', 'keterangan', 'tahun_ajaran', 'alasan_pulang_cepat'];
-var HEADERS_AKUN = ['id', 'username', 'password', 'nama', 'nip', 'role', 'jabatan', 'kelas_binaan'];
+var HEADERS_AKUN = ['id', 'username', 'password', 'nama', 'nip', 'role', 'jabatan', 'kelas_binaan', 'foto_profil'];
 var HEADERS_MASTER_MAPEL = ['id', 'kode', 'nama', 'deskripsi'];
 var HEADERS_JADWAL_GURU = ['id', 'hari', 'teacher_user_id', 'teacher_name', 'kelas', 'mata_pelajaran', 'jam_mulai', 'jam_selesai', 'tahun_ajaran', 'semester'];
 var HEADERS_MAPEL_KELAS = ['id', 'teacher_user_id', 'teacher_name', 'kelas', 'mata_pelajaran', 'hari', 'jam_mulai', 'jam_selesai', 'tahun_ajaran', 'semester', 'source'];
@@ -1666,7 +1669,8 @@ function mapAccountsToRows(accounts) {
       String(a.nip || ''),
       String(a.role || 'guru'),
       String(a.jabatan || ''),
-      String(a.kelas_binaan || '')
+      String(a.kelas_binaan || ''),
+      String(a.foto_profil || '')
     ]);
   }
   return rows;

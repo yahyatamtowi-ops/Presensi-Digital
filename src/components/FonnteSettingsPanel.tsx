@@ -540,19 +540,17 @@ export function FonnteSettingsPanel({
   const isMasterAdmin = clientRole === 'master_admin';
 
   return (
-    <div className="space-y-6" data-testid="fonnte-settings-panel">
+    <div className="space-y-4 sm:space-y-5" data-testid="fonnte-settings-panel">
       {/* 1. Status Server Fonnte & Pengaktifan */}
-      <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-        <div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-3">
-          <div className="flex items-start gap-3 min-w-0 flex-1">
-            <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-              <MessageSquare className="h-5 w-5" aria-hidden="true" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base font-semibold text-slate-900">
-                  Integrasi WhatsApp Fonnte (Notifikasi Orang Tua)
-                </h2>
+      <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-3.5">
+        <div className="space-y-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <div className="h-9 w-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                <MessageSquare className="h-4 w-4" aria-hidden="true" />
+              </div>
+              <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug min-w-0 flex-1">
+                <span>Integrasi WhatsApp Fonnte (Notifikasi Orang Tua)</span>
                 <button
                   type="button"
                   data-testid="btn-info-fonnte-setup"
@@ -560,7 +558,7 @@ export function FonnteSettingsPanel({
                   aria-expanded={showSetupInfo}
                   title="Klik untuk melihat panduan pengaturan FONNTE_TOKEN di server"
                   onClick={() => setShowSetupInfo((v) => !v)}
-                  className={`h-6 w-6 rounded-full inline-flex items-center justify-center transition-colors shrink-0 ${
+                  className={`h-6 w-6 rounded-full inline-flex items-center justify-center align-middle ml-1.5 transition-colors ${
                     showSetupInfo
                       ? 'bg-indigo-600 text-white'
                       : 'bg-slate-100 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600'
@@ -568,35 +566,35 @@ export function FonnteSettingsPanel({
                 >
                   <Info className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Kirim pesan WhatsApp otomatis kepada orang tua siswa yang hadir tepat waktu, terlambat, maupun tidak hadir secara bertahap dengan perlindungan anti-blokir.
-              </p>
+              </h2>
             </div>
-          </div>
 
-          <span
-            data-testid="fonnte-token-status-badge"
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border whitespace-nowrap shrink-0 ${
-              tokenConfigured
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                : 'bg-amber-50 text-amber-800 border-amber-200'
-            }`}
-          >
             <span
-              className={`h-2 w-2 rounded-full ${
-                tokenConfigured ? 'bg-emerald-500' : 'bg-amber-500'
+              data-testid="fonnte-token-status-badge"
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border whitespace-nowrap shrink-0 self-start sm:self-auto ${
+                tokenConfigured
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-amber-50 text-amber-800 border-amber-200'
               }`}
-              aria-hidden="true"
-            />
-            {tokenConfigured ? 'Token Server Aktif' : 'Menunggu Secret Server'}
-          </span>
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  tokenConfigured ? 'bg-emerald-500' : 'bg-amber-500'
+                }`}
+                aria-hidden="true"
+              />
+              {tokenConfigured ? 'Token Server Aktif' : 'Menunggu Secret Server'}
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Kirim pesan WhatsApp otomatis kepada orang tua siswa yang hadir tepat waktu, terlambat, maupun tidak hadir secara bertahap dengan perlindungan anti-blokir.
+          </p>
         </div>
 
         {showSetupInfo && (
           <div
             data-testid="info-panel-fonnte-setup"
-            className="rounded-xl bg-indigo-50/70 border border-indigo-200/80 p-4 text-xs text-indigo-950 space-y-2"
+            className="rounded-xl bg-indigo-50/70 border border-indigo-200/80 p-3.5 text-xs text-indigo-950 space-y-2"
           >
             <div className="flex items-start justify-between gap-2">
               <p className="font-semibold text-indigo-900">
@@ -606,7 +604,7 @@ export function FonnteSettingsPanel({
                 type="button"
                 aria-label="Tutup panduan Fonnte"
                 onClick={() => setShowSetupInfo(false)}
-                className="text-indigo-500 hover:text-indigo-700 p-0.5 rounded"
+                className="text-indigo-500 hover:text-indigo-700 p-0.5 rounded shrink-0"
               >
                 <X className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
@@ -622,23 +620,18 @@ export function FonnteSettingsPanel({
           </div>
         )}
 
-        <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <label className="flex items-start gap-3 cursor-pointer">
+        <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <label className="flex items-center gap-2.5 cursor-pointer min-w-0">
             <input
               type="checkbox"
               data-testid="toggle-fonnte-enabled"
               checked={config.enabled}
               onChange={(e) => onChangeConfig({ ...config, enabled: e.target.checked })}
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+              className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 shrink-0"
             />
-            <div>
-              <p className="text-sm font-semibold text-slate-900">
-                Aktifkan Pengiriman Otomatis WhatsApp Fonnte
-              </p>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Saat aktif, siswa hadir tepat waktu (bila dipilih), terlambat, atau tidak hadir (Alpa) yang memiliki nomor WhatsApp orang tua otomatis masuk antrean pengiriman bertahap.
-              </p>
-            </div>
+            <span className="text-xs sm:text-sm font-semibold text-slate-900 leading-snug">
+              Aktifkan Pengiriman Otomatis WhatsApp Fonnte
+            </span>
           </label>
 
           <button
@@ -646,7 +639,7 @@ export function FonnteSettingsPanel({
             disabled={checkingStatus}
             onClick={() => void loadStatus(true)}
             data-testid="btn-check-fonnte-device"
-            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors shrink-0"
+            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors shrink-0 whitespace-nowrap"
           >
             <RefreshCw
               className={`h-3.5 w-3.5 ${checkingStatus ? 'animate-spin' : ''}`}
@@ -659,53 +652,46 @@ export function FonnteSettingsPanel({
         {/* Bilah Ubah Token Fonnte & Ganti Nomor WhatsApp Pengirim */}
         <div
           data-testid="fonnte-token-manager"
-          className="rounded-xl border border-slate-200/90 bg-slate-50/70 p-4 space-y-3"
+          className="rounded-xl border border-slate-200/90 bg-slate-50/70 p-3.5 space-y-3"
         >
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="flex items-start gap-2.5 min-w-0 flex-1">
-              <div className="h-8 w-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 mt-0.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-8 w-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
                 <KeyRound className="h-4 w-4" aria-hidden="true" />
               </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-xs font-semibold text-slate-900">
-                    Token Fonnte &amp; Nomor WhatsApp Pengirim
-                  </h3>
-                  <button
-                    type="button"
-                    data-testid="btn-info-fonnte-token"
-                    aria-label="Informasi pergantian Token Fonnte"
-                    aria-expanded={showTokenInfo}
-                    title="Klik untuk melihat penjelasan cara mengganti nomor WhatsApp pengirim"
-                    onClick={() => setShowTokenInfo((v) => !v)}
-                    className={`h-5 w-5 rounded-full inline-flex items-center justify-center transition-colors shrink-0 ${
-                      showTokenInfo
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-white border border-slate-200 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600'
-                    }`}
-                  >
-                    <Info className="h-3 w-3" aria-hidden="true" />
-                  </button>
-                </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  Setiap nomor WhatsApp di Fonnte memiliki Token Perangkat masing-masing. Ubah token di bawah untuk mengganti nomor pengirim pesan otomatis.
-                </p>
-              </div>
+              <h3 className="text-xs font-semibold text-slate-900 leading-snug min-w-0">
+                <span>Token Fonnte &amp; Nomor WhatsApp Pengirim</span>
+                <button
+                  type="button"
+                  data-testid="btn-info-fonnte-token"
+                  aria-label="Informasi pergantian Token Fonnte"
+                  aria-expanded={showTokenInfo}
+                  title="Klik untuk melihat penjelasan cara mengganti nomor WhatsApp pengirim"
+                  onClick={() => setShowTokenInfo((v) => !v)}
+                  className={`h-5 w-5 rounded-full inline-flex items-center justify-center align-middle ml-1.5 transition-colors ${
+                    showTokenInfo
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white border border-slate-200 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600'
+                  }`}
+                >
+                  <Info className="h-3 w-3" aria-hidden="true" />
+                </button>
+              </h3>
             </div>
 
             {tokenMeta?.configured && (
               <div
                 data-testid="fonnte-active-token-summary"
-                className="flex flex-wrap items-center gap-2 text-[11px]"
+                className="flex flex-wrap items-center gap-1.5 text-[11px]"
               >
-                <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-medium">
+                <span className="px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-slate-700 font-medium">
                   Sumber: <strong className="text-slate-900">{tokenMeta.activeLabel}</strong>
                 </span>
-                <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-mono text-slate-700">
+                <span className="px-2 py-0.5 rounded-lg bg-white border border-slate-200 font-mono text-slate-700">
                   {tokenMeta.maskedToken}
                 </span>
                 {statusData?.deviceStatus?.device && (
-                  <span className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 font-mono font-semibold">
+                  <span className="px-2 py-0.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 font-mono font-semibold">
                     WA: {statusData.deviceStatus.device}
                   </span>
                 )}
@@ -726,20 +712,20 @@ export function FonnteSettingsPanel({
                   type="button"
                   aria-label="Tutup informasi token Fonnte"
                   onClick={() => setShowTokenInfo(false)}
-                  className="text-indigo-500 hover:text-indigo-700 p-0.5 rounded"
+                  className="text-indigo-500 hover:text-indigo-700 p-0.5 rounded shrink-0"
                 >
                   <X className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
               </div>
-              <ul className="list-disc pl-4 space-y-1 text-indigo-900/90">
+              <ul className="list-disc pl-4 space-y-1 text-indigo-900/90 leading-relaxed">
                 <li>
                   Buka dashboard <span className="font-mono font-semibold">md.fonnte.com</span> → pilih perangkat WhatsApp nomor baru yang sudah terhubung (scan QR) → salin <strong>Token Perangkat</strong>.
                 </li>
                 <li>
-                  Tempel token di bilah ini lalu klik <strong>Simpan &amp; Ganti Nomor WA</strong>. Sistem akan memverifikasi token langsung ke server Fonnte sebelum mengaktifkannya.
+                  Tempel token di bilah ini lalu klik <strong>Simpan &amp; Ganti Nomor WA</strong>. Sistem akan memverifikasi token langsung ke server Fonnte sebelum mengaktifkannya. Jika token tidak valid, nomor aktif sebelumnya tetap dipertahankan.
                 </li>
                 <li>
-                  Token hanya disimpan di memori server aktif (tidak pernah disimpan di browser). Untuk penyimpanan permanen saat server dimulai ulang, Anda juga dapat mengisi Secret <code className="font-mono font-semibold">FONNTE_TOKEN</code>, <code className="font-mono font-semibold">FONNTE_TOKEN_2</code>, atau <code className="font-mono font-semibold">FONNTE_TOKEN_3</code> di pengaturan server.
+                  Token tidak disimpan di browser. Untuk penyimpanan permanen saat server dimulai ulang atau pada hosting Netlify, simpan juga pada Environment Variable <code className="font-mono font-semibold">FONNTE_TOKEN</code> (atau slot cadangan <code className="font-mono font-semibold">FONNTE_TOKEN_2</code> / <code className="font-mono font-semibold">FONNTE_TOKEN_3</code>).
                 </li>
               </ul>
             </div>
@@ -778,90 +764,79 @@ export function FonnteSettingsPanel({
 
           {/* Bilah Input Ubah Token (Khusus Master Admin) */}
           {isMasterAdmin ? (
-            <div className="space-y-2.5">
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5">
-                <div className="md:col-span-5 relative">
-                  <label htmlFor="fonnte-new-token-input" className="sr-only">
-                    Token Perangkat Fonnte Baru
-                  </label>
-                  <input
-                    id="fonnte-new-token-input"
-                    data-testid="input-fonnte-new-token"
-                    type={showTokenInput ? 'text' : 'password'}
-                    autoComplete="off"
-                    spellCheck={false}
-                    value={tokenInput}
-                    onChange={(e) => setTokenInput(e.target.value)}
-                    placeholder="Tempel Token Perangkat Fonnte baru di sini..."
-                    className="w-full pl-3 pr-9 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono text-slate-900 placeholder:font-sans placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  />
-                  <button
-                    type="button"
-                    data-testid="btn-toggle-fonnte-token-visibility"
-                    aria-label={showTokenInput ? 'Sembunyikan token' : 'Tampilkan token'}
-                    onClick={() => setShowTokenInput((v) => !v)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-0.5"
-                  >
-                    {showTokenInput ? (
-                      <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
-                    ) : (
-                      <Eye className="h-3.5 w-3.5" aria-hidden="true" />
-                    )}
-                  </button>
-                </div>
-
-                <div className="md:col-span-3">
-                  <label htmlFor="fonnte-token-label-input" className="sr-only">
-                    Label Nomor WhatsApp (Opsional)
-                  </label>
-                  <input
-                    id="fonnte-token-label-input"
-                    data-testid="input-fonnte-token-label"
-                    type="text"
-                    maxLength={48}
-                    value={tokenLabelInput}
-                    onChange={(e) => setTokenLabelInput(e.target.value)}
-                    placeholder="Label nomor (opsional, mis. WA TU)"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  />
-                </div>
-
-                <div className="md:col-span-4 flex flex-wrap sm:flex-nowrap items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={savingToken || !tokenInput.trim()}
-                    data-testid="btn-save-fonnte-token"
-                    onClick={() => void handleSaveNewToken()}
-                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors whitespace-nowrap"
-                  >
-                    <KeyRound className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    <span>{savingToken ? 'Memverifikasi...' : 'Simpan & Ganti Nomor WA'}</span>
-                  </button>
-
-                  {tokenMeta?.hasRuntimeOverride && (
-                    <button
-                      type="button"
-                      disabled={resettingToken || savingToken}
-                      data-testid="btn-reset-fonnte-token"
-                      onClick={() => void handleResetTokenToDefault()}
-                      title="Kembalikan ke token bawaan FONNTE_TOKEN dari server"
-                      className="inline-flex items-center justify-center gap-1 px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-100 disabled:opacity-50 transition-colors shrink-0"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>{resettingToken ? 'Mereset...' : 'Bawaan Server'}</span>
-                    </button>
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+              <div className="sm:col-span-5 relative">
+                <label htmlFor="fonnte-new-token-input" className="sr-only">
+                  Token Perangkat Fonnte Baru
+                </label>
+                <input
+                  id="fonnte-new-token-input"
+                  data-testid="input-fonnte-new-token"
+                  type={showTokenInput ? 'text' : 'password'}
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={tokenInput}
+                  onChange={(e) => setTokenInput(e.target.value)}
+                  placeholder="Tempel Token Perangkat Fonnte baru..."
+                  className="w-full pl-3 pr-9 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono text-slate-900 placeholder:font-sans placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                />
+                <button
+                  type="button"
+                  data-testid="btn-toggle-fonnte-token-visibility"
+                  aria-label={showTokenInput ? 'Sembunyikan token' : 'Tampilkan token'}
+                  onClick={() => setShowTokenInput((v) => !v)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-0.5"
+                >
+                  {showTokenInput ? (
+                    <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <Eye className="h-3.5 w-3.5" aria-hidden="true" />
                   )}
-                </div>
+                </button>
               </div>
-              <p className="text-[11px] text-slate-500">
-                Token langsung diverifikasi ke Fonnte dan hanya aktif di memori server (tidak disimpan di browser). Jika token baru tidak valid, nomor WhatsApp yang sedang aktif tetap dipertahankan.
-                {statusData?.serverMode === 'serverless' && (
-                  <>
-                    {' '}
-                    Pada hosting Netlify, agar perubahan token bersifat permanen setelah server istirahat, simpan juga di <strong>Netlify → Environment variables</strong> (<code className="font-mono">FONNTE_TOKEN</code>).
-                  </>
+
+              <div className="sm:col-span-3">
+                <label htmlFor="fonnte-token-label-input" className="sr-only">
+                  Label Nomor WhatsApp (Opsional)
+                </label>
+                <input
+                  id="fonnte-token-label-input"
+                  data-testid="input-fonnte-token-label"
+                  type="text"
+                  maxLength={48}
+                  value={tokenLabelInput}
+                  onChange={(e) => setTokenLabelInput(e.target.value)}
+                  placeholder="Label (opsional, mis. WA TU)"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="sm:col-span-4 flex flex-wrap sm:flex-nowrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={savingToken || !tokenInput.trim()}
+                  data-testid="btn-save-fonnte-token"
+                  onClick={() => void handleSaveNewToken()}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors whitespace-nowrap"
+                >
+                  <KeyRound className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>{savingToken ? 'Memverifikasi...' : 'Simpan & Ganti Nomor WA'}</span>
+                </button>
+
+                {tokenMeta?.hasRuntimeOverride && (
+                  <button
+                    type="button"
+                    disabled={resettingToken || savingToken}
+                    data-testid="btn-reset-fonnte-token"
+                    onClick={() => void handleResetTokenToDefault()}
+                    title="Kembalikan ke token bawaan FONNTE_TOKEN dari server"
+                    className="inline-flex items-center justify-center gap-1 px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-100 disabled:opacity-50 transition-colors shrink-0 whitespace-nowrap"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{resettingToken ? 'Mereset...' : 'Bawaan Server'}</span>
+                  </button>
                 )}
-              </p>
+              </div>
             </div>
           ) : (
             <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -871,8 +846,8 @@ export function FonnteSettingsPanel({
         </div>
 
         {/* Trigger Otomatis */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <label className="rounded-xl border border-slate-200 p-3.5 flex items-start gap-3 cursor-pointer hover:bg-slate-50/70 transition-colors">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-2.5">
+          <label className="rounded-xl border border-slate-200 p-3 flex items-start gap-2.5 cursor-pointer hover:bg-slate-50/70 transition-colors">
             <input
               type="checkbox"
               data-testid="toggle-fonnte-auto-ontime"
@@ -882,19 +857,19 @@ export function FonnteSettingsPanel({
                 onChangeConfig({ ...config, autoSendOnTime: checked });
                 setIncludeOnTimeBatch(checked);
               }}
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 shrink-0"
             />
-            <div>
+            <div className="min-w-0">
               <p className="text-xs font-semibold text-slate-900">
                 Otomatis saat Hadir Tepat Waktu
               </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                Langsung antrekan pesan ke orang tua ketika presensi QR / NISN mencatat siswa hadir tepat waktu.
+              <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                Antrekan pesan otomatis saat siswa presensi tepat waktu.
               </p>
             </div>
           </label>
 
-          <label className="rounded-xl border border-slate-200 p-3.5 flex items-start gap-3 cursor-pointer hover:bg-slate-50/70 transition-colors">
+          <label className="rounded-xl border border-slate-200 p-3 flex items-start gap-2.5 cursor-pointer hover:bg-slate-50/70 transition-colors">
             <input
               type="checkbox"
               data-testid="toggle-fonnte-auto-late"
@@ -902,19 +877,19 @@ export function FonnteSettingsPanel({
               onChange={(e) =>
                 onChangeConfig({ ...config, autoSendLate: e.target.checked })
               }
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
             />
-            <div>
+            <div className="min-w-0">
               <p className="text-xs font-semibold text-slate-900">
                 Otomatis saat Siswa Terlambat
               </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                Langsung antrekan pesan ke orang tua ketika presensi QR / NISN mencatat status Terlambat.
+              <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                Antrekan pesan otomatis saat presensi mencatat status Terlambat.
               </p>
             </div>
           </label>
 
-          <label className="rounded-xl border border-slate-200 p-3.5 flex items-start gap-3 cursor-pointer hover:bg-slate-50/70 transition-colors">
+          <label className="rounded-xl border border-slate-200 p-3 flex items-start gap-2.5 cursor-pointer hover:bg-slate-50/70 transition-colors">
             <input
               type="checkbox"
               data-testid="toggle-fonnte-auto-absent"
@@ -922,23 +897,23 @@ export function FonnteSettingsPanel({
               onChange={(e) =>
                 onChangeConfig({ ...config, autoSendAbsent: e.target.checked })
               }
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
             />
-            <div>
+            <div className="min-w-0">
               <p className="text-xs font-semibold text-slate-900">
                 Otomatis saat Ditandai Alpa (Tidak Hadir)
               </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                Otomatis mengantrekan pesan ke orang tua ketika status siswa diubah menjadi Alpa.
+              <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                Antrekan pesan otomatis saat status siswa diubah menjadi Alpa.
               </p>
             </div>
           </label>
         </div>
 
         {/* Jadwal Harian Otomatis */}
-        <div className="rounded-xl border border-slate-200 p-4 space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <label className="flex items-start gap-3 cursor-pointer flex-1 min-w-[240px]">
+        <div className="rounded-xl border border-slate-200 p-3.5 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            <label className="flex items-center gap-2.5 cursor-pointer flex-1 min-w-[200px]">
               <input
                 type="checkbox"
                 data-testid="toggle-fonnte-schedule-absent"
@@ -949,16 +924,11 @@ export function FonnteSettingsPanel({
                     autoAbsentScheduleEnabled: e.target.checked,
                   })
                 }
-                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 shrink-0"
               />
-              <div>
-                <p className="text-xs font-semibold text-slate-900">
-                  Jadwal Kirim Otomatis Harian (Hadir Tepat Waktu, Terlambat &amp; Tidak Hadir)
-                </p>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  Pada jam yang ditentukan, siswa Hadir Tepat Waktu (jika aktif), Terlambat (jika aktif), dan Tidak Hadir (Alpa / Belum Presensi) yang belum dikirim akan masuk antrean bertahap secara otomatis tanpa klik manual.
-                </p>
-              </div>
+              <span className="text-xs font-semibold text-slate-900 leading-snug">
+                Jadwal Kirim Otomatis Harian (Hadir Tepat Waktu, Terlambat &amp; Tidak Hadir)
+              </span>
             </label>
 
             <div className="flex items-center gap-2 shrink-0">
@@ -979,7 +949,7 @@ export function FonnteSettingsPanel({
             </div>
           </div>
 
-          <label className="flex items-center gap-2 text-xs text-slate-600 pl-7 cursor-pointer">
+          <label className="flex items-start gap-2 text-xs text-slate-600 sm:pl-6 cursor-pointer">
             <input
               type="checkbox"
               checked={config.includeUnrecordedAsAbsent}
@@ -990,7 +960,7 @@ export function FonnteSettingsPanel({
                 });
                 setIncludeUnrecordedBatch(e.target.checked);
               }}
-              className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600"
+              className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 shrink-0"
             />
             <span>Sertakan siswa berstatus <strong>Belum Presensi</strong> pada jadwal pengiriman otomatis</span>
           </label>
@@ -998,7 +968,7 @@ export function FonnteSettingsPanel({
           {config.autoAbsentScheduleEnabled && (
             <div
               data-testid="fonnte-schedule-status"
-              className={`ml-7 rounded-lg border px-3 py-2 text-[11px] flex flex-wrap items-center justify-between gap-2 ${
+              className={`sm:ml-6 rounded-lg border px-3 py-2 text-[11px] flex flex-wrap items-center justify-between gap-2 ${
                 !config.enabled
                   ? 'bg-amber-50 border-amber-200 text-amber-900'
                   : scheduleEvaluation.status === 'completed'
@@ -1008,33 +978,33 @@ export function FonnteSettingsPanel({
                       : 'bg-slate-50 border-slate-200 text-slate-700'
               }`}
             >
-              <div className="space-y-0.5">
+              <div className="min-w-0 flex-1">
                 {!config.enabled ? (
-                  <p className="font-medium">
+                  <p className="font-medium leading-relaxed">
                     Aktifkan centang <strong>Aktifkan Pengiriman Otomatis WhatsApp Fonnte</strong> di atas agar jadwal pukul{' '}
                     <span className="font-mono font-bold">{scheduleEvaluation.targetHHMM}</span> berjalan otomatis.
                   </p>
                 ) : scheduleEvaluation.status === 'completed' ? (
-                  <p className="font-medium">
+                  <p className="font-medium leading-relaxed">
                     Jadwal otomatis pukul{' '}
                     <span className="font-mono font-bold">{scheduleEvaluation.targetHHMM}</span> sudah dijalankan hari ini (Jam perangkat:{' '}
                     <span className="font-mono">{scheduleEvaluation.currentHHMMSS}</span>).
                   </p>
                 ) : scheduleEvaluation.status === 'due' ? (
-                  <p className="font-medium">
+                  <p className="font-medium leading-relaxed">
                     Waktu jadwal <span className="font-mono font-bold">{scheduleEvaluation.targetHHMM}</span> tercapai (Jam:{' '}
                     <span className="font-mono">{scheduleEvaluation.currentHHMMSS}</span>) ·{' '}
                     {readyToSendCandidates.length > 0
                       ? `Memproses pengiriman otomatis untuk ${readyToSendCandidates.length} siswa...`
-                      : 'Belum ada siswa terlambat/tidak hadir baru yang memiliki nomor WA orang tua.'}
+                      : 'Belum ada siswa baru yang memiliki nomor WA orang tua.'}
                   </p>
                 ) : (
-                  <p className="font-medium">
-                    Menunggu jadwal otomatis pukul{' '}
+                  <p className="font-medium leading-relaxed">
+                    Menunggu jadwal pukul{' '}
                     <span className="font-mono font-bold">{scheduleEvaluation.targetHHMM}</span> (dalam{' '}
-                    <strong>{formatDurationId(scheduleEvaluation.secondsUntil)}</strong> · Jam perangkat:{' '}
+                    <strong>{formatDurationId(scheduleEvaluation.secondsUntil)}</strong> · Jam:{' '}
                     <span className="font-mono">{scheduleEvaluation.currentHHMMSS}</span> ·{' '}
-                    <strong>{readyToSendCandidates.length}</strong> siswa siap kirim).
+                    <strong>{readyToSendCandidates.length}</strong> siap kirim).
                   </p>
                 )}
               </div>
@@ -1044,7 +1014,7 @@ export function FonnteSettingsPanel({
                   type="button"
                   data-testid="btn-reset-fonnte-schedule"
                   onClick={onResetScheduleToday}
-                  className="px-2.5 py-1 rounded-md bg-white border border-emerald-300 text-emerald-800 text-[11px] font-semibold hover:bg-emerald-100 transition-colors shrink-0"
+                  className="px-2.5 py-1 rounded-md bg-white border border-emerald-300 text-emerald-800 text-[11px] font-semibold hover:bg-emerald-100 transition-colors shrink-0 whitespace-nowrap"
                 >
                   Reset Jadwal Hari Ini
                 </button>
@@ -1055,44 +1025,35 @@ export function FonnteSettingsPanel({
       </section>
 
       {/* 2. Pengaturan Pengiriman Bertahap (Anti-Blokir WhatsApp) */}
-      <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
-              <ShieldCheck className="h-5 w-5" aria-hidden="true" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base font-semibold text-slate-900">
-                  Pengiriman Bertahap &amp; Perlindungan Anti-Blokir WhatsApp
-                </h2>
-                <button
-                  type="button"
-                  data-testid="btn-info-fonnte-antiban"
-                  aria-label="Informasi mekanisme anti-blokir WhatsApp"
-                  aria-expanded={showAntiBanInfo}
-                  title="Klik untuk melihat penjelasan perlindungan anti-blokir WhatsApp"
-                  onClick={() => setShowAntiBanInfo((v) => !v)}
-                  className={`h-6 w-6 rounded-full inline-flex items-center justify-center transition-colors shrink-0 ${
-                    showAntiBanInfo
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-slate-100 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600'
-                  }`}
-                >
-                  <Info className="h-3.5 w-3.5" aria-hidden="true" />
-                </button>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Pesan dikirim 1 per 1 secara berurutan dengan jeda acak manusiawi, jeda istirahat per batch, variasi salam pembuka, dan pencegahan kirim ganda harian.
-              </p>
-            </div>
+      <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-3.5">
+        <div className="flex items-center gap-2.5">
+          <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+            <ShieldCheck className="h-4 w-4" aria-hidden="true" />
           </div>
+          <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug min-w-0 flex-1">
+            <span>Pengiriman Bertahap &amp; Perlindungan Anti-Blokir WhatsApp</span>
+            <button
+              type="button"
+              data-testid="btn-info-fonnte-antiban"
+              aria-label="Informasi mekanisme anti-blokir WhatsApp"
+              aria-expanded={showAntiBanInfo}
+              title="Klik untuk melihat penjelasan perlindungan anti-blokir WhatsApp"
+              onClick={() => setShowAntiBanInfo((v) => !v)}
+              className={`h-6 w-6 rounded-full inline-flex items-center justify-center align-middle ml-1.5 transition-colors ${
+                showAntiBanInfo
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-slate-100 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600'
+              }`}
+            >
+              <Info className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </h2>
         </div>
 
         {showAntiBanInfo && (
           <div
             data-testid="info-panel-fonnte-antiban"
-            className="rounded-xl bg-emerald-50/70 border border-emerald-200 p-4 text-xs text-emerald-950 space-y-1.5"
+            className="rounded-xl bg-emerald-50/70 border border-emerald-200 p-3.5 text-xs text-emerald-950 space-y-1.5"
           >
             <div className="flex items-start justify-between gap-2">
               <p className="font-semibold text-emerald-900">
@@ -1102,12 +1063,12 @@ export function FonnteSettingsPanel({
                 type="button"
                 aria-label="Tutup informasi anti-blokir"
                 onClick={() => setShowAntiBanInfo(false)}
-                className="text-emerald-600 hover:text-emerald-800 p-0.5 rounded"
+                className="text-emerald-600 hover:text-emerald-800 p-0.5 rounded shrink-0"
               >
                 <X className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
             </div>
-            <ul className="list-disc pl-4 space-y-1 text-emerald-900/90">
+            <ul className="list-disc pl-4 space-y-1 text-emerald-900/90 leading-relaxed">
               <li>
                 <strong>Jeda Acak (Random Jitter):</strong> Setiap pesan menunggu durasi acak antara batas minimum (min. 15 detik) hingga maksimum agar pola kirim menyerupai manusia.
               </li>
@@ -1118,14 +1079,14 @@ export function FonnteSettingsPanel({
                 <strong>Variasi Salam Alami:</strong> Placeholder <code className="font-mono">{'{salam}'}</code> merotasi kalimat pembuka agar isi pesan tidak terdeteksi identik massal.
               </li>
               <li>
-                <strong>Anti-Duplikat Harian:</strong> Satu siswa hanya dikirim maksimal 1 kali per kategori (Terlambat / Tidak Hadir) pada tanggal yang sama.
+                <strong>Anti-Duplikat Harian:</strong> Satu siswa hanya dikirim maksimal 1 kali per kategori (Hadir / Terlambat / Tidak Hadir) pada tanggal yang sama.
               </li>
             </ul>
           </div>
         )}
 
         {/* Preset Keamanan */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-2.5">
           {PACING_PRESETS.map((preset) => {
             const isActive =
               config.pacing.minDelaySec === preset.pacing.minDelaySec &&
@@ -1145,20 +1106,20 @@ export function FonnteSettingsPanel({
                 }`}
               >
                 <p className="text-xs font-bold text-slate-900">{preset.label}</p>
-                <p className="text-[11px] text-slate-500 mt-1">{preset.desc}</p>
+                <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">{preset.desc}</p>
               </button>
             );
           })}
         </div>
 
         {/* Fine-Grained Inputs */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
           <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
             <label
               htmlFor="fonnte-min-delay"
               className="block text-[11px] font-semibold text-slate-600"
             >
-              Jeda Minimal (detik)
+              Jeda Minimal (dtk)
             </label>
             <input
               id="fonnte-min-delay"
@@ -1170,7 +1131,7 @@ export function FonnteSettingsPanel({
               onChange={(e) => handleUpdatePacing({ minDelaySec: Number(e.target.value) })}
               className="mt-1.5 w-full px-2.5 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-mono font-bold text-slate-900"
             />
-            <p className="text-[10px] text-slate-500 mt-1">Batas aman min. 15 detik</p>
+            <p className="text-[10px] text-slate-500 mt-1">Min. 15 detik</p>
           </div>
 
           <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
@@ -1178,7 +1139,7 @@ export function FonnteSettingsPanel({
               htmlFor="fonnte-max-delay"
               className="block text-[11px] font-semibold text-slate-600"
             >
-              Jeda Maksimal (detik)
+              Jeda Maksimal (dtk)
             </label>
             <input
               id="fonnte-max-delay"
@@ -1198,7 +1159,7 @@ export function FonnteSettingsPanel({
               htmlFor="fonnte-batch-size"
               className="block text-[11px] font-semibold text-slate-600"
             >
-              Pesan per Gelombang
+              Pesan / Gelombang
             </label>
             <input
               id="fonnte-batch-size"
@@ -1210,7 +1171,7 @@ export function FonnteSettingsPanel({
               onChange={(e) => handleUpdatePacing({ batchSize: Number(e.target.value) })}
               className="mt-1.5 w-full px-2.5 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-mono font-bold text-slate-900"
             />
-            <p className="text-[10px] text-slate-500 mt-1">Antara 3–20 pesan/batch</p>
+            <p className="text-[10px] text-slate-500 mt-1">3–20 pesan/batch</p>
           </div>
 
           <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
@@ -1218,7 +1179,7 @@ export function FonnteSettingsPanel({
               htmlFor="fonnte-batch-pause"
               className="block text-[11px] font-semibold text-slate-600"
             >
-              Istirahat Batch (detik)
+              Istirahat Batch (dtk)
             </label>
             <input
               id="fonnte-batch-pause"
@@ -1239,32 +1200,27 @@ export function FonnteSettingsPanel({
 
       {/* 3. Kirim Bertahap Hari Ini & Monitor Antrean Server */}
       <section
-        className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4"
+        className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-3.5"
         data-testid="fonnte-batch-dispatch-section"
       >
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="h-10 w-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
-              <Users className="h-5 w-5" aria-hidden="true" />
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="h-9 w-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+              <Users className="h-4 w-4" aria-hidden="true" />
             </div>
-            <div>
-              <h2 className="text-base font-semibold text-slate-900">
-                Pengiriman Bertahap Hari Ini ({todayDate})
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Tinjau siswa hadir tepat waktu, terlambat &amp; tidak hadir hari ini lalu jalankan antrean kirim bertahap dari server.
-              </p>
-            </div>
+            <h2 className="text-sm sm:text-base font-semibold text-slate-900 leading-snug">
+              Pengiriman Bertahap Hari Ini ({todayDate})
+            </h2>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <span className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-semibold">
+            <span className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-semibold whitespace-nowrap">
               Siap Kirim: {readyToSendCandidates.length}
             </span>
             {readyToSendCandidates.length > 1 && (
               <span
                 data-testid="fonnte-estimated-duration"
-                className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold"
+                className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold whitespace-nowrap"
               >
                 Estimasi: ~{formatDurationId(estimatedBatchSec)}
               </span>
@@ -1273,8 +1229,8 @@ export function FonnteSettingsPanel({
         </div>
 
         {/* Filter Kategori Kirim */}
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          <label className="inline-flex items-center gap-1.5 cursor-pointer text-slate-700">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          <label className="inline-flex items-center gap-1.5 cursor-pointer text-slate-700 whitespace-nowrap">
             <input
               type="checkbox"
               data-testid="filter-fonnte-batch-ontime"
@@ -1284,7 +1240,7 @@ export function FonnteSettingsPanel({
             />
             <span>Hadir Tepat Waktu</span>
           </label>
-          <label className="inline-flex items-center gap-1.5 cursor-pointer text-slate-700">
+          <label className="inline-flex items-center gap-1.5 cursor-pointer text-slate-700 whitespace-nowrap">
             <input
               type="checkbox"
               checked={includeLateBatch}
@@ -1293,7 +1249,7 @@ export function FonnteSettingsPanel({
             />
             <span>Terlambat</span>
           </label>
-          <label className="inline-flex items-center gap-1.5 cursor-pointer text-slate-700">
+          <label className="inline-flex items-center gap-1.5 cursor-pointer text-slate-700 whitespace-nowrap">
             <input
               type="checkbox"
               checked={includeAbsentBatch}
@@ -1302,7 +1258,7 @@ export function FonnteSettingsPanel({
             />
             <span>Alpa (Tidak Hadir)</span>
           </label>
-          <label className="inline-flex items-center gap-1.5 cursor-pointer text-slate-700">
+          <label className="inline-flex items-center gap-1.5 cursor-pointer text-slate-700 whitespace-nowrap">
             <input
               type="checkbox"
               checked={includeUnrecordedBatch}
@@ -1315,7 +1271,7 @@ export function FonnteSettingsPanel({
 
         {/* Daftar Penerima */}
         {todayCandidates.length === 0 ? (
-          <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 text-xs text-slate-500 text-center">
+          <div className="rounded-xl bg-slate-50 border border-slate-200 p-3.5 text-xs text-slate-500 text-center">
             Belum ada siswa sesuai kategori terpilih pada tanggal {todayDate}.
           </div>
         ) : (
@@ -1337,9 +1293,9 @@ export function FonnteSettingsPanel({
                       WA Ortu: {c.hasValidPhone ? c.normalizedTarget : 'Belum diisi / tidak valid'}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                     <span
-                      className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border ${
+                      className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border whitespace-nowrap ${
                         c.status === 'Hadir Tepat Waktu'
                           ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           : c.status === 'Terlambat'
@@ -1350,16 +1306,16 @@ export function FonnteSettingsPanel({
                       {c.status}
                     </span>
                     {c.alreadyNotified ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-semibold">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-semibold whitespace-nowrap">
                         <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
                         Terkirim/Antre
                       </span>
                     ) : !c.hasValidPhone ? (
-                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 text-[11px] font-medium">
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 text-[11px] font-medium whitespace-nowrap">
                         No. WA Kosong
                       </span>
                     ) : (
-                      <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold">
+                      <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold whitespace-nowrap">
                         Siap Kirim
                       </span>
                     )}
@@ -1370,17 +1326,13 @@ export function FonnteSettingsPanel({
           </div>
         )}
 
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-          <p className="text-[11px] text-slate-500">
-            Pengiriman berjalan di latar belakang server (1 pesan per giliran, jeda acak{' '}
-            {config.pacing.minDelaySec}–{config.pacing.maxDelaySec} dtk).
-          </p>
+        <div className="flex justify-end pt-0.5">
           <button
             type="button"
             disabled={enqueuingBatch || readyToSendCandidates.length === 0}
             onClick={() => void handleEnqueueTodayBatch()}
             data-testid="btn-enqueue-fonnte-batch"
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors whitespace-nowrap"
           >
             <Send className="h-3.5 w-3.5" aria-hidden="true" />
             <span>
@@ -1395,10 +1347,10 @@ export function FonnteSettingsPanel({
         {queueSnapshot && queueSnapshot.counts.total > 0 && (
           <div
             data-testid="fonnte-queue-monitor"
-            className="rounded-xl bg-slate-50 border border-slate-200 p-4 space-y-3"
+            className="rounded-xl bg-slate-50 border border-slate-200 p-3.5 space-y-3"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
+              <div className="min-w-0">
                 <p className="text-xs font-bold text-slate-900">
                   Status Antrean Bertahap Server
                   {queueSnapshot.paused && (
@@ -1412,11 +1364,11 @@ export function FonnteSettingsPanel({
                   <strong>{queueSnapshot.counts.pending + queueSnapshot.counts.sending}</strong> · Gagal:{' '}
                   <strong>{queueSnapshot.counts.failed}</strong>
                   {nextSendCountdownSec > 0 && !queueSnapshot.paused && (
-                    <> · Pesan berikutnya dalam <strong>{nextSendCountdownSec} dtk</strong></>
+                    <> · Berikutnya <strong>{nextSendCountdownSec} dtk</strong></>
                   )}
                 </p>
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 shrink-0">
                 {queueSnapshot.paused ? (
                   <button
                     type="button"
@@ -1472,7 +1424,7 @@ export function FonnteSettingsPanel({
                     )}
                   </div>
                   <span
-                    className={`px-2 py-0.5 rounded font-semibold uppercase text-[10px] ${
+                    className={`px-2 py-0.5 rounded font-semibold uppercase text-[10px] shrink-0 ${
                       job.state === 'sent'
                         ? 'bg-emerald-50 text-emerald-700'
                         : job.state === 'failed'
@@ -1498,19 +1450,11 @@ export function FonnteSettingsPanel({
       </section>
 
       {/* 4. Template Pesan Orang Tua */}
-      <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
+      <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-3.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">
-              Template Pesan WhatsApp Orang Tua
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Variabel tersedia:{' '}
-              <code className="font-mono text-[11px] text-indigo-700">
-                {'{salam} {nama} {nisn} {kelas} {tanggal} {jam_masuk} {batas_jam} {status} {sekolah}'}
-              </code>
-            </p>
-          </div>
+          <h2 className="text-sm sm:text-base font-semibold text-slate-900">
+            Template Pesan WhatsApp Orang Tua
+          </h2>
           <button
             type="button"
             onClick={() =>
@@ -1521,13 +1465,13 @@ export function FonnteSettingsPanel({
                 absentTemplate: DEFAULT_ABSENT_TEMPLATE,
               })
             }
-            className="text-xs font-semibold text-indigo-600 hover:text-indigo-700"
+            className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 whitespace-nowrap"
           >
             Reset Template Bawaan
           </button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 items-stretch">
           <div className="flex flex-col space-y-1.5">
             <label
               htmlFor="fonnte-ontime-template"
@@ -1538,7 +1482,7 @@ export function FonnteSettingsPanel({
             <textarea
               id="fonnte-ontime-template"
               data-testid="textarea-fonnte-ontime-template"
-              rows={6}
+              rows={5}
               value={config.onTimeTemplate}
               onChange={(e) => onChangeConfig({ ...config, onTimeTemplate: e.target.value })}
               className="w-full flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
@@ -1555,7 +1499,7 @@ export function FonnteSettingsPanel({
             <textarea
               id="fonnte-late-template"
               data-testid="textarea-fonnte-late-template"
-              rows={6}
+              rows={5}
               value={config.lateTemplate}
               onChange={(e) => onChangeConfig({ ...config, lateTemplate: e.target.value })}
               className="w-full flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
@@ -1572,7 +1516,7 @@ export function FonnteSettingsPanel({
             <textarea
               id="fonnte-absent-template"
               data-testid="textarea-fonnte-absent-template"
-              rows={6}
+              rows={5}
               value={config.absentTemplate}
               onChange={(e) => onChangeConfig({ ...config, absentTemplate: e.target.value })}
               className="w-full flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
@@ -1585,7 +1529,7 @@ export function FonnteSettingsPanel({
             <p className="text-[11px] font-semibold text-emerald-800">
               Pratinjau Pesan WhatsApp:
             </p>
-            <div className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-1">
               {(
                 [
                   { id: 'ontime', label: 'Hadir Tepat Waktu' },
@@ -1598,7 +1542,7 @@ export function FonnteSettingsPanel({
                   type="button"
                   data-testid={`btn-preview-fonnte-${tab.id}`}
                   onClick={() => setPreviewTab(tab.id)}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap ${
                     previewTab === tab.id
                       ? 'bg-emerald-600 text-white'
                       : 'bg-white text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
@@ -1619,15 +1563,10 @@ export function FonnteSettingsPanel({
       </section>
 
       {/* 5. Uji Kirim 1 Pesan Tes */}
-      <section className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-4">
-        <div>
-          <h2 className="text-base font-semibold text-slate-900">
-            Uji Kirim Pesan WhatsApp (1 Nomor Tes)
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Pastikan perangkat WhatsApp pada Fonnte aktif dan <code className="font-mono">FONNTE_TOKEN</code> sudah dipasang di Secrets server sebelum menjalankan pengiriman otomatis massal.
-          </p>
-        </div>
+      <section className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)] space-y-3">
+        <h2 className="text-sm sm:text-base font-semibold text-slate-900">
+          Uji Kirim Pesan WhatsApp (1 Nomor Tes)
+        </h2>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
@@ -1654,7 +1593,7 @@ export function FonnteSettingsPanel({
             >
               Isi Pesan Uji Coba
             </label>
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <input
                 id="fonnte-test-message"
                 type="text"
@@ -1667,7 +1606,7 @@ export function FonnteSettingsPanel({
                 disabled={sendingTest || !testTarget.trim()}
                 onClick={() => void handleSendTest()}
                 data-testid="btn-send-fonnte-test"
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 shrink-0 transition-colors"
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 shrink-0 transition-colors whitespace-nowrap"
               >
                 <Send className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>{sendingTest ? 'Mengirim...' : 'Kirim Tes'}</span>

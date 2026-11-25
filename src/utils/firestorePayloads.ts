@@ -321,6 +321,7 @@ export function buildUserAccountPayload<T>(
     role,
     jabatan: clampString(account.jabatan, 120, 'Guru'),
     kelas_binaan: clampString(account.kelas_binaan, 64),
+    foto_profil: clampString(account.foto_profil, 150000),
     updatedAt: timestampValue,
   };
 }

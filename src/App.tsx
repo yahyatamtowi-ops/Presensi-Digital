@@ -134,10 +134,13 @@ import {
   filterByAcademicYear,
   getCurrentTimeString,
   getTodayDateString,
+  isSameClassName,
+  normalizeClassNameKey,
   normalizeScheduleMode,
   normalizeTimeHHMM,
   processQrScan,
   resetAttendanceRecordsForDate,
+  resolveCanonicalClassName,
   resolveItemAcademicYear,
   type ScanOutcome,
 } from './utils/attendanceLogic';
@@ -153,6 +156,7 @@ import { isDarkTheme, normalizeThemeId } from './utils/themes';
 import {
   initSpeechEngine,
   playWarningBeep,
+  preloadSchoolVoiceClips,
   speakCheckoutSuccessNotification,
   speakDuplicateRejectedNotification,
   speakOfflineAttendanceNotification,
@@ -193,8 +197,10 @@ import {
   type SubjectScanOutcome,
 } from './utils/subjectAttendance';
 import {
+  createDefaultTimetableConfig,
   getSchoolDaysForCount,
   getTimetableConfigKey,
+  hydrateTimetableCellsFromSchedules,
   loadTimetableConfigs,
   renameSubjectInTimetableConfigs,
   saveTimetableConfigs,
@@ -209,6 +215,7 @@ import { ScannerView } from './components/ScannerView';
 import { StudentsView } from './components/StudentsView';
 import { RecapView } from './components/RecapView';
 import { SubjectAttendanceView } from './components/SubjectAttendanceView';
+import { ProfilePhotoSettingsView } from './components/ProfilePhotoSettingsView';
 import { ScheduleManagementView } from './components/ScheduleManagementView';
 import { TimetableMatrixView } from './components/TimetableMatrixView';
 import { TeacherLessonListView } from './components/TeacherLessonListView';
@@ -265,10 +272,14 @@ export default function App() {
   >(() => {
     const loaded = loadTimetableConfigs();
     if (initialReconciledAcademic.schedules.length === 0) return loaded;
+    const initialCanonicalClasses = Array.from(
+      new Set(initialCache.students.map((s) => s.kelas.trim()).filter(Boolean))
+    ).sort((a, b) => a.localeCompare(b));
     const synced = syncTimetableConfigsFromSchedules(
       loaded,
       initialReconciledAcademic.schedules,
-      initialCache.settings.batas_jam_masuk || '07:15'
+      initialCache.settings.batas_jam_masuk || '07:15',
+      initialCanonicalClasses
     );
     saveTimetableConfigs(synced);
     return synced;
@@ -303,11 +314,11 @@ export default function App() {
   }, []);
 
   const handleReplayVoice = useCallback(() => {
-    unlockSpeechForMobile();
+    unlockSpeechForMobile({ skipSpeechPrimer: true, consumePendingWelcome: false });
     speakWelcomeGreeting(latestDataRef.current.settings.nama_sekolah, true);
   }, []);
 
-  // Preload Indonesian female TTS voices & register mobile/tablet gesture unlock once on mount
+  // Preload unified Indonesian female voice clips & register mobile/tablet gesture unlock
   useEffect(() => {
     initSpeechEngine();
   }, []);
@@ -315,6 +326,12 @@ export default function App() {
   // Scan QR is always the default initial page (accessible without login)
   const [activeTab, setActiveTab] = useState<TabId>('scan');
   const [isOnline, setIsOnline] = useState<boolean>(() => isBrowserOnline());
+
+  useEffect(() => {
+    if (isOnline) {
+      preloadSchoolVoiceClips(settings.nama_sekolah);
+    }
+  }, [isOnline, settings.nama_sekolah]);
   const [syncingQueue, setSyncingQueue] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(
     !isBrowserOnline()
@@ -434,14 +451,26 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  const syncTimetablesWithSchedules = useCallback((nextSchedules: TeacherSchedule[]) => {
-    const fallbackStart = latestDataRef.current.settings.batas_jam_masuk || '07:15';
-    setTimetableConfigs((prev) => {
-      const next = syncTimetableConfigsFromSchedules(prev, nextSchedules, fallbackStart);
-      saveTimetableConfigs(next);
-      return next;
-    });
-  }, []);
+  const syncTimetablesWithSchedules = useCallback(
+    (nextSchedules: TeacherSchedule[], studentsOverride?: Student[]) => {
+      const fallbackStart = latestDataRef.current.settings.batas_jam_masuk || '07:15';
+      const sourceStudents = studentsOverride ?? latestDataRef.current.students;
+      const canonicalClasses = Array.from(
+        new Set(sourceStudents.map((s) => s.kelas.trim()).filter(Boolean))
+      ).sort((a, b) => a.localeCompare(b));
+      setTimetableConfigs((prev) => {
+        const next = syncTimetableConfigsFromSchedules(
+          prev,
+          nextSchedules,
+          fallbackStart,
+          canonicalClasses
+        );
+        saveTimetableConfigs(next);
+        return next;
+      });
+    },
+    []
+  );
 
   useEffect(() => {
     return subscribeFirestoreUsage(() => {
@@ -734,6 +763,7 @@ export default function App() {
             });
           },
           onStudents: (cloudStudents) => {
+            latestDataRef.current.students = cloudStudents;
             setStudents(cloudStudents);
             saveLocalStudents(cloudStudents);
           },
@@ -777,6 +807,7 @@ export default function App() {
                 role: matched.role,
                 jabatan: formatRoleLabel(matched.role, matched.kelas_binaan),
                 kelas_binaan: matched.kelas_binaan,
+                foto_profil: matched.foto_profil,
               };
               if (
                 syncedSession.userId === prevSession.userId &&
@@ -785,7 +816,8 @@ export default function App() {
                 (syncedSession.nip || '') === (prevSession.nip || '') &&
                 syncedSession.role === prevSession.role &&
                 syncedSession.jabatan === prevSession.jabatan &&
-                (syncedSession.kelas_binaan || '') === (prevSession.kelas_binaan || '')
+                (syncedSession.kelas_binaan || '') === (prevSession.kelas_binaan || '') &&
+                (syncedSession.foto_profil || '') === (prevSession.foto_profil || '')
               ) {
                 return prevSession;
               }
@@ -1194,12 +1226,24 @@ export default function App() {
               lastLocalAccountsSaveAtRef.current <= fetchStartedAt));
 
         if (canApplyRemoteAccounts) {
-          latestFullSnapshotRef.current.accounts = remote.accounts;
-          setAccounts(remote.accounts);
-          saveUserAccounts(remote.accounts);
+          const prevAccounts = latestFullSnapshotRef.current.accounts;
+          const mergedRemoteAccounts = remote.accounts.map((acc) => {
+            if (acc.foto_profil) return acc;
+            const existingLocal = prevAccounts.find(
+              (a) =>
+                a.id === acc.id ||
+                a.username.toLowerCase() === acc.username.toLowerCase()
+            );
+            return existingLocal?.foto_profil
+              ? { ...acc, foto_profil: existingLocal.foto_profil }
+              : acc;
+          });
+          latestFullSnapshotRef.current.accounts = mergedRemoteAccounts;
+          setAccounts(mergedRemoteAccounts);
+          saveUserAccounts(mergedRemoteAccounts);
           setSession((prevSession) => {
             if (!prevSession) return prevSession;
-            const matched = remote.accounts.find(
+            const matched = mergedRemoteAccounts.find(
               (a) =>
                 a.id === prevSession.userId ||
                 a.username.toLowerCase() === prevSession.username.toLowerCase()
@@ -1213,6 +1257,7 @@ export default function App() {
               role: matched.role,
               jabatan: formatRoleLabel(matched.role, matched.kelas_binaan),
               kelas_binaan: matched.kelas_binaan,
+              foto_profil: matched.foto_profil,
             };
             if (
               syncedSession.userId === prevSession.userId &&
@@ -1221,7 +1266,8 @@ export default function App() {
               (syncedSession.nip || '') === (prevSession.nip || '') &&
               syncedSession.role === prevSession.role &&
               syncedSession.jabatan === prevSession.jabatan &&
-              (syncedSession.kelas_binaan || '') === (prevSession.kelas_binaan || '')
+              (syncedSession.kelas_binaan || '') === (prevSession.kelas_binaan || '') &&
+              (syncedSession.foto_profil || '') === (prevSession.foto_profil || '')
             ) {
               return prevSession;
             }
@@ -2040,14 +2086,15 @@ export default function App() {
   );
 
   // Active academic year datasets (used by Scan QR and non-Master Admin accounts)
-  const activeYearStudents = useMemo(
-    () =>
-      filterByAcademicYear(students, {
-        activeAcademicYear: settings.tahun_ajaran,
-        isMasterAdmin: false,
-      }),
-    [students, settings.tahun_ajaran]
-  );
+  const activeYearStudents = useMemo(() => {
+    const filtered = filterByAcademicYear(students, {
+      activeAcademicYear: settings.tahun_ajaran,
+      isMasterAdmin: false,
+    });
+    // Safety fallback: if students exist in storage/spreadsheet but have not been migrated
+    // to the newly changed tahun_ajaran yet, still surface them instead of showing an empty list.
+    return filtered.length > 0 ? filtered : students;
+  }, [students, settings.tahun_ajaran]);
 
   const activeYearRecords = useMemo(
     () =>
@@ -2059,15 +2106,17 @@ export default function App() {
   );
 
   // Academic-year filtered datasets for logged-in views (Master Admin can switch archive years)
-  const yearVisibleStudents = useMemo(
-    () =>
-      filterByAcademicYear(students, {
-        activeAcademicYear: settings.tahun_ajaran,
-        isMasterAdmin,
-        masterYearFilter,
-      }),
-    [students, settings.tahun_ajaran, isMasterAdmin, masterYearFilter]
-  );
+  const yearVisibleStudents = useMemo(() => {
+    const filtered = filterByAcademicYear(students, {
+      activeAcademicYear: settings.tahun_ajaran,
+      isMasterAdmin,
+      masterYearFilter,
+    });
+    if (!isMasterAdmin && filtered.length === 0 && students.length > 0) {
+      return students;
+    }
+    return filtered;
+  }, [students, settings.tahun_ajaran, isMasterAdmin, masterYearFilter]);
 
   const yearVisibleRecords = useMemo(
     () =>
@@ -2080,23 +2129,37 @@ export default function App() {
   );
 
   const availableClasses = useMemo(() => {
-    const set = new Set(activeYearStudents.map((s) => s.kelas));
-    return Array.from(set).sort();
+    const set = new Set(activeYearStudents.map((s) => s.kelas.trim()).filter(Boolean));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [activeYearStudents]);
 
-  const waliClass =
-    session?.role === 'wali_kelas' ? session.kelas_binaan?.trim() || '' : undefined;
+  const waliClass = useMemo(() => {
+    if (session?.role !== 'wali_kelas') return undefined;
+    const fromSession = session.kelas_binaan?.trim() || '';
+    const matchedAccount = accounts.find(
+      (a) =>
+        a.id === session.userId ||
+        a.username.trim().toLowerCase() === session.username.trim().toLowerCase()
+    );
+    const rawWaliClass = fromSession || matchedAccount?.kelas_binaan?.trim() || '';
+    if (!rawWaliClass) return '';
+    return resolveCanonicalClassName(rawWaliClass, availableClasses);
+  }, [session, accounts, availableClasses]);
 
   const scopedStudents = useMemo(() => {
     if (waliClass === undefined) return yearVisibleStudents;
     if (!waliClass) return [];
-    return yearVisibleStudents.filter((s) => s.kelas === waliClass);
-  }, [yearVisibleStudents, waliClass]);
+    const matchedInYear = yearVisibleStudents.filter((s) =>
+      isSameClassName(s.kelas, waliClass)
+    );
+    if (matchedInYear.length > 0) return matchedInYear;
+    return students.filter((s) => isSameClassName(s.kelas, waliClass));
+  }, [yearVisibleStudents, students, waliClass]);
 
   const scopedRecords = useMemo(() => {
     if (waliClass === undefined) return yearVisibleRecords;
     if (!waliClass) return [];
-    return yearVisibleRecords.filter((r) => r.kelas === waliClass);
+    return yearVisibleRecords.filter((r) => isSameClassName(r.kelas, waliClass));
   }, [yearVisibleRecords, waliClass]);
 
   const masterYearControl = isMasterAdmin
@@ -2137,7 +2200,7 @@ export default function App() {
         type: 'warning',
         title: 'Akses Terbatas untuk Guru Mata Pelajaran',
         description:
-          'Akun Guru Mata Pelajaran khusus mengakses Presensi Mapel, Rekap & Export, Analisis, serta Pemindai QR.',
+          'Akun Guru Mata Pelajaran khusus mengakses Presensi Mapel, Daftar Pelajaran, Rekap & Export, Analisis, Pemindai QR, dan Pengaturan Profil.',
       });
       return;
     }
@@ -2147,7 +2210,7 @@ export default function App() {
         type: 'warning',
         title: 'Akses Terbatas untuk Kepala Sekolah',
         description:
-          'Akun Kepala Sekolah khusus mengakses Dashboard, Data Siswa, Rekap, dan Analisis.',
+          'Akun Kepala Sekolah khusus mengakses Dashboard, Data Siswa, Rekap, Analisis, dan Pengaturan Profil.',
       });
       return;
     }
@@ -2155,7 +2218,7 @@ export default function App() {
     pushToast({
       type: 'warning',
       title: 'Akses Khusus Master Admin',
-      description: 'Menu Pengaturan hanya dapat diakses oleh akun Master Admin.',
+      description: 'Menu ini hanya dapat diakses oleh akun Master Admin.',
     });
   }
 
@@ -3142,6 +3205,7 @@ export default function App() {
           role: updatedCurrent.role,
           jabatan: formatRoleLabel(updatedCurrent.role, updatedCurrent.kelas_binaan),
           kelas_binaan: updatedCurrent.kelas_binaan,
+          foto_profil: updatedCurrent.foto_profil,
         };
         setSession(syncedSession);
         saveAuthSession(syncedSession);
@@ -3168,6 +3232,61 @@ export default function App() {
           description: `Total ${nextAccounts.length} akun aktif tersimpan. Hubungkan Google Spreadsheet di Cloud & Sheets untuk sinkronisasi otomatis.`,
         });
       }
+    } finally {
+      lastLocalAccountsSaveAtRef.current = Date.now();
+      accountsSaveInFlightRef.current = false;
+    }
+  }
+
+  async function handleUpdateOwnProfilePhoto(
+    photoDataUrl: string | undefined
+  ): Promise<void> {
+    if (!session) return;
+    const cleanPhoto = photoDataUrl?.trim() || undefined;
+    const nextAccounts = accounts.map((acc) => {
+      const isMatch =
+        acc.id === session.userId ||
+        acc.username.trim().toLowerCase() === session.username.trim().toLowerCase();
+      if (!isMatch) return acc;
+      if (cleanPhoto) {
+        return { ...acc, foto_profil: cleanPhoto };
+      }
+      const { foto_profil: _removed, ...rest } = acc;
+      return rest;
+    });
+
+    const updatedAccount = nextAccounts.find(
+      (acc) =>
+        acc.id === session.userId ||
+        acc.username.trim().toLowerCase() === session.username.trim().toLowerCase()
+    );
+
+    accountsSaveInFlightRef.current = true;
+    lastLocalAccountsSaveAtRef.current = Date.now();
+    latestFullSnapshotRef.current.accounts = nextAccounts;
+    setAccounts(nextAccounts);
+    saveUserAccounts(nextAccounts);
+
+    const nextSession: AuthSession = {
+      ...session,
+      foto_profil: cleanPhoto,
+    };
+    setSession(nextSession);
+    saveAuthSession(nextSession);
+
+    runCloudWrite((uid) => syncAllAccountsToCloud(uid, nextAccounts));
+
+    try {
+      if (settings.script_url.trim() && updatedAccount) {
+        await syncMutation('upsertAkun', { account: updatedAccount });
+      }
+      pushToast({
+        type: 'success',
+        title: cleanPhoto ? 'Foto Profil Diperbarui' : 'Foto Profil Dihapus',
+        description: cleanPhoto
+          ? 'Foto profil Anda kini tampil di bagian kiri atas nama Anda.'
+          : 'Foto profil telah dikembalikan ke ikon standar.',
+      });
     } finally {
       lastLocalAccountsSaveAtRef.current = Date.now();
       accountsSaveInFlightRef.current = false;
@@ -3740,7 +3859,7 @@ export default function App() {
               a.id === `asg_from_${previous.id}` ||
               (a.hari === previous.hari &&
                 a.teacher_user_id === previous.teacher_user_id &&
-                a.kelas.trim().toLowerCase() === previous.kelas.trim().toLowerCase() &&
+                isSameClassName(a.kelas, previous.kelas) &&
                 a.mata_pelajaran.trim().toLowerCase() ===
                   previous.mata_pelajaran.trim().toLowerCase() &&
                 resolveItemAcademicYear(a.tahun_ajaran) ===
@@ -3787,7 +3906,7 @@ export default function App() {
           a.id === `asg_from_${target.id}` ||
           (a.hari === target.hari &&
             a.teacher_user_id === target.teacher_user_id &&
-            a.kelas.trim().toLowerCase() === target.kelas.trim().toLowerCase() &&
+            isSameClassName(a.kelas, target.kelas) &&
             a.mata_pelajaran.trim().toLowerCase() ===
               target.mata_pelajaran.trim().toLowerCase() &&
             resolveItemAcademicYear(a.tahun_ajaran) ===
@@ -3835,7 +3954,9 @@ export default function App() {
 
     const targetYear = resolveItemAcademicYear(config.tahun_ajaran);
     const targetSem = normalizeSemester(config.semester, 'ganjil');
-    const classSet = new Set(activeClasses.map((c) => c.trim().toLowerCase()));
+    const classSet = new Set(
+      activeClasses.map((c) => normalizeClassNameKey(c) || c.trim().toLowerCase())
+    );
     const daySet = new Set(getSchoolDaysForCount(config.jumlah_hari));
 
     const isInTimetableScope = (item: {
@@ -3846,7 +3967,7 @@ export default function App() {
     }) =>
       resolveItemAcademicYear(item.tahun_ajaran) === targetYear &&
       (!item.semester || normalizeSemester(item.semester, 'ganjil') === targetSem) &&
-      classSet.has(item.kelas.trim().toLowerCase()) &&
+      classSet.has(normalizeClassNameKey(item.kelas) || item.kelas.trim().toLowerCase()) &&
       Boolean(item.hari && daySet.has(item.hari));
 
     const preservedSchedules = currentSchedules.filter(
@@ -3855,12 +3976,13 @@ export default function App() {
     const removedSchedules = currentSchedules.filter((s) => isInTimetableScope(s));
     const nextSchedules = [...preservedSchedules, ...syncedSchedules];
 
-    // Mirror every timetable schedule into SubjectAssignments so teachers see them automatically in Menu Presensi Mapel
+    // Mirror every timetable schedule into SubjectAssignments so teachers see exact synced lessons
+    // in both Menu Presensi Mapel and Daftar Pelajaran (replacing stale in-scope assignments cleanly).
     const preservedAssignments = currentAssignments.filter(
-      (a) => !(a.source === 'schedule' && isInTimetableScope(a))
+      (a) => !isInTimetableScope(a)
     );
-    const removedAssignments = currentAssignments.filter(
-      (a) => a.source === 'schedule' && isInTimetableScope(a)
+    const removedAssignments = currentAssignments.filter((a) =>
+      isInTimetableScope(a)
     );
 
     let nextAssignments = [...preservedAssignments];
@@ -3941,12 +4063,13 @@ export default function App() {
     });
     if (!res.ok) return res;
     lastLocalAcademicSaveAtRef.current = Date.now();
+    latestFullSnapshotRef.current.subjectAssignments = res.assignments;
     setSubjectAssignments(res.assignments);
     saveSubjectAssignments(res.assignments);
     void syncMutation('upsertMapelKelas', { ...res.assignment, assignment: res.assignment });
     runCloudWrite((uid) => upsertSubjectAssignmentToCloud(uid, res.assignment));
 
-    // Bidirectional sync: automatically populate Master Admin's Sub Menu Jadwal Pelajaran Guru
+    // Bidirectional sync: automatically populate Master Admin's Sub Menu Jadwal Pelajaran Guru & Pengaturan Jadwal
     const mirrored = syncAssignmentToTeacherSchedules(
       teacherSchedules,
       res.assignment,
@@ -3954,6 +4077,7 @@ export default function App() {
     );
     if (mirrored.upsertedSchedule) {
       const upsertedSchedule = mirrored.upsertedSchedule;
+      latestFullSnapshotRef.current.teacherSchedules = mirrored.schedules;
       setTeacherSchedules(mirrored.schedules);
       saveTeacherSchedules(mirrored.schedules);
       syncTimetablesWithSchedules(mirrored.schedules);
@@ -3989,7 +4113,7 @@ export default function App() {
           (target.hari &&
             s.hari === target.hari &&
             s.teacher_user_id === target.teacher_user_id &&
-            s.kelas.trim().toLowerCase() === target.kelas.trim().toLowerCase() &&
+            isSameClassName(s.kelas, target.kelas) &&
             s.mata_pelajaran.trim().toLowerCase() ===
               target.mata_pelajaran.trim().toLowerCase() &&
             resolveItemAcademicYear(s.tahun_ajaran) ===
@@ -4546,7 +4670,17 @@ export default function App() {
                     settings.tahun_ajaran,
                     normalizeSemester(settings.semester, 'ganjil')
                   )
-                ]
+                ] ??
+                hydrateTimetableCellsFromSchedules(
+                  createDefaultTimetableConfig(
+                    settings.tahun_ajaran,
+                    normalizeSemester(settings.semester, 'ganjil'),
+                    settings.batas_jam_masuk || '07:15'
+                  ),
+                  teacherSchedules,
+                  true,
+                  availableClasses
+                )
               }
               onOpenSubjectAttendance={() => setActiveTab('mapel')}
             />
@@ -4565,7 +4699,17 @@ export default function App() {
                   settings.tahun_ajaran,
                   normalizeSemester(settings.semester, 'ganjil')
                 )
-              ]
+              ] ??
+              hydrateTimetableCellsFromSchedules(
+                createDefaultTimetableConfig(
+                  settings.tahun_ajaran,
+                  normalizeSemester(settings.semester, 'ganjil'),
+                  settings.batas_jam_masuk || '07:15'
+                ),
+                teacherSchedules,
+                true,
+                availableClasses
+              )
             }
             onAddMasterSubject={handleAddMasterSubject}
             onUpdateMasterSubject={handleUpdateMasterSubject}
@@ -4602,7 +4746,16 @@ export default function App() {
           />
         )}
 
-        {effectiveTab === 'pengaturan' && (
+        {effectiveTab === 'pengaturan' &&
+          session &&
+          session.role !== 'master_admin' && (
+            <ProfilePhotoSettingsView
+              session={session}
+              onUpdateProfilePhoto={handleUpdateOwnProfilePhoto}
+            />
+          )}
+
+        {effectiveTab === 'pengaturan' && session?.role === 'master_admin' && (
           <SettingsView
             settings={settings}
             accounts={accounts}

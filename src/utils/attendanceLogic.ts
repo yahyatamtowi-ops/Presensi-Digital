@@ -82,8 +82,18 @@ export function normalizeAttendanceStatus(raw: unknown): AttendanceStatus | null
  * into strict 24-hour 'HH:MM' required by HTML <input type="time"> and scan comparisons.
  */
 export function normalizeTimeHHMM(raw: unknown, fallback = '07:15'): string {
-  const text = String(raw ?? '').trim().replace(/\./g, ':');
-  if (!text) return fallback;
+  const rawText = String(raw ?? '').trim();
+  if (!rawText) return fallback;
+
+  // Handle ISO date-time strings returned by Google Sheets / Apps Script (e.g. 1899-12-30T00:30:00.000Z)
+  if (rawText.includes('T') && /^\d{4}-\d{2}-\d{2}T/.test(rawText)) {
+    const parsed = new Date(rawText);
+    if (!Number.isNaN(parsed.getTime())) {
+      return `${pad2(parsed.getHours())}:${pad2(parsed.getMinutes())}`;
+    }
+  }
+
+  const text = rawText.replace(/\./g, ':');
 
   // Match HH:MM(:SS)? with optional AM/PM
   const ampmMatch = text.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)$/i);
@@ -108,6 +118,53 @@ export function normalizeTimeHHMM(raw: unknown, fallback = '07:15'): string {
   }
 
   return fallback;
+}
+
+/**
+ * Produces a canonical comparison key for class names so spacing/punctuation/dot differences
+ * (e.g. "XI.D" vs "XI D", "X I.E" vs "XI E", "XII.E" vs "XII E", "Kelas X-IPA-1" vs "X IPA 1")
+ * match reliably while keeping distinct classes ("X A", "XI A", "XII A") strictly separate.
+ */
+export function normalizeClassNameKey(raw?: string | null): string {
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) return '';
+  const withoutPrefix = trimmed.replace(/^kelas\s+/i, '');
+  return withoutPrefix.replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
+
+export function isSameClassName(a?: string | null, b?: string | null): boolean {
+  const keyA = normalizeClassNameKey(a);
+  const keyB = normalizeClassNameKey(b);
+  return Boolean(keyA && keyB && keyA === keyB);
+}
+
+/**
+ * Resolves a raw class name to its canonical spelling from a list of known classes
+ * (typically sourced from the Student roster) when an equivalent class exists.
+ */
+export function resolveCanonicalClassName(
+  rawClass: string,
+  canonicalClasses: string[]
+): string {
+  const trimmed = String(rawClass ?? '').trim();
+  if (!trimmed) return '';
+  const targetKey = normalizeClassNameKey(trimmed);
+  if (!targetKey) return trimmed;
+  const exact = canonicalClasses.find((c) => c.trim() === trimmed);
+  if (exact) return exact.trim();
+  const matched = canonicalClasses.find(
+    (c) => normalizeClassNameKey(c) === targetKey
+  );
+  return matched ? matched.trim() : trimmed;
+}
+
+export function normalizeAcademicYear(raw?: string | null): string {
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) return '';
+  return trimmed
+    .replace(/^(?:tahun\s*ajaran|ta\.?)\s*/i, '')
+    .replace(/\s*[/\-–—]\s*/g, '/')
+    .trim();
 }
 
 export function normalizeScheduleMode(
@@ -199,14 +256,16 @@ export function resolveItemAcademicYear(
   itemYear?: string,
   fallbackYear = '2026/2027'
 ): string {
-  const trimmed = itemYear?.trim();
-  return trimmed || fallbackYear;
+  const normItem = normalizeAcademicYear(itemYear);
+  const normFallback = normalizeAcademicYear(fallbackYear) || '2026/2027';
+  return normItem || normFallback;
 }
 
 /**
  * Filters records or students by Academic Year.
  * Non-master_admin users (guest, wali_kelas, guru) ONLY see items matching activeAcademicYear.
  * Master Admin can view activeAcademicYear, a specific historical year, or 'ALL'.
+ * Items without an explicit tahun_ajaran default to activeAcademicYear (unless fallbackYear is explicitly provided).
  */
 export function filterByAcademicYear<T extends { tahun_ajaran?: string }>(
   items: T[],
@@ -221,23 +280,30 @@ export function filterByAcademicYear<T extends { tahun_ajaran?: string }>(
     activeAcademicYear,
     isMasterAdmin,
     masterYearFilter = 'ACTIVE',
-    fallbackYear = '2026/2027',
+    fallbackYear,
   } = options;
+
+  const normActive = normalizeAcademicYear(activeAcademicYear) || '2026/2027';
+  const effectiveFallback =
+    normalizeAcademicYear(fallbackYear ?? normActive) || normActive;
 
   if (isMasterAdmin) {
     if (masterYearFilter === 'ALL') {
       return items;
     }
     const targetYear =
-      masterYearFilter === 'ACTIVE' ? activeAcademicYear : masterYearFilter;
+      masterYearFilter === 'ACTIVE'
+        ? normActive
+        : normalizeAcademicYear(masterYearFilter) || normActive;
     return items.filter(
-      (item) => resolveItemAcademicYear(item.tahun_ajaran, fallbackYear) === targetYear
+      (item) =>
+        resolveItemAcademicYear(item.tahun_ajaran, effectiveFallback) === targetYear
     );
   }
 
   return items.filter(
     (item) =>
-      resolveItemAcademicYear(item.tahun_ajaran, fallbackYear) === activeAcademicYear
+      resolveItemAcademicYear(item.tahun_ajaran, effectiveFallback) === normActive
   );
 }
 
@@ -245,14 +311,17 @@ export function collectAcademicYears(
   students: Array<{ tahun_ajaran?: string }>,
   records: Array<{ tahun_ajaran?: string }>,
   activeAcademicYear: string,
-  fallbackYear = '2026/2027'
+  fallbackYear?: string
 ): string[] {
-  const set = new Set<string>([activeAcademicYear]);
+  const normActive = normalizeAcademicYear(activeAcademicYear) || '2026/2027';
+  const effectiveFallback =
+    normalizeAcademicYear(fallbackYear ?? normActive) || normActive;
+  const set = new Set<string>([normActive]);
   for (const s of students) {
-    set.add(resolveItemAcademicYear(s.tahun_ajaran, fallbackYear));
+    set.add(resolveItemAcademicYear(s.tahun_ajaran, effectiveFallback));
   }
   for (const r of records) {
-    set.add(resolveItemAcademicYear(r.tahun_ajaran, fallbackYear));
+    set.add(resolveItemAcademicYear(r.tahun_ajaran, effectiveFallback));
   }
   return Array.from(set).sort((a, b) => b.localeCompare(a));
 }
@@ -1205,7 +1274,7 @@ export function evaluateWaliKelasLoginReminder(params: {
   targetDate: string;
   modePresensi: AttendanceScheduleMode;
 }): WaliKelasLoginReminder {
-  const kelasNorm = (params.kelasBinaan || '').trim().toLowerCase();
+  const kelasNorm = normalizeClassNameKey(params.kelasBinaan);
   if (!kelasNorm) {
     return {
       kelasBinaan: '',
@@ -1216,8 +1285,8 @@ export function evaluateWaliKelasLoginReminder(params: {
     };
   }
 
-  const classStudents = params.students.filter(
-    (s) => s.kelas.trim().toLowerCase() === kelasNorm
+  const classStudents = params.students.filter((s) =>
+    isSameClassName(s.kelas, params.kelasBinaan)
   );
 
   if (classStudents.length === 0) {

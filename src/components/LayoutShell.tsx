@@ -25,6 +25,7 @@ import {
   Volume2,
   WifiOff,
   Bell,
+  User,
 } from 'lucide-react';
 import type {
   AuthSession,
@@ -353,19 +354,28 @@ export function LayoutShell({
   const showCreatorCredit = settings.show_creator_credit !== false;
   const totalAdminAlertCount = pendingLateRequests.length + storageAlerts.length;
   const isKepalaSekolah = currentRole === 'kepala_sekolah';
+  const showRoleProfilePhoto =
+    currentRole === 'guru' ||
+    currentRole === 'wali_kelas' ||
+    currentRole === 'kepala_sekolah';
   const baseHeaderInfo = TAB_TITLES[activeTab];
   const headerInfo =
-    isKepalaSekolah && activeTab === 'siswa'
+    activeTab === 'pengaturan' && showRoleProfilePhoto
       ? {
-          title: 'Data Siswa',
-          subtitle: 'Daftar siswa aktif per kelas (mode pantau Kepala Sekolah)',
+          title: 'Pengaturan Profil',
+          subtitle: 'Upload atau perbarui foto profil akun Anda',
         }
-      : isKepalaSekolah && activeTab === 'rekap'
+      : isKepalaSekolah && activeTab === 'siswa'
         ? {
-            title: 'Rekap Kehadiran',
-            subtitle: 'Pantau rekap kehadiran harian, mingguan, bulanan, dan semester',
+            title: 'Data Siswa',
+            subtitle: 'Daftar siswa aktif per kelas (mode pantau Kepala Sekolah)',
           }
-        : baseHeaderInfo;
+        : isKepalaSekolah && activeTab === 'rekap'
+          ? {
+              title: 'Rekap Kehadiran',
+              subtitle: 'Pantau rekap kehadiran harian, mingguan, bulanan, dan semester',
+            }
+          : baseHeaderInfo;
   const visibleNavItems = NAV_ITEMS.filter((item) => {
     if (item.teacherOnly) {
       return currentRole === 'guru' || currentRole === 'wali_kelas';
@@ -442,9 +452,40 @@ export function LayoutShell({
 
         <div className="p-4 pb-5 border-t border-slate-200/80 space-y-3">
           {session ? (
-            <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-3 space-y-2">
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-slate-900 truncate">
+            <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-3 space-y-2.5">
+              {showRoleProfilePhoto && (
+                <div className="flex justify-center pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => onSelectTab('pengaturan')}
+                    title="Ubah Foto Profil di Pengaturan"
+                    aria-label={`Foto profil ${session.nama}`}
+                    data-testid="sidebar-profile-avatar-btn"
+                    className="group relative rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 cursor-pointer"
+                  >
+                    {session.foto_profil ? (
+                      <img
+                        src={session.foto_profil}
+                        alt={`Foto profil ${session.nama}`}
+                        data-testid="sidebar-profile-photo"
+                        className="h-16 w-16 rounded-full object-cover border-2 border-indigo-200 shadow-xs bg-white group-hover:border-indigo-400 transition-colors"
+                      />
+                    ) : (
+                      <div
+                        data-testid="sidebar-profile-placeholder"
+                        className="h-16 w-16 rounded-full bg-indigo-50 border-2 border-indigo-200 text-indigo-600 flex items-center justify-center shadow-xs group-hover:border-indigo-400 transition-colors"
+                      >
+                        <User className="h-7 w-7 opacity-80" aria-hidden="true" />
+                      </div>
+                    )}
+                  </button>
+                </div>
+              )}
+              <div className={`min-w-0 ${showRoleProfilePhoto ? 'text-center' : ''}`}>
+                <p
+                  data-testid="sidebar-profile-name"
+                  className="text-xs font-semibold text-slate-900 truncate"
+                >
                   {session.nama}
                 </p>
                 <p className="text-[11px] text-indigo-700 font-medium truncate">
@@ -618,6 +659,7 @@ export function LayoutShell({
               {onReplayVoice && (
                 <button
                   type="button"
+                  data-testid="btn-replay-voice"
                   onClick={onReplayVoice}
                   aria-label="Aktifkan atau putar suara sambutan perempuan"
                   title="Aktifkan / Putar Suara"
@@ -644,7 +686,28 @@ export function LayoutShell({
               </button>
 
               {/* Header Login / Logout Action (Login shown on all viewports when sidebar is hidden; Logout shown on Mobile/Tablet) */}
-              <div className={`${showMenuBar ? 'lg:hidden' : ''} shrink-0`}>
+              <div className={`${showMenuBar ? 'lg:hidden' : ''} flex items-center gap-1.5 shrink-0`}>
+                {session && showRoleProfilePhoto && (
+                  <button
+                    type="button"
+                    onClick={() => onSelectTab('pengaturan')}
+                    title={`${session.nama} · Ubah Foto Profil`}
+                    aria-label={`Foto profil ${session.nama}`}
+                    className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 shrink-0"
+                  >
+                    {session.foto_profil ? (
+                      <img
+                        src={session.foto_profil}
+                        alt={`Foto profil ${session.nama}`}
+                        className="h-7 w-7 sm:h-8 sm:w-8 rounded-full object-cover border border-indigo-200 bg-white"
+                      />
+                    ) : (
+                      <span className="h-7 w-7 sm:h-8 sm:w-8 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-600 flex items-center justify-center">
+                        <User className="h-3.5 w-3.5" aria-hidden="true" />
+                      </span>
+                    )}
+                  </button>
+                )}
                 {session ? (
                   <button
                     type="button"

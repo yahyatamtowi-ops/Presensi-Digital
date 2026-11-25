@@ -528,6 +528,10 @@ export function subscribeToSchoolWorkspace(
               typeof data.kelas_binaan === 'string' && data.kelas_binaan
                 ? data.kelas_binaan
                 : undefined,
+            foto_profil:
+              typeof data.foto_profil === 'string' && data.foto_profil
+                ? data.foto_profil
+                : undefined,
           };
         });
         callbacks.onAccounts(list);

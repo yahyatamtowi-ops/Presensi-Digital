@@ -56,7 +56,7 @@ test('RBAC separates guest, guru (Mapel/Rekap/Analisis), wali_kelas (operational
   assert.equal(canAccessTab(null, 'jadwal'), false);
   assert.equal(canAccessTab(null, 'pengaturan'), false);
 
-  // Guru Mata Pelajaran: Scan QR, Presensi Mapel, Daftar Pelajaran, Rekap & Export, and Analisis
+  // Guru Mata Pelajaran: Scan QR, Presensi Mapel, Daftar Pelajaran, Rekap & Export, Analisis, and Pengaturan (Foto Profil)
   assert.equal(canAccessTab('guru', 'scan'), true);
   assert.equal(canAccessTab('guru', 'mapel'), true);
   assert.equal(canAccessTab('guru', 'daftar_pelajaran'), true);
@@ -65,10 +65,10 @@ test('RBAC separates guest, guru (Mapel/Rekap/Analisis), wali_kelas (operational
   assert.equal(canAccessTab('guru', 'dashboard'), false);
   assert.equal(canAccessTab('guru', 'siswa'), false);
   assert.equal(canAccessTab('guru', 'jadwal'), false);
-  assert.equal(canAccessTab('guru', 'pengaturan'), false);
+  assert.equal(canAccessTab('guru', 'pengaturan'), true);
   assert.equal(getDefaultTabForRole('guru'), 'mapel');
 
-  // Wali Kelas: Scan QR, Dashboard, Siswa, Rekap, Presensi Mapel, Daftar Pelajaran, Analisis (no Jadwal / Pengaturan)
+  // Wali Kelas: Scan QR, Dashboard, Siswa, Rekap, Presensi Mapel, Daftar Pelajaran, Analisis, and Pengaturan (Foto Profil)
   assert.equal(canAccessTab('wali_kelas', 'scan'), true);
   assert.equal(canAccessTab('wali_kelas', 'dashboard'), true);
   assert.equal(canAccessTab('wali_kelas', 'siswa'), true);
@@ -77,7 +77,7 @@ test('RBAC separates guest, guru (Mapel/Rekap/Analisis), wali_kelas (operational
   assert.equal(canAccessTab('wali_kelas', 'daftar_pelajaran'), true);
   assert.equal(canAccessTab('wali_kelas', 'analisis'), true);
   assert.equal(canAccessTab('wali_kelas', 'jadwal'), false);
-  assert.equal(canAccessTab('wali_kelas', 'pengaturan'), false);
+  assert.equal(canAccessTab('wali_kelas', 'pengaturan'), true);
   assert.equal(getDefaultTabForRole('wali_kelas'), 'dashboard');
 
   // Master Admin: everywhere including Mapel & Jadwal (personal Daftar Pelajaran is for Guru & Wali Kelas)
@@ -88,7 +88,7 @@ test('RBAC separates guest, guru (Mapel/Rekap/Analisis), wali_kelas (operational
   assert.equal(canAccessTab('master_admin', 'pengaturan'), true);
   assert.equal(getDefaultTabForRole('master_admin'), 'dashboard');
 
-  // Kepala Sekolah: ONLY Dashboard, Data Siswa (read-only, no E-Card), Rekap (read-only, no Export/Unduh/WA), Analisis
+  // Kepala Sekolah: Dashboard, Data Siswa (read-only), Rekap (read-only), Analisis, and Pengaturan (Foto Profil)
   assert.equal(canAccessTab('kepala_sekolah', 'dashboard'), true);
   assert.equal(canAccessTab('kepala_sekolah', 'siswa'), true);
   assert.equal(canAccessTab('kepala_sekolah', 'rekap'), true);
@@ -97,7 +97,7 @@ test('RBAC separates guest, guru (Mapel/Rekap/Analisis), wali_kelas (operational
   assert.equal(canAccessTab('kepala_sekolah', 'mapel'), false);
   assert.equal(canAccessTab('kepala_sekolah', 'daftar_pelajaran'), false);
   assert.equal(canAccessTab('kepala_sekolah', 'jadwal'), false);
-  assert.equal(canAccessTab('kepala_sekolah', 'pengaturan'), false);
+  assert.equal(canAccessTab('kepala_sekolah', 'pengaturan'), true);
   assert.equal(getDefaultTabForRole('kepala_sekolah'), 'dashboard');
 
   // Student delete authority: only Master Admin; edit authority: Master Admin & Wali Kelas
@@ -160,6 +160,20 @@ test('authenticateUser validates Master Admin, Kepala Sekolah, Wali Kelas (with 
   assert.equal(guruRes.ok, true);
   if (guruRes.ok) {
     assert.equal(guruRes.session.role, 'guru');
+  }
+
+  const accountsWithPhoto = DEFAULT_USER_ACCOUNTS.map((acc) =>
+    acc.username === 'guru'
+      ? { ...acc, foto_profil: 'data:image/jpeg;base64,/9j/testphoto' }
+      : acc
+  );
+  const guruPhotoRes = authenticateUser(accountsWithPhoto, 'guru', '123');
+  assert.equal(guruPhotoRes.ok, true);
+  if (guruPhotoRes.ok) {
+    assert.equal(
+      guruPhotoRes.session.foto_profil,
+      'data:image/jpeg;base64,/9j/testphoto'
+    );
   }
 
   const badRes = authenticateUser(DEFAULT_USER_ACCOUNTS, 'master', 'salah');

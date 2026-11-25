@@ -23,6 +23,7 @@ import {
   type ParsedStudentImportResult,
 } from '../utils/importExport';
 import { generateECardsPdf, getECardNameFontSizeClass } from '../utils/ecardPdf';
+import { isSameClassName } from '../utils/attendanceLogic';
 import { DEFAULT_SCHOOL_LOGO } from '../utils/seedData';
 import { PdfPreviewModal } from './PdfPreviewModal';
 
@@ -131,11 +132,15 @@ export function StudentsView({
     }
   }, [batchClass, uniqueClasses]);
 
+  const effectiveClassFilter = assignedClass ? 'ALL' : classFilter;
+
   const filteredStudents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return students
       .filter((s) => {
-        const matchesClass = classFilter === 'ALL' || s.kelas === classFilter;
+        const matchesClass =
+          effectiveClassFilter === 'ALL' ||
+          isSameClassName(s.kelas, effectiveClassFilter);
         const matchesSearch =
           !q ||
           s.nis.toLowerCase().includes(q) ||
@@ -144,7 +149,7 @@ export function StudentsView({
         return matchesClass && matchesSearch;
       })
       .sort((a, b) => a.kelas.localeCompare(b.kelas) || a.nama.localeCompare(b.nama));
-  }, [students, searchQuery, classFilter]);
+  }, [students, searchQuery, effectiveClassFilter]);
 
   const selectedSet = useMemo(() => new Set(selectedNis), [selectedNis]);
   const allFilteredSelected =

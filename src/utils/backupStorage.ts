@@ -223,6 +223,9 @@ export function parseAndValidateBackupJson(
       role,
       jabatan: formatRoleLabel(role, acc.kelas_binaan),
       kelas_binaan: role === 'wali_kelas' ? acc.kelas_binaan?.trim() || undefined : undefined,
+      ...(typeof acc.foto_profil === 'string' && acc.foto_profil.trim()
+        ? { foto_profil: acc.foto_profil.trim() }
+        : {}),
     });
   }
 

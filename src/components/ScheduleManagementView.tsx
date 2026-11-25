@@ -36,6 +36,11 @@ import {
   getSchoolDaysForCount,
 } from '../utils/timetableLogic';
 import {
+  isSameClassName,
+  normalizeClassNameKey,
+  resolveCanonicalClassName,
+} from '../utils/attendanceLogic';
+import {
   downloadTeacherScheduleTemplate,
   parseTeacherSchedulesFile,
   type ParsedTeacherScheduleInput,
@@ -243,11 +248,21 @@ export function ScheduleManagementView({
   }, [masterSubjects, subjectSearch]);
 
   const scheduleClasses = useMemo(() => {
-    const set = new Set<string>(availableClasses);
-    for (const s of activeYearSchedules) {
-      if (s.kelas.trim()) set.add(s.kelas.trim());
+    const byKey = new Map<string, string>();
+    for (const c of availableClasses) {
+      const trimmed = c.trim();
+      if (!trimmed) continue;
+      const key = normalizeClassNameKey(trimmed) || trimmed.toLowerCase();
+      if (!byKey.has(key)) byKey.set(key, trimmed);
     }
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
+    for (const s of activeYearSchedules) {
+      const trimmed = s.kelas.trim();
+      if (!trimmed) continue;
+      const canonical = resolveCanonicalClassName(trimmed, availableClasses);
+      const key = normalizeClassNameKey(canonical) || canonical.toLowerCase();
+      if (!byKey.has(key)) byKey.set(key, canonical);
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b));
   }, [availableClasses, activeYearSchedules]);
 
   const filteredSchedules = useMemo(() => {
@@ -255,7 +270,7 @@ export function ScheduleManagementView({
       .filter((s) => {
         if (filterHari !== 'ALL' && s.hari !== filterHari) return false;
         if (filterTeacherId !== 'ALL' && s.teacher_user_id !== filterTeacherId) return false;
-        if (filterKelas !== 'ALL' && s.kelas.toLowerCase() !== filterKelas.toLowerCase()) {
+        if (filterKelas !== 'ALL' && !isSameClassName(s.kelas, filterKelas)) {
           return false;
         }
         return true;

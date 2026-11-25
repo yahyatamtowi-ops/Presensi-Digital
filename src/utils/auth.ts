@@ -58,13 +58,14 @@ export function canAccessTab(role: UserRole | null, tab: TabId): boolean {
       tab === 'dashboard' ||
       tab === 'siswa' ||
       tab === 'rekap' ||
-      tab === 'analisis'
+      tab === 'analisis' ||
+      tab === 'pengaturan'
     );
   }
   if (tab === 'scan') return true;
   if (!role) return false;
   if (role === 'master_admin') return tab !== 'daftar_pelajaran';
-  if (tab === 'jadwal' || tab === 'pengaturan_jadwal' || tab === 'pengaturan') return false;
+  if (tab === 'jadwal' || tab === 'pengaturan_jadwal') return false;
   if (role === 'wali_kelas') {
     return (
       tab === 'dashboard' ||
@@ -72,11 +73,18 @@ export function canAccessTab(role: UserRole | null, tab: TabId): boolean {
       tab === 'rekap' ||
       tab === 'mapel' ||
       tab === 'daftar_pelajaran' ||
-      tab === 'analisis'
+      tab === 'analisis' ||
+      tab === 'pengaturan'
     );
   }
-  // Guru Mata Pelajaran: Scan QR, Daftar Pelajaran, Presensi Mapel, Rekap & Export, and Analisis
-  return tab === 'daftar_pelajaran' || tab === 'mapel' || tab === 'rekap' || tab === 'analisis';
+  // Guru Mata Pelajaran: Scan QR, Daftar Pelajaran, Presensi Mapel, Rekap & Export, Analisis, and Pengaturan (Foto Profil)
+  return (
+    tab === 'daftar_pelajaran' ||
+    tab === 'mapel' ||
+    tab === 'rekap' ||
+    tab === 'analisis' ||
+    tab === 'pengaturan'
+  );
 }
 
 export function canDeleteStudents(role: UserRole | null): boolean {
@@ -138,6 +146,7 @@ export function authenticateUser(
       role: matched.role,
       jabatan: formatRoleLabel(matched.role, matched.kelas_binaan),
       kelas_binaan: matched.kelas_binaan,
+      foto_profil: matched.foto_profil,
     },
   };
 }

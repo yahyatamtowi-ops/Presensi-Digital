@@ -9,8 +9,11 @@ import type {
   TimetableTimeSlot,
 } from '../types';
 import {
+  isSameClassName,
+  normalizeClassNameKey,
   normalizeTimeHHMM,
   parseTimeToMinutes,
+  resolveCanonicalClassName,
   resolveItemAcademicYear,
 } from './attendanceLogic';
 import { normalizeDayOfWeek, normalizeSemester } from './subjectAttendance';
@@ -192,8 +195,8 @@ export function generateDailyTimeSlots(params: {
 
     if (overlappingBreak) {
       const gapBeforeBreak = overlappingBreak.start - cursor;
-      if (gapBeforeBreak < Math.min(15, duration / 2)) {
-        // Very tiny gap before manual break: place break first, then run full lesson after break
+      if (gapBeforeBreak < Math.ceil(duration / 2)) {
+        // Gap before manual break is less than half a JP: place break first, then run full lesson after break
         slots.push({
           kind: 'break',
           breakId: overlappingBreak.id,
@@ -248,26 +251,46 @@ export function detectTimetableTeacherConflicts(
   const days = getSchoolDaysForCount(config.jumlah_hari);
   const conflicts: TimetableConflict[] = [];
 
+  // Deduplicate activeClasses by canonical class key so spelling variants ("XI E" & "X I.E")
+  // are never mistaken for two different classes.
+  const dedupedClasses: string[] = [];
+  const seenClassKeys = new Set<string>();
+  for (const rawKelas of activeClasses) {
+    const trimmed = rawKelas.trim();
+    if (!trimmed) continue;
+    const key = normalizeClassNameKey(trimmed) || trimmed.toLowerCase();
+    if (seenClassKeys.has(key)) continue;
+    seenClassKeys.add(key);
+    dedupedClasses.push(trimmed);
+  }
+
   for (const hari of days) {
     for (let jp = 1; jp <= config.jumlah_jp; jp++) {
-      const byTeacher = new Map<string, { name: string; classes: string[] }>();
-      for (const kelas of activeClasses) {
+      const byTeacher = new Map<
+        string,
+        { rawId: string; name: string; classes: string[] }
+      >();
+      for (const kelas of dedupedClasses) {
         const cell = config.cells[makeTimetableCellKey(hari, jp, kelas)];
         if (!cell?.mata_pelajaran?.trim() || !cell.teacher_user_id?.trim()) continue;
-        const tid = cell.teacher_user_id.trim();
-        const entry = byTeacher.get(tid) || {
+        const rawTid = cell.teacher_user_id.trim();
+        const tidKey = rawTid.toLowerCase();
+        const entry = byTeacher.get(tidKey) || {
+          rawId: rawTid,
           name: cell.teacher_name || 'Guru',
           classes: [],
         };
-        entry.classes.push(kelas);
-        byTeacher.set(tid, entry);
+        if (!entry.classes.some((c) => isSameClassName(c, kelas))) {
+          entry.classes.push(kelas);
+        }
+        byTeacher.set(tidKey, entry);
       }
-      for (const [tid, info] of byTeacher.entries()) {
+      for (const info of byTeacher.values()) {
         if (info.classes.length > 1) {
           conflicts.push({
             hari,
             jamKe: jp,
-            teacher_user_id: tid,
+            teacher_user_id: info.rawId,
             teacher_name: info.name,
             classes: info.classes,
           });
@@ -372,75 +395,697 @@ export function buildTeacherSchedulesFromTimetable(
 }
 
 /**
+ * Determines whether a TeacherSchedule's time interval genuinely covers a timetable lesson slot.
+ * Uses strict majority overlap (> 50% of slot duration) so adjacent non-overlapping schedules
+ * can never both claim the same boundary slot and trigger false conflicts.
+ */
+function doesScheduleCoverSlot(
+  schStart: number,
+  schEnd: number,
+  slotStart: number,
+  slotEnd: number
+): boolean {
+  const overlap = Math.min(schEnd, slotEnd) - Math.max(schStart, slotStart);
+  if (overlap <= 0) return false;
+  const slotDur = Math.max(1, slotEnd - slotStart);
+  const schDur = Math.max(1, schEnd - schStart);
+
+  if (overlap > slotDur / 2) return true;
+  if (overlap === slotDur / 2 && schStart >= slotStart && schStart < slotEnd) {
+    return true;
+  }
+  if (schDur < slotDur && overlap / schDur >= 0.6) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Expands `jumlah_jp` (up to 16) when schedules extend beyond the last generated lesson slot
+ * so afternoon classes land in their exact chronological JP instead of snapping onto an earlier JP.
+ */
+function computeRequiredJumlahJp(
+  config: Pick<
+    TimetableConfig,
+    'jam_mulai_sekolah' | 'durasi_jp_menit' | 'jumlah_jp' | 'istirahat'
+  >,
+  maxScheduleEndMinutes: number
+): number {
+  let effectiveJp = Math.max(1, Math.min(16, Math.round(Number(config.jumlah_jp) || 8)));
+  if (!Number.isFinite(maxScheduleEndMinutes) || maxScheduleEndMinutes <= 0) {
+    return effectiveJp;
+  }
+
+  while (effectiveJp < 16) {
+    const slots = generateDailyTimeSlots({ ...config, jumlah_jp: effectiveJp });
+    const lessonSlots = slots.filter(
+      (s): s is Extract<TimetableTimeSlot, { kind: 'lesson' }> => s.kind === 'lesson'
+    );
+    const lastLesson = lessonSlots[lessonSlots.length - 1];
+    const lastEnd = lastLesson ? parseTimeToMinutes(lastLesson.jam_selesai) : null;
+    if (lastEnd === null || lastEnd >= maxScheduleEndMinutes - 5) {
+      break;
+    }
+    effectiveJp += 1;
+  }
+
+  return effectiveJp;
+}
+
+function gcdPositive(a: number, b: number): number {
+  let x = Math.abs(Math.round(a));
+  let y = Math.abs(Math.round(b));
+  while (y !== 0) {
+    const t = x % y;
+    x = y;
+    y = t;
+  }
+  return x;
+}
+
+const STANDARD_JP_DURATIONS = [35, 40, 45, 30, 50, 60];
+
+interface ScopedScheduleSpan {
+  sch: TeacherSchedule;
+  schStart: number;
+  schEnd: number;
+}
+
+interface GridAlignmentScore {
+  exactMatches: number;
+  boundaryMatches: number;
+  totalBoundaryError: number;
+  deadGapMinutes: number;
+}
+
+function evaluateGridAlignment(
+  slots: TimetableTimeSlot[],
+  scoped: ScopedScheduleSpan[]
+): GridAlignmentScore {
+  const lessonSpans = slots
+    .filter(
+      (s): s is Extract<TimetableTimeSlot, { kind: 'lesson' }> => s.kind === 'lesson'
+    )
+    .map((s) => ({
+      start: parseTimeToMinutes(s.jam_mulai) ?? 0,
+      end: parseTimeToMinutes(s.jam_selesai) ?? 0,
+    }));
+
+  const breakSpans = slots
+    .filter(
+      (s): s is Extract<TimetableTimeSlot, { kind: 'break' }> => s.kind === 'break'
+    )
+    .map((s) => ({
+      start: parseTimeToMinutes(s.jam_mulai) ?? 0,
+      end: parseTimeToMinutes(s.jam_selesai) ?? 0,
+    }));
+
+  // Detect any dead gap between consecutive generated slots (e.g. JP3 ending 09:15 while break starts 09:30)
+  let deadGapMinutes = 0;
+  for (let i = 1; i < slots.length; i++) {
+    const prevEnd = parseTimeToMinutes(slots[i - 1].jam_selesai);
+    const currStart = parseTimeToMinutes(slots[i].jam_mulai);
+    if (prevEnd !== null && currStart !== null && currStart > prevEnd) {
+      deadGapMinutes += currStart - prevEnd;
+    }
+  }
+
+  const startSet = new Set(lessonSpans.map((s) => s.start));
+  const endSet = new Set(lessonSpans.map((s) => s.end));
+
+  let exactMatches = 0;
+  let boundaryMatches = 0;
+  let totalBoundaryError = 0;
+
+  for (const { schStart, schEnd } of scoped) {
+    const hasStart = startSet.has(schStart);
+    const hasEnd = endSet.has(schEnd);
+    const splitByBreak = breakSpans.some(
+      (b) => b.start > schStart && b.start < schEnd
+    );
+
+    if (hasStart) boundaryMatches += 1;
+    if (hasEnd) boundaryMatches += 1;
+    if (hasStart && hasEnd && !splitByBreak) {
+      exactMatches += 1;
+    }
+
+    if (lessonSpans.length > 0) {
+      let minStartDist = Infinity;
+      let minEndDist = Infinity;
+      for (const ls of lessonSpans) {
+        const ds = Math.abs(ls.start - schStart);
+        const de = Math.abs(ls.end - schEnd);
+        if (ds < minStartDist) minStartDist = ds;
+        if (de < minEndDist) minEndDist = de;
+      }
+      totalBoundaryError += minStartDist + minEndDist + (splitByBreak ? 30 : 0);
+    }
+  }
+
+  return { exactMatches, boundaryMatches, totalBoundaryError, deadGapMinutes };
+}
+
+/**
+ * Aligns configured break boundaries onto exact lesson slot edges so breaks never slice
+ * through a teacher-input schedule and post-break schedules align cleanly on JP boundaries.
+ */
+function alignBreaksForCandidateGrid(
+  startMins: number,
+  duration: number,
+  baseBreaks: TimetableBreak[],
+  scoped: ScopedScheduleSpan[]
+): TimetableBreak[] {
+  const parsedBreaks = (baseBreaks || [])
+    .map((b, idx) => {
+      const s = parseTimeToMinutes(normalizeTimeHHMM(b.jam_mulai, ''));
+      const e = parseTimeToMinutes(normalizeTimeHHMM(b.jam_selesai, ''));
+      if (s === null || e === null || e <= s) return null;
+      return {
+        id: b.id || `brk_${idx + 1}`,
+        label: (b.label || '').trim() || `Istirahat ${idx + 1}`,
+        start: s,
+        end: e,
+        origLen: e - s,
+      };
+    })
+    .filter((b): b is NonNullable<typeof b> => b !== null)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+
+  if (parsedBreaks.length === 0) return [];
+
+  const aligned: TimetableBreak[] = [];
+  let cursor = startMins;
+
+  for (let i = 0; i < parsedBreaks.length; i++) {
+    const brk = parsedBreaks[i];
+    const nextOrigStart = parsedBreaks[i + 1]?.start ?? 24 * 60;
+
+    // Candidate break starts aligned to lesson edges >= cursor + duration
+    const kApprox = Math.max(1, Math.round((brk.start - cursor) / duration));
+    const candidateStarts: number[] = [];
+    for (let dk = -2; dk <= 2; dk++) {
+      const k = kApprox + dk;
+      if (k < 1) continue;
+      const candStart = cursor + k * duration;
+      if (candStart >= nextOrigStart - 15) continue;
+      // Avoid slicing straight through any teacher schedule
+      const slicesSchedule = scoped.some(
+        (s) => candStart > s.schStart && candStart < s.schEnd
+      );
+      if (!slicesSchedule) {
+        candidateStarts.push(candStart);
+      }
+    }
+
+    const chosenStart =
+      candidateStarts.length > 0
+        ? candidateStarts.sort(
+            (a, b) => Math.abs(a - brk.start) - Math.abs(b - brk.start)
+          )[0]
+        : cursor + kApprox * duration;
+
+    // Schedules starting after this break and before the next break
+    const segmentSchedules = scoped.filter(
+      (s) => s.schStart >= chosenStart && s.schStart < nextOrigStart
+    );
+
+    const earliestSegmentStart = segmentSchedules.reduce(
+      (min, s) => Math.min(min, s.schStart),
+      Infinity
+    );
+
+    let chosenEnd = chosenStart + brk.origLen;
+
+    if (segmentSchedules.length > 0 && Number.isFinite(earliestSegmentStart)) {
+      const maxAllowedEnd = Math.min(
+        earliestSegmentStart,
+        chosenStart + Math.max(brk.origLen + duration, 60)
+      );
+      const minAllowedEnd = Math.min(maxAllowedEnd, chosenStart + 10);
+
+      if (maxAllowedEnd > chosenStart) {
+        // Test candidate break ends that align post-break schedules modulo `duration`
+        const candEndSet = new Set<number>();
+        for (const seg of segmentSchedules) {
+          const offset = seg.schStart - chosenStart;
+          const rem = ((offset % duration) + duration) % duration;
+          for (let mult = 0; mult <= 2; mult++) {
+            const c = chosenStart + rem + mult * duration;
+            if (c >= minAllowedEnd && c <= maxAllowedEnd && c > chosenStart) {
+              candEndSet.add(c);
+            }
+          }
+        }
+        if (candEndSet.size > 0) {
+          const idealEnd = chosenStart + brk.origLen;
+          const rankedEnds = Array.from(candEndSet)
+            .map((cEnd) => {
+              const alignedCount = segmentSchedules.filter(
+                (s) =>
+                  s.schStart >= cEnd &&
+                  (s.schStart - cEnd) % duration === 0 &&
+                  (s.schEnd - cEnd) % duration === 0
+              ).length;
+              return {
+                cEnd,
+                alignedCount,
+                dist: Math.abs(cEnd - idealEnd),
+              };
+            })
+            .sort(
+              (a, b) => b.alignedCount - a.alignedCount || a.dist - b.dist
+            );
+          chosenEnd = rankedEnds[0].cEnd;
+        } else if (chosenEnd > earliestSegmentStart && earliestSegmentStart > chosenStart) {
+          chosenEnd = earliestSegmentStart;
+        }
+      }
+    }
+
+    // Ensure break does not overlap any schedule starting before chosenEnd
+    const blockingSchedule = scoped.find(
+      (s) => s.schStart < chosenEnd && s.schEnd > chosenStart
+    );
+    if (blockingSchedule) {
+      if (blockingSchedule.schStart > chosenStart) {
+        chosenEnd = blockingSchedule.schStart;
+      } else {
+        // Cannot place break cleanly here without cutting a lesson; keep original break timing
+        aligned.push({
+          id: brk.id,
+          label: brk.label,
+          jam_mulai: formatMinutesToHHMM(brk.start),
+          jam_selesai: formatMinutesToHHMM(brk.end),
+        });
+        cursor = Math.max(cursor, brk.end);
+        continue;
+      }
+    }
+
+    aligned.push({
+      id: brk.id,
+      label: brk.label,
+      jam_mulai: formatMinutesToHHMM(chosenStart),
+      jam_selesai: formatMinutesToHHMM(chosenEnd),
+    });
+    cursor = chosenEnd;
+  }
+
+  return aligned;
+}
+
+/**
+ * Automatically adapts the timetable bell grid (jam_mulai_sekolah, durasi_jp_menit, istirahat)
+ * to match teacher-input schedules when the current grid does not align with their exact times.
+ * Example: if a teacher inputs 07:30–08:40 (70m) on a default 07:15 / 45m grid, this aligns
+ * the grid to 07:30 with 35m JP slots (07:30–08:05 and 08:05–08:40).
+ * When the current grid already aligns 100% with all schedules, config is returned unchanged.
+ */
+export function alignTimetableBellScheduleToSchedules(
+  config: TimetableConfig,
+  schedules: TeacherSchedule[]
+): TimetableConfig {
+  if (config.bell_locked_by_admin) return config;
+
+  const tahunAjaran = resolveItemAcademicYear(config.tahun_ajaran);
+  const semester = normalizeSemester(config.semester);
+  const validDays = new Set(getSchoolDaysForCount(config.jumlah_hari));
+
+  const scoped: ScopedScheduleSpan[] = schedules
+    .filter(
+      (s) =>
+        resolveItemAcademicYear(s.tahun_ajaran) === tahunAjaran &&
+        (!s.semester || normalizeSemester(s.semester) === semester) &&
+        validDays.has(s.hari)
+    )
+    .map((sch) => {
+      const schStart = parseTimeToMinutes(normalizeTimeHHMM(sch.jam_mulai, ''));
+      const schEnd = parseTimeToMinutes(normalizeTimeHHMM(sch.jam_selesai, ''));
+      return { sch, schStart, schEnd };
+    })
+    .filter(
+      (item): item is ScopedScheduleSpan =>
+        item.schStart !== null &&
+        item.schEnd !== null &&
+        item.schEnd > item.schStart
+    );
+
+  if (scoped.length === 0) return config;
+
+  const maxScheduleEnd = scoped.reduce((max, item) => Math.max(max, item.schEnd), 0);
+  const currentJp = computeRequiredJumlahJp(config, maxScheduleEnd);
+  const currentSlots = generateDailyTimeSlots({ ...config, jumlah_jp: currentJp });
+  const currentScore = evaluateGridAlignment(currentSlots, scoped);
+
+  // If current bell grid already matches every teacher schedule cleanly with zero dead gaps, keep it untouched
+  if (currentScore.exactMatches === scoped.length && currentScore.deadGapMinutes === 0) {
+    return config;
+  }
+
+  const currentStartMins =
+    parseTimeToMinutes(normalizeTimeHHMM(config.jam_mulai_sekolah, '07:15')) ?? 435;
+  const currentDur = Math.max(
+    15,
+    Math.min(180, Math.round(Number(config.durasi_jp_menit) || 45))
+  );
+
+  // Build candidate JP durations from existing duration, standard JP durations, and schedule GCD/divisors
+  const durationCandidates = new Set<number>([currentDur, ...STANDARD_JP_DURATIONS]);
+  const allDurations = scoped.map((s) => s.schEnd - s.schStart);
+  let overallGcd = allDurations[0];
+  for (let i = 1; i < allDurations.length; i++) {
+    overallGcd = gcdPositive(overallGcd, allDurations[i]);
+  }
+  if (overallGcd >= 20 && overallGcd <= 60) {
+    durationCandidates.add(overallGcd);
+  }
+  for (const dur of [...allDurations, overallGcd]) {
+    if (dur >= 20 && dur <= 60) durationCandidates.add(dur);
+    for (let factor = 2; factor <= 4; factor++) {
+      if (dur % factor === 0) {
+        const sub = dur / factor;
+        if (sub >= 25 && sub <= 55) durationCandidates.add(sub);
+      }
+    }
+  }
+
+  const earliestScheduleStart = scoped.reduce(
+    (min, item) => Math.min(min, item.schStart),
+    Infinity
+  );
+
+  // Build candidate school start times (existing start + earliest morning schedule start)
+  const startCandidates = new Set<number>([currentStartMins]);
+  if (Number.isFinite(earliestScheduleStart)) {
+    if (earliestScheduleStart <= 10 * 60 || earliestScheduleStart < currentStartMins) {
+      startCandidates.add(earliestScheduleStart);
+    }
+    // Also check earliest schedule per distinct morning start <= 09:00
+    for (const item of scoped) {
+      if (item.schStart <= 9 * 60) {
+        startCandidates.add(item.schStart);
+      }
+    }
+  }
+
+  interface RankedCandidate {
+    startMins: number;
+    duration: number;
+    istirahat: TimetableBreak[];
+    score: GridAlignmentScore;
+    sameDuration: boolean;
+    sameStart: boolean;
+    standardRank: number;
+  }
+
+  let best: RankedCandidate = {
+    startMins: currentStartMins,
+    duration: currentDur,
+    istirahat: config.istirahat,
+    score: currentScore,
+    sameDuration: true,
+    sameStart: true,
+    standardRank: STANDARD_JP_DURATIONS.indexOf(currentDur) >= 0
+      ? STANDARD_JP_DURATIONS.indexOf(currentDur)
+      : 99,
+  };
+
+  const isStrictlyBetter = (a: RankedCandidate, b: RankedCandidate): boolean => {
+    if (a.score.exactMatches !== b.score.exactMatches) {
+      return a.score.exactMatches > b.score.exactMatches;
+    }
+    if (a.score.boundaryMatches !== b.score.boundaryMatches) {
+      return a.score.boundaryMatches > b.score.boundaryMatches;
+    }
+    if (a.score.totalBoundaryError !== b.score.totalBoundaryError) {
+      return a.score.totalBoundaryError < b.score.totalBoundaryError;
+    }
+    if (a.score.deadGapMinutes !== b.score.deadGapMinutes) {
+      return a.score.deadGapMinutes < b.score.deadGapMinutes;
+    }
+    if (a.sameDuration !== b.sameDuration) return a.sameDuration;
+    if (a.sameStart !== b.sameStart) return a.sameStart;
+    if (a.standardRank !== b.standardRank) return a.standardRank < b.standardRank;
+    // Prefer larger standard duration (e.g. 45 over 30 for a 90m block) when tied
+    return a.duration > b.duration;
+  };
+
+  for (const candDur of durationCandidates) {
+    const startSetForDur = new Set<number>(startCandidates);
+    // If earliest schedule is e.g. 08:05 and candDur is 35, also consider 07:30 (1 JP before)
+    if (
+      Number.isFinite(earliestScheduleStart) &&
+      earliestScheduleStart > 7 * 60 &&
+      earliestScheduleStart <= 10 * 60
+    ) {
+      let back = earliestScheduleStart - candDur;
+      while (back >= 6 * 60 + 30) {
+        startSetForDur.add(back);
+        back -= candDur;
+      }
+    }
+
+    for (const candStart of startSetForDur) {
+      // Never shift school start later than the earliest schedule start
+      if (candStart > earliestScheduleStart) continue;
+
+      const breakVariants: TimetableBreak[][] = [
+        config.istirahat,
+        alignBreaksForCandidateGrid(candStart, candDur, config.istirahat, scoped),
+      ];
+
+      for (const candBreaks of breakVariants) {
+        const candConfig: TimetableConfig = {
+          ...config,
+          jam_mulai_sekolah: formatMinutesToHHMM(candStart),
+          durasi_jp_menit: candDur,
+          istirahat: candBreaks,
+        };
+        const candJp = computeRequiredJumlahJp(candConfig, maxScheduleEnd);
+        const candSlots = generateDailyTimeSlots({
+          ...candConfig,
+          jumlah_jp: candJp,
+        });
+        const candScore = evaluateGridAlignment(candSlots, scoped);
+
+        const candidate: RankedCandidate = {
+          startMins: candStart,
+          duration: candDur,
+          istirahat: candBreaks,
+          score: candScore,
+          sameDuration: candDur === currentDur,
+          sameStart: candStart === currentStartMins,
+          standardRank:
+            STANDARD_JP_DURATIONS.indexOf(candDur) >= 0
+              ? STANDARD_JP_DURATIONS.indexOf(candDur)
+              : 99,
+        };
+
+        if (isStrictlyBetter(candidate, best)) {
+          best = candidate;
+        }
+      }
+    }
+  }
+
+  // Only adopt the new bell grid if it strictly improves alignment or removes dead break gaps
+  const improvedAlignment =
+    best.score.exactMatches > currentScore.exactMatches ||
+    (best.score.exactMatches === currentScore.exactMatches &&
+      best.score.boundaryMatches > currentScore.boundaryMatches) ||
+    (best.score.exactMatches === currentScore.exactMatches &&
+      best.score.boundaryMatches === currentScore.boundaryMatches &&
+      best.score.totalBoundaryError < currentScore.totalBoundaryError) ||
+    (best.score.exactMatches === currentScore.exactMatches &&
+      best.score.boundaryMatches === currentScore.boundaryMatches &&
+      best.score.totalBoundaryError === currentScore.totalBoundaryError &&
+      best.score.deadGapMinutes < currentScore.deadGapMinutes);
+
+  if (!improvedAlignment) {
+    return config;
+  }
+
+  return {
+    ...config,
+    jam_mulai_sekolah: formatMinutesToHHMM(best.startMins),
+    durasi_jp_menit: best.duration,
+    istirahat: best.istirahat.map((b) => ({ ...b })),
+  };
+}
+
+/**
  * Populates a TimetableConfig's cells from existing TeacherSchedule records matching the
- * config's academic year & semester (fills any slot whose time range overlaps the schedule).
+ * config's academic year & semester.
+ * - Maps each subject across the exact 1 / 2 / 3+ JP slots covered by its start..end interval
+ *   according to the configured 1-JP duration (e.g. 35m/JP: 07:30-08:40 -> Jam ke-1 07:30-08:05
+ *   & Jam ke-2 08:05-08:40; 07:30-09:15 -> Jam ke-1, ke-2, ke-3).
+ * - Auto-aligns bell grid to teacher-input schedules unless respectConfiguredBell or
+ *   config.bell_locked_by_admin is set.
+ * - Auto-expands jumlah_jp (up to 16) when schedules run later than the configured last JP.
+ * - Uses strict majority overlap so non-overlapping classes on the same day land in exact
+ *   chronological slots without false conflicts.
  */
 export function hydrateTimetableCellsFromSchedules(
   config: TimetableConfig,
   schedules: TeacherSchedule[],
-  overwriteExisting = false
+  overwriteExisting = false,
+  canonicalClasses: string[] = [],
+  respectConfiguredBell = false
 ): TimetableConfig {
-  const tahunAjaran = resolveItemAcademicYear(config.tahun_ajaran);
-  const semester = normalizeSemester(config.semester);
-  const validDays = new Set(getSchoolDaysForCount(config.jumlah_hari));
-  const lessonSlots = generateDailyTimeSlots(config).filter(
+  const alignedConfig =
+    respectConfiguredBell || config.bell_locked_by_admin
+      ? config
+      : alignTimetableBellScheduleToSchedules(config, schedules);
+  const tahunAjaran = resolveItemAcademicYear(alignedConfig.tahun_ajaran);
+  const semester = normalizeSemester(alignedConfig.semester);
+  const validDays = new Set(getSchoolDaysForCount(alignedConfig.jumlah_hari));
+
+  const scoped = schedules
+    .filter(
+      (s) =>
+        resolveItemAcademicYear(s.tahun_ajaran) === tahunAjaran &&
+        (!s.semester || normalizeSemester(s.semester) === semester) &&
+        validDays.has(s.hari)
+    )
+    .map((sch) => {
+      const schStart = parseTimeToMinutes(normalizeTimeHHMM(sch.jam_mulai, ''));
+      const schEnd = parseTimeToMinutes(normalizeTimeHHMM(sch.jam_selesai, ''));
+      return { sch, schStart, schEnd };
+    })
+    .filter(
+      (
+        item
+      ): item is { sch: TeacherSchedule; schStart: number; schEnd: number } =>
+        item.schStart !== null &&
+        item.schEnd !== null &&
+        item.schEnd > item.schStart
+    )
+    .sort(
+      (a, b) =>
+        a.sch.hari.localeCompare(b.sch.hari) ||
+        a.schStart - b.schStart ||
+        a.schEnd - b.schEnd ||
+        a.sch.kelas.localeCompare(b.sch.kelas)
+    );
+
+  const maxScheduleEnd = scoped.reduce(
+    (max, item) => Math.max(max, item.schEnd),
+    0
+  );
+  const effectiveJumlahJp = computeRequiredJumlahJp(alignedConfig, maxScheduleEnd);
+  const lessonSlots = generateDailyTimeSlots({
+    ...alignedConfig,
+    jumlah_jp: effectiveJumlahJp,
+  }).filter(
     (s): s is Extract<TimetableTimeSlot, { kind: 'lesson' }> => s.kind === 'lesson'
   );
 
   const nextCells: Record<string, TimetableCellValue> = overwriteExisting
     ? {}
-    : { ...config.cells };
-  const extraClasses = new Set<string>(config.custom_classes || []);
+    : { ...alignedConfig.cells };
 
-  const scoped = schedules.filter(
-    (s) =>
-      resolveItemAcademicYear(s.tahun_ajaran) === tahunAjaran &&
-      (!s.semester || normalizeSemester(s.semester) === semester) &&
-      validDays.has(s.hari)
+  // Keep custom_classes free of aliases that already exist in canonicalClasses
+  const canonicalKeys = new Set(
+    canonicalClasses.map((c) => normalizeClassNameKey(c)).filter(Boolean)
   );
+  const extraClassesMap = new Map<string, string>();
+  for (const rawCustom of config.custom_classes || []) {
+    const resolved =
+      canonicalClasses.length > 0
+        ? resolveCanonicalClassName(rawCustom, canonicalClasses)
+        : rawCustom.trim();
+    const key = normalizeClassNameKey(resolved) || resolved.toLowerCase();
+    if (!resolved || !key) continue;
+    if (canonicalKeys.has(key)) continue;
+    if (!extraClassesMap.has(key)) {
+      extraClassesMap.set(key, resolved);
+    }
+  }
 
-  for (const sch of scoped) {
-    const schStart = parseTimeToMinutes(sch.jam_mulai);
-    const schEnd = parseTimeToMinutes(sch.jam_selesai);
-    if (schStart === null || schEnd === null || schEnd <= schStart) continue;
-    extraClasses.add(sch.kelas.trim());
+  // Track placed spans per (hari, jamKe, teacherKey) so non-overlapping schedules of the same
+  // teacher NEVER collide onto the same JP slot while genuine real-time overlaps ARE preserved.
+  const placedByTeacherSlot = new Map<
+    string,
+    Array<{ schStart: number; schEnd: number; kelas: string }>
+  >();
 
-    let matchedAny = false;
+  const hasNonOverlappingTeacherCollision = (
+    hari: DayOfWeek,
+    jamKe: number,
+    teacherKey: string,
+    kelas: string,
+    schStart: number,
+    schEnd: number
+  ): boolean => {
+    if (!teacherKey) return false;
+    const existing = placedByTeacherSlot.get(`${hari}|${jamKe}|${teacherKey}`);
+    if (!existing || existing.length === 0) return false;
+    return existing.some(
+      (prev) =>
+        !isSameClassName(prev.kelas, kelas) &&
+        !(prev.schStart < schEnd && schStart < prev.schEnd)
+    );
+  };
+
+  const recordPlacement = (
+    hari: DayOfWeek,
+    jamKe: number,
+    teacherKey: string,
+    kelas: string,
+    schStart: number,
+    schEnd: number
+  ) => {
+    if (!teacherKey) return;
+    const mapKey = `${hari}|${jamKe}|${teacherKey}`;
+    const list = placedByTeacherSlot.get(mapKey) || [];
+    list.push({ schStart, schEnd, kelas });
+    placedByTeacherSlot.set(mapKey, list);
+  };
+
+  for (const { sch, schStart, schEnd } of scoped) {
+    const resolvedKelas =
+      canonicalClasses.length > 0
+        ? resolveCanonicalClassName(sch.kelas, canonicalClasses)
+        : sch.kelas.trim();
+    if (!resolvedKelas) continue;
+
+    const kelasKey = normalizeClassNameKey(resolvedKelas) || resolvedKelas.toLowerCase();
+    if (!canonicalKeys.has(kelasKey) && !extraClassesMap.has(kelasKey)) {
+      extraClassesMap.set(kelasKey, resolvedKelas);
+    }
+
+    const teacherKey = sch.teacher_user_id.trim().toLowerCase();
+    const candidateSlots: Array<{
+      slot: Extract<TimetableTimeSlot, { kind: 'lesson' }>;
+      overlap: number;
+    }> = [];
+
     for (const slot of lessonSlots) {
       const slotStart = parseTimeToMinutes(slot.jam_mulai);
       const slotEnd = parseTimeToMinutes(slot.jam_selesai);
       if (slotStart === null || slotEnd === null) continue;
-      // Overlap check: consider a slot covered if overlap >= 15 minutes or >= half slot
-      const overlapStart = Math.max(schStart, slotStart);
-      const overlapEnd = Math.min(schEnd, slotEnd);
-      const overlap = overlapEnd - overlapStart;
-      const slotDur = slotEnd - slotStart;
-      if (overlap >= Math.min(15, Math.ceil(slotDur / 2))) {
-        const key = makeTimetableCellKey(sch.hari, slot.jamKe, sch.kelas);
-        if (overwriteExisting || !nextCells[key]?.mata_pelajaran) {
-          nextCells[key] = {
-            mata_pelajaran: sch.mata_pelajaran,
-            teacher_user_id: sch.teacher_user_id,
-            teacher_name: sch.teacher_name,
-          };
-        }
-        matchedAny = true;
+      if (doesScheduleCoverSlot(schStart, schEnd, slotStart, slotEnd)) {
+        const overlap = Math.min(schEnd, slotEnd) - Math.max(schStart, slotStart);
+        candidateSlots.push({ slot, overlap });
       }
     }
 
-    // Fallback: if schedule time fell outside configured slots, snap to nearest slot
-    if (!matchedAny && lessonSlots.length > 0) {
-      let nearest = lessonSlots[0];
-      let minDist = Infinity;
-      for (const slot of lessonSlots) {
-        const slotStart = parseTimeToMinutes(slot.jam_mulai) ?? 0;
-        const dist = Math.abs(slotStart - schStart);
-        if (dist < minDist) {
-          minDist = dist;
-          nearest = slot;
-        }
+    let placedAny = false;
+    for (const { slot } of candidateSlots) {
+      if (
+        hasNonOverlappingTeacherCollision(
+          sch.hari,
+          slot.jamKe,
+          teacherKey,
+          resolvedKelas,
+          schStart,
+          schEnd
+        )
+      ) {
+        continue;
       }
-      const key = makeTimetableCellKey(sch.hari, nearest.jamKe, sch.kelas);
+      const key = makeTimetableCellKey(sch.hari, slot.jamKe, resolvedKelas);
       if (overwriteExisting || !nextCells[key]?.mata_pelajaran) {
         nextCells[key] = {
           mata_pelajaran: sch.mata_pelajaran,
@@ -448,12 +1093,73 @@ export function hydrateTimetableCellsFromSchedules(
           teacher_name: sch.teacher_name,
         };
       }
+      recordPlacement(
+        sch.hari,
+        slot.jamKe,
+        teacherKey,
+        resolvedKelas,
+        schStart,
+        schEnd
+      );
+      placedAny = true;
+    }
+
+    // Fallback: if schedule time fell outside/between configured slots or was shifted off a
+    // non-overlapping boundary collision, pick the nearest chronological slot without causing
+    // a false teacher collision.
+    if (!placedAny && lessonSlots.length > 0) {
+      const schMid = (schStart + schEnd) / 2;
+      const ranked = lessonSlots
+        .map((slot) => {
+          const slotStart = parseTimeToMinutes(slot.jam_mulai) ?? 0;
+          const slotEnd = parseTimeToMinutes(slot.jam_selesai) ?? slotStart;
+          const slotMid = (slotStart + slotEnd) / 2;
+          const dist = Math.abs(slotMid - schMid);
+          const collidesNonOverlapping = hasNonOverlappingTeacherCollision(
+            sch.hari,
+            slot.jamKe,
+            teacherKey,
+            resolvedKelas,
+            schStart,
+            schEnd
+          );
+          return { slot, dist, collidesNonOverlapping };
+        })
+        .sort(
+          (a, b) =>
+            Number(a.collidesNonOverlapping) - Number(b.collidesNonOverlapping) ||
+            a.dist - b.dist ||
+            a.slot.jamKe - b.slot.jamKe
+        );
+
+      const chosen = ranked[0]?.slot;
+      if (chosen) {
+        const key = makeTimetableCellKey(sch.hari, chosen.jamKe, resolvedKelas);
+        if (overwriteExisting || !nextCells[key]?.mata_pelajaran) {
+          nextCells[key] = {
+            mata_pelajaran: sch.mata_pelajaran,
+            teacher_user_id: sch.teacher_user_id,
+            teacher_name: sch.teacher_name,
+          };
+        }
+        recordPlacement(
+          sch.hari,
+          chosen.jamKe,
+          teacherKey,
+          resolvedKelas,
+          schStart,
+          schEnd
+        );
+      }
     }
   }
 
   return {
-    ...config,
-    custom_classes: Array.from(extraClasses).sort((a, b) => a.localeCompare(b)),
+    ...alignedConfig,
+    jumlah_jp: effectiveJumlahJp,
+    custom_classes: Array.from(extraClassesMap.values()).sort((a, b) =>
+      a.localeCompare(b)
+    ),
     cells: nextCells,
   };
 }
@@ -468,7 +1174,8 @@ export function hydrateTimetableCellsFromSchedules(
 export function syncTimetableConfigsFromSchedules(
   configs: Record<string, TimetableConfig>,
   schedules: TeacherSchedule[],
-  fallbackStartTime = '07:15'
+  fallbackStartTime = '07:15',
+  canonicalClasses: string[] = []
 ): Record<string, TimetableConfig> {
   const next: Record<string, TimetableConfig> = {};
 
@@ -525,19 +1232,29 @@ export function syncTimetableConfigsFromSchedules(
     const hydrated = hydrateTimetableCellsFromSchedules(
       adjustedBase,
       matchingSchedules,
-      true
+      true,
+      canonicalClasses
     );
 
     // Preserve any incomplete draft cells (subject picked without teacher yet) if slot is still empty
     const mergedCells: Record<string, TimetableCellValue> = { ...hydrated.cells };
     if (existing) {
       for (const [cellKey, cellVal] of Object.entries(existing.cells)) {
+        const parsedKey = parseTimetableCellKey(cellKey);
+        const resolvedCellKey =
+          parsedKey && canonicalClasses.length > 0
+            ? makeTimetableCellKey(
+                parsedKey.hari,
+                parsedKey.jamKe,
+                resolveCanonicalClassName(parsedKey.kelas, canonicalClasses)
+              )
+            : cellKey;
         if (
           cellVal?.mata_pelajaran?.trim() &&
           !cellVal.teacher_user_id?.trim() &&
-          !mergedCells[cellKey]?.mata_pelajaran
+          !mergedCells[resolvedCellKey]?.mata_pelajaran
         ) {
-          mergedCells[cellKey] = { ...cellVal };
+          mergedCells[resolvedCellKey] = { ...cellVal };
         }
       }
     }
@@ -606,7 +1323,11 @@ export function findSlotRangeLabelForSchedule(
   const schEnd = parseTimeToMinutes(normalizeTimeHHMM(jamSelesai, ''));
   if (schStart === null || schEnd === null || schEnd <= schStart) return null;
 
-  const lessonSlots = generateDailyTimeSlots(config).filter(
+  const effectiveJp = computeRequiredJumlahJp(config, schEnd);
+  const lessonSlots = generateDailyTimeSlots({
+    ...config,
+    jumlah_jp: effectiveJp,
+  }).filter(
     (s): s is Extract<TimetableTimeSlot, { kind: 'lesson' }> => s.kind === 'lesson'
   );
   const matched: number[] = [];
@@ -615,9 +1336,7 @@ export function findSlotRangeLabelForSchedule(
     const slotStart = parseTimeToMinutes(slot.jam_mulai);
     const slotEnd = parseTimeToMinutes(slot.jam_selesai);
     if (slotStart === null || slotEnd === null) continue;
-    const overlap = Math.min(schEnd, slotEnd) - Math.max(schStart, slotStart);
-    const slotDur = slotEnd - slotStart;
-    if (overlap >= Math.min(15, Math.ceil(slotDur / 2))) {
+    if (doesScheduleCoverSlot(schStart, schEnd, slotStart, slotEnd)) {
       matched.push(slot.jamKe);
     }
   }
@@ -709,6 +1428,7 @@ export function sanitizeTimetableConfigs(
       jumlah_jp: jumlahJp,
       istirahat,
       custom_classes: customClasses,
+      ...(obj.bell_locked_by_admin === true ? { bell_locked_by_admin: true } : {}),
       cells,
       updated_at: typeof obj.updated_at === 'string' ? obj.updated_at : undefined,
     };

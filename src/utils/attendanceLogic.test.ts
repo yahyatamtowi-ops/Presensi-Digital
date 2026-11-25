@@ -21,7 +21,11 @@ import {
   IZIN_MONTHLY_FAIR_LIMIT,
   SAKIT_CONSECUTIVE_FAIR_LIMIT,
   isBeforeCheckoutTime,
+  isSameClassName,
+  normalizeAcademicYear,
+  normalizeClassNameKey,
   resetAttendanceRecordsForDate,
+  resolveCanonicalClassName,
 } from './attendanceLogic';
 import type { AttendanceRecord, Student } from '../types';
 
@@ -1037,3 +1041,59 @@ test('resetAttendanceRecordsForDate reverts single and collective recorded statu
     true
   );
 });
+
+test('class name normalization matches dot/space/prefix variants while keeping distinct classes separate', () => {
+  assert.equal(isSameClassName('XI.D', 'XI D'), true);
+  assert.equal(isSameClassName('X I.E', 'XI E'), true);
+  assert.equal(isSameClassName('XII.E', 'XII E'), true);
+  assert.equal(isSameClassName('Kelas X-IPA-1', 'X IPA 1'), true);
+  assert.equal(isSameClassName('X A', 'XI A'), false);
+  assert.equal(isSameClassName('XI A', 'XII A'), false);
+  assert.equal(normalizeClassNameKey('  XI.D  '), 'xid');
+
+  const rosterClasses = ['X A', 'XI D', 'XI E', 'XII E'];
+  assert.equal(resolveCanonicalClassName('XI.D', rosterClasses), 'XI D');
+  assert.equal(resolveCanonicalClassName('X I.E', rosterClasses), 'XI E');
+  assert.equal(resolveCanonicalClassName('XII.E', rosterClasses), 'XII E');
+  assert.equal(resolveCanonicalClassName('XII IPS 2', rosterClasses), 'XII IPS 2');
+
+  // Wali kelas reminder still finds students in "XI D" when account kelas_binaan is "XI.D"
+  const reminder = evaluateWaliKelasLoginReminder({
+    students: [
+      { nis: '9001', nama: 'Siswa Satu', kelas: 'XI D', gender: 'L', no_wa_ortu: '0812' },
+      { nis: '9002', nama: 'Siswa Dua', kelas: 'XI D', gender: 'P', no_wa_ortu: '0813' },
+    ],
+    records: [],
+    kelasBinaan: 'XI.D',
+    targetDate: '2026-11-24',
+    modePresensi: 'masuk_saja',
+  });
+  assert.equal(reminder.totalSiswaKelas, 2);
+  assert.equal(reminder.belumHadirCount, 2);
+});
+
+test('filterByAcademicYear keeps blank-year spreadsheet students visible and normalizes year formatting', () => {
+  assert.equal(normalizeAcademicYear('2025 - 2026'), '2025/2026');
+  assert.equal(normalizeAcademicYear('TA 2026 / 2027'), '2026/2027');
+
+  const sheetStudents: Student[] = [
+    { ...sampleStudents[0], tahun_ajaran: '' },
+    { ...sampleStudents[1], tahun_ajaran: undefined },
+    { ...sampleStudents[2], tahun_ajaran: '2025 - 2026' },
+  ];
+
+  // When active year is 2025/2026, blank tahun_ajaran rows and "2025 - 2026" are all visible
+  const visible2025 = filterByAcademicYear(sheetStudents, {
+    activeAcademicYear: '2025/2026',
+    isMasterAdmin: false,
+  });
+  assert.equal(visible2025.length, 3);
+
+  // When active year is 2026/2027, blank rows remain visible while explicit 2025/2026 row is filtered out
+  const visible2026 = filterByAcademicYear(sheetStudents, {
+    activeAcademicYear: '2026/2027',
+    isMasterAdmin: false,
+  });
+  assert.equal(visible2026.length, 2);
+});
+

@@ -6,7 +6,7 @@ import type {
   TeacherSchedule,
   TimetableConfig,
 } from '../types';
-import { resolveItemAcademicYear } from './attendanceLogic';
+import { normalizeClassNameKey, resolveItemAcademicYear } from './attendanceLogic';
 import { getIndonesianDayOfWeek, normalizeSemester } from './subjectAttendance';
 import {
   findSlotRangeLabelForSchedule,
@@ -91,7 +91,7 @@ export function collectPersonalTeacherLessons(params: {
   }) => {
     const dedupeKey = [
       candidate.hari,
-      candidate.kelas.trim().toLowerCase(),
+      normalizeClassNameKey(candidate.kelas) || candidate.kelas.trim().toLowerCase(),
       candidate.mata_pelajaran.trim().toLowerCase(),
       candidate.jam_mulai.trim(),
       candidate.jam_selesai.trim(),
@@ -124,11 +124,20 @@ export function collectPersonalTeacherLessons(params: {
     });
   };
 
+  const scheduleIdentityKeys = new Set<string>();
+
   for (const sch of schedules) {
     if (!matchesTeacherAccount(sch, session)) continue;
     if (resolveItemAcademicYear(sch.tahun_ajaran) !== targetYear) continue;
     if (sch.semester && normalizeSemester(sch.semester, activeSem) !== activeSem) continue;
     pushItem(sch);
+    scheduleIdentityKeys.add(
+      [
+        sch.hari,
+        normalizeClassNameKey(sch.kelas) || sch.kelas.trim().toLowerCase(),
+        sch.mata_pelajaran.trim().toLowerCase(),
+      ].join('|')
+    );
   }
 
   for (const asg of assignments) {
@@ -136,6 +145,19 @@ export function collectPersonalTeacherLessons(params: {
     if (!matchesTeacherAccount(asg, session)) continue;
     if (resolveItemAcademicYear(asg.tahun_ajaran) !== targetYear) continue;
     if (asg.semester && normalizeSemester(asg.semester, activeSem) !== activeSem) continue;
+    const identityKey = [
+      asg.hari,
+      normalizeClassNameKey(asg.kelas) || asg.kelas.trim().toLowerCase(),
+      asg.mata_pelajaran.trim().toLowerCase(),
+    ].join('|');
+    // If an authoritative TeacherSchedule already exists for this (hari, kelas, mapel) and this
+    // assignment came from a schedule mirror (or has no custom times), skip stale duplicates.
+    if (
+      scheduleIdentityKeys.has(identityKey) &&
+      (asg.source === 'schedule' || !asg.jam_mulai?.trim() || !asg.jam_selesai?.trim())
+    ) {
+      continue;
+    }
     const jamMulai = (asg.jam_mulai || '').trim() || '07:15';
     const jamSelesai = (asg.jam_selesai || '').trim() || '08:45';
     pushItem({

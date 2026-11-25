@@ -16,7 +16,7 @@ export function OpeningSplash({ settings, onFinish }: OpeningSplashProps) {
     if (finishedRef.current) return;
     finishedRef.current = true;
     if (fromUserGesture) {
-      unlockSpeechForMobile();
+      unlockSpeechForMobile({ skipSpeechPrimer: true, consumePendingWelcome: false });
     }
     onFinish(fromUserGesture);
   };

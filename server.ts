@@ -22,6 +22,14 @@ import {
   type FonnteQueueSnapshot,
   type FonnteTokenMeta,
 } from './src/utils/fonntePacing.ts';
+import {
+  MAX_TTS_TEXT_LENGTH,
+  buildGoogleTtsUrl,
+  concatMp3Buffers,
+  isLikelyMp3Audio,
+  sanitizeTtsText,
+  splitTtsChunks,
+} from './src/utils/ttsText.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -512,6 +520,54 @@ async function checkFonnteDeviceStatus(token: string): Promise<{
 
 const fonnteQueue = new FonnteStaggeredQueueEngine();
 
+// In-memory LRU cache for unified Indonesian female voice MP3 clips (max 64 clips)
+const MAX_TTS_CACHE_ENTRIES = 64;
+const serverTtsCache = new Map<string, Buffer>();
+
+function getCachedServerTts(key: string): Buffer | null {
+  const hit = serverTtsCache.get(key);
+  if (!hit) return null;
+  serverTtsCache.delete(key);
+  serverTtsCache.set(key, hit);
+  return hit;
+}
+
+function setCachedServerTts(key: string, buf: Buffer): void {
+  if (serverTtsCache.size >= MAX_TTS_CACHE_ENTRIES) {
+    const oldest = serverTtsCache.keys().next().value;
+    if (oldest !== undefined) {
+      serverTtsCache.delete(oldest);
+    }
+  }
+  serverTtsCache.set(key, buf);
+}
+
+async function fetchGoogleIndonesianTtsChunk(chunk: string): Promise<Uint8Array | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(buildGoogleTtsUrl(chunk), {
+      method: 'GET',
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Accept: 'audio/mpeg, audio/*;q=0.9, */*;q=0.5',
+        Referer: 'https://translate.google.com/',
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    if (bytes.length < 128 || !isLikelyMp3Audio(bytes)) return null;
+    return bytes;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function requireAppClientHeaders(req: Request, res: Response, next: NextFunction): void {
   const xrw = String(req.headers['x-requested-with'] || '');
   const role = String(req.headers['x-app-role'] || '').trim();
@@ -782,6 +838,61 @@ async function startServer() {
         ok: false,
         error: err instanceof Error ? err.message : 'Gagal menghubungi server API Fonnte.',
       });
+    }
+  });
+
+  // =========================================================================
+  // Unified Indonesian Female Voice Proxy (/api/tts)
+  // Guarantees identical female Indonesian voice across Laptop, HP, and Tablet
+  // =========================================================================
+
+  app.get('/api/tts', async (req, res) => {
+    const rawText = typeof req.query.text === 'string' ? req.query.text.trim() : '';
+    if (!rawText) {
+      res.status(400).json({ error: 'Parameter teks suara tidak boleh kosong.' });
+      return;
+    }
+    if (rawText.length > MAX_TTS_TEXT_LENGTH) {
+      res.status(400).json({
+        error: `Teks suara terlalu panjang (maksimal ${MAX_TTS_TEXT_LENGTH} karakter).`,
+      });
+      return;
+    }
+
+    const sanitized = sanitizeTtsText(rawText, MAX_TTS_TEXT_LENGTH);
+    if (!sanitized) {
+      res.status(400).json({ error: 'Parameter teks suara tidak valid.' });
+      return;
+    }
+
+    try {
+      let audioBuffer = getCachedServerTts(sanitized);
+      if (!audioBuffer) {
+        const chunks = splitTtsChunks(sanitized);
+        if (chunks.length === 0) {
+          res.status(400).json({ error: 'Parameter teks suara tidak valid.' });
+          return;
+        }
+        const parts: Uint8Array[] = [];
+        for (const chunk of chunks) {
+          const bytes = await fetchGoogleIndonesianTtsChunk(chunk);
+          if (!bytes) {
+            res.status(502).json({ error: 'Layanan suara sedang tidak tersedia sementara.' });
+            return;
+          }
+          parts.push(bytes);
+        }
+        audioBuffer = Buffer.from(concatMp3Buffers(parts));
+        setCachedServerTts(sanitized, audioBuffer);
+      }
+
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', String(audioBuffer.byteLength));
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.status(200).send(audioBuffer);
+    } catch {
+      res.status(502).json({ error: 'Layanan suara sedang tidak tersedia sementara.' });
     }
   });
 

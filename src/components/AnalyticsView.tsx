@@ -24,6 +24,7 @@ import {
   computeAttendanceAnalytics,
   evaluateAttendanceCategory,
   getTodayDateString,
+  isSameClassName,
   type AttendanceCategoryTier,
   type PeriodSummaryRow,
 } from '../utils/attendanceLogic';
@@ -145,14 +146,12 @@ export function AnalyticsView({
 
   const filteredStudents = useMemo(() => {
     if (effectiveClass === 'ALL') return students;
-    const norm = effectiveClass.trim().toLowerCase();
-    return students.filter((s) => s.kelas.trim().toLowerCase() === norm);
+    return students.filter((s) => isSameClassName(s.kelas, effectiveClass));
   }, [students, effectiveClass]);
 
   const filteredRecords = useMemo(() => {
     if (effectiveClass === 'ALL') return records;
-    const norm = effectiveClass.trim().toLowerCase();
-    return records.filter((r) => r.kelas.trim().toLowerCase() === norm);
+    return records.filter((r) => isSameClassName(r.kelas, effectiveClass));
   }, [records, effectiveClass]);
 
   const effectiveAcademicYear =

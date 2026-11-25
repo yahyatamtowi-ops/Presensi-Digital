@@ -172,6 +172,8 @@ export interface TimetableConfig {
   jumlah_jp: number; // e.g. 8
   istirahat: TimetableBreak[];
   custom_classes?: string[];
+  /** When true, Master Admin explicitly configured Jam Mulai / Durasi 1 JP / Istirahat. */
+  bell_locked_by_admin?: boolean;
   /** Key format: `${hari}|${jamKe}|${kelas}` */
   cells: Record<string, TimetableCellValue>;
   updated_at?: string;
@@ -222,6 +224,7 @@ export interface UserAccount {
   role: UserRole;
   jabatan: string;
   kelas_binaan?: string;
+  foto_profil?: string;
 }
 
 export interface AuthSession {
@@ -232,6 +235,7 @@ export interface AuthSession {
   role: UserRole;
   jabatan: string;
   kelas_binaan?: string;
+  foto_profil?: string;
 }
 
 export interface ToastMessage {

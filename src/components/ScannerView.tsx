@@ -26,6 +26,7 @@ import type {
 import {
   getTodayDateString,
   hasScannedOnDate,
+  isSameClassName,
   type ScanOutcome,
 } from '../utils/attendanceLogic';
 import { StatusBadge } from './StatusBadge';
@@ -151,7 +152,7 @@ export function ScannerView({
     if (!selectedClass) return [];
     const q = studentNameQuery.trim().toLowerCase();
     return students
-      .filter((s) => s.kelas.trim() === selectedClass)
+      .filter((s) => isSameClassName(s.kelas, selectedClass))
       .filter((s) =>
         !q ? true : s.nama.toLowerCase().includes(q) || s.nis.toLowerCase().includes(q)
       )
