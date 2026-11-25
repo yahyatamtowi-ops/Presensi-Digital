@@ -29,10 +29,13 @@ import {
   renderFonnteMessage,
   type FonnteConfig,
   type FonnteNotificationCategory,
+  type FonnteStatusResponse,
 } from './utils/fonntePacing';
 import {
   clearLocalFonnteSentKeys,
   enqueueFonnteNotifications,
+  fetchFonnteStatus,
+  hasSavedFonnteConfigPreference,
   loadFonnteConfig,
   loadLastFonnteScheduleRunKey,
   loadLocalFonnteSentKeys,
@@ -41,6 +44,7 @@ import {
   saveLocalFonnteSentKeys,
   type FonnteClientRole,
 } from './utils/fonnteClient';
+import { resolveAutoEnabledFonnteConfig } from './utils/fonnteAutoConnect';
 import {
   bulkDeleteAttendanceFromCloud,
   bulkDeleteSubjectRecordsFromCloud,
@@ -395,6 +399,7 @@ export default function App() {
   const fonnteLastScheduleRunKeyRef = useRef<string>(fonnteLastScheduleRunKey);
   const fonnteScheduleInFlightRef = useRef<boolean>(false);
   const [fonnteQueueSyncNonce, setFonnteQueueSyncNonce] = useState<number>(0);
+  const [fonnteServerStatus, setFonnteServerStatus] = useState<FonnteStatusResponse | null>(null);
   const [firestoreDailyUsage, setFirestoreDailyUsage] = useState(() =>
     loadFirestoreDailyUsage()
   );
@@ -1974,6 +1979,45 @@ export default function App() {
     fonnteConfigRef.current = saved;
     setFonnteConfig(saved);
   }, []);
+
+  // Automatically connect to the server/Netlify primary FONNTE_TOKEN on app startup
+  // without requiring manual sync or manual device checks.
+  useEffect(() => {
+    let cancelled = false;
+    const role: FonnteClientRole = session?.role || 'scan_kiosk';
+
+    const probePrimaryFonnte = async () => {
+      if (!isBrowserOnline()) return;
+      try {
+        const res = await fetchFonnteStatus(role, true, false);
+        if (cancelled) return;
+        setFonnteServerStatus(res);
+
+        const resolved = resolveAutoEnabledFonnteConfig({
+          currentConfig: fonnteConfigRef.current,
+          hasSavedPreference: hasSavedFonnteConfigPreference(),
+          serverStatus: res,
+        });
+        if (resolved.autoActivated) {
+          fonnteConfigRef.current = resolved.nextConfig;
+          setFonnteConfig(resolved.nextConfig);
+        }
+      } catch {
+        // Non-blocking: offline or cold-start failure must never interrupt app usage
+      }
+    };
+
+    void probePrimaryFonnte();
+
+    const handleOnlineReconnect = () => {
+      void probePrimaryFonnte();
+    };
+    window.addEventListener('online', handleOnlineReconnect);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('online', handleOnlineReconnect);
+    };
+  }, [session?.role]);
 
   const handleMarkFonnteSentKeys = useCallback((keys: string[]) => {
     if (keys.length === 0) return;
@@ -5015,6 +5059,8 @@ export default function App() {
             onResetDemo={handleResetDemo}
             fonnte={{
               config: fonnteConfig,
+              initialStatus: fonnteServerStatus,
+              onStatusUpdated: setFonnteServerStatus,
               students: activeYearStudents,
               todayRecords: activeYearRecords.filter(
                 (r) => r.tanggal === getTodayDateString()

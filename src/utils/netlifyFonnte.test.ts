@@ -282,4 +282,98 @@ test('Netlify Serverless Function (/api/fonnte/*)', async (t) => {
       resetServerlessStateForTest();
     }
   });
+
+  await t.test('auto-connects via Netlify.env.get primary FONNTE_TOKEN, caches device check, and never leaks raw token', async () => {
+    resetServerlessStateForTest();
+    const prevEnvToken = process.env.FONNTE_TOKEN;
+    const prevFetch = globalThis.fetch;
+    const g = globalThis as { Netlify?: { env?: { get?: (key: string) => string | undefined } } };
+    const prevNetlify = g.Netlify;
+
+    delete process.env.FONNTE_TOKEN;
+    const secretPrimaryToken = 'NetlifySecretPrimary_778899';
+    g.Netlify = {
+      env: {
+        get: (key: string) => (key === 'FONNTE_TOKEN' ? ` "${secretPrimaryToken}" ` : undefined),
+      },
+    };
+
+    let deviceApiHits = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      if (url === 'https://api.fonnte.com/device') {
+        deviceApiHits++;
+        assert.equal(headers.get('Authorization'), secretPrimaryToken);
+        return new Response(
+          JSON.stringify({
+            status: true,
+            device_status: 'connect',
+            device: '6281122334455',
+            name: 'WA Utama Sekolah',
+            quota: 1000,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({ status: false }), { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      const res1 = await handleFonnteServerlessRequest(
+        new Request(`${BASE_URL}/api/fonnte/status?checkDevice=1`, {
+          method: 'GET',
+          headers: makeHeaders('scan_kiosk'),
+        })
+      );
+      assert.equal(res1.status, 200);
+      const rawText1 = await res1.text();
+      assert.ok(!rawText1.includes(secretPrimaryToken), 'Response must never leak raw FONNTE_TOKEN');
+      const json1 = JSON.parse(rawText1) as {
+        configured: boolean;
+        primaryConfigured: boolean;
+        autoConnected: boolean;
+        tokenMeta: { activeSlot: string; maskedToken: string };
+        deviceStatus: { connected: boolean; device: string };
+      };
+      assert.equal(json1.configured, true);
+      assert.equal(json1.primaryConfigured, true);
+      assert.equal(json1.autoConnected, true);
+      assert.equal(json1.tokenMeta.activeSlot, 'primary');
+      assert.equal(json1.tokenMeta.maskedToken, 'Netl••••8899');
+      assert.equal(json1.deviceStatus.connected, true);
+      assert.equal(json1.deviceStatus.device, '6281122334455');
+      assert.equal(deviceApiHits, 1);
+
+      // Second auto-check within TTL uses warm cache instead of spamming Fonnte
+      const res2 = await handleFonnteServerlessRequest(
+        new Request(`${BASE_URL}/api/fonnte/status?checkDevice=1`, {
+          method: 'GET',
+          headers: makeHeaders('master_admin'),
+        })
+      );
+      assert.equal(res2.status, 200);
+      assert.equal(deviceApiHits, 1);
+
+      // Explicit force=1 bypasses cache for manual refresh
+      const res3 = await handleFonnteServerlessRequest(
+        new Request(`${BASE_URL}/api/fonnte/status?checkDevice=1&force=1`, {
+          method: 'GET',
+          headers: makeHeaders('master_admin'),
+        })
+      );
+      assert.equal(res3.status, 200);
+      assert.equal(deviceApiHits, 2);
+    } finally {
+      globalThis.fetch = prevFetch;
+      g.Netlify = prevNetlify;
+      if (prevEnvToken === undefined) {
+        delete process.env.FONNTE_TOKEN;
+      } else {
+        process.env.FONNTE_TOKEN = prevEnvToken;
+      }
+      resetServerlessStateForTest();
+    }
+  });
 });
+

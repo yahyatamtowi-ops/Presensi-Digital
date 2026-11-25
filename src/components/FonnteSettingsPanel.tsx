@@ -49,9 +49,12 @@ import {
   updateFonnteToken,
   type FonnteClientRole,
 } from '../utils/fonnteClient';
+import { computeFonnteConnectionSummary } from '../utils/fonnteAutoConnect';
 
 interface FonnteSettingsPanelProps {
   config: FonnteConfig;
+  initialStatus?: FonnteStatusResponse | null;
+  onStatusUpdated?: (status: FonnteStatusResponse) => void;
   settings: SchoolSettings;
   students: Student[];
   todayRecords: AttendanceRecord[];
@@ -99,6 +102,8 @@ const PACING_PRESETS: Array<{
 
 export function FonnteSettingsPanel({
   config,
+  initialStatus,
+  onStatusUpdated,
   settings,
   students,
   todayRecords,
@@ -113,8 +118,12 @@ export function FonnteSettingsPanel({
   onResetScheduleToday,
   onNotifyToast,
 }: FonnteSettingsPanelProps) {
-  const [statusData, setStatusData] = useState<FonnteStatusResponse | null>(null);
-  const [queueSnapshot, setQueueSnapshot] = useState<FonnteQueueSnapshot | null>(null);
+  const [statusData, setStatusData] = useState<FonnteStatusResponse | null>(
+    () => initialStatus ?? null
+  );
+  const [queueSnapshot, setQueueSnapshot] = useState<FonnteQueueSnapshot | null>(
+    () => initialStatus?.queue ?? null
+  );
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [enqueuingBatch, setEnqueuingBatch] = useState(false);
   const [controllingQueue, setControllingQueue] = useState(false);
@@ -148,13 +157,17 @@ export function FonnteSettingsPanel({
   const [countdownTick, setCountdownTick] = useState(0);
 
   const loadStatus = useCallback(
-    async (checkDevice = false) => {
+    async (options?: { checkDevice?: boolean; force?: boolean; showToast?: boolean }) => {
+      const checkDevice = options?.checkDevice ?? true;
+      const force = options?.force ?? false;
+      const showToast = options?.showToast ?? false;
       setCheckingStatus(true);
       try {
-        const res = await fetchFonnteStatus(clientRole, checkDevice);
+        const res = await fetchFonnteStatus(clientRole, checkDevice, force);
         setStatusData(res);
         setQueueSnapshot(res.queue);
-        if (checkDevice && res.deviceStatus) {
+        onStatusUpdated?.(res);
+        if (showToast && res.deviceStatus) {
           onNotifyToast({
             type: res.deviceStatus.connected ? 'success' : 'warning',
             title: res.deviceStatus.connected
@@ -167,7 +180,7 @@ export function FonnteSettingsPanel({
           });
         }
       } catch (err) {
-        if (checkDevice) {
+        if (showToast) {
           onNotifyToast({
             type: 'error',
             title: 'Gagal Memeriksa Status Fonnte',
@@ -178,11 +191,18 @@ export function FonnteSettingsPanel({
         setCheckingStatus(false);
       }
     },
-    [clientRole, onNotifyToast]
+    [clientRole, onNotifyToast, onStatusUpdated]
   );
 
   useEffect(() => {
-    void loadStatus(false);
+    if (initialStatus && !statusData) {
+      setStatusData(initialStatus);
+      setQueueSnapshot(initialStatus.queue);
+    }
+  }, [initialStatus, statusData]);
+
+  useEffect(() => {
+    void loadStatus({ checkDevice: true, force: false, showToast: false });
   }, [loadStatus, queueSyncNonce]);
 
   // Poll queue progress every 4 seconds while queue is active or paused with pending items
@@ -453,6 +473,7 @@ export function FonnteSettingsPanel({
       });
       setStatusData(res);
       setQueueSnapshot(res.queue);
+      onStatusUpdated?.(res);
       // Immediately wipe token from component state after submission
       setTokenInput('');
       setTokenLabelInput('');
@@ -485,6 +506,7 @@ export function FonnteSettingsPanel({
       const res = await switchFonnteTokenSlot({ role: clientRole, slot });
       setStatusData(res);
       setQueueSnapshot(res.queue);
+      onStatusUpdated?.(res);
       onNotifyToast({
         type: 'success',
         title: 'Slot Token Server Diganti',
@@ -510,6 +532,7 @@ export function FonnteSettingsPanel({
       const res = await resetFonnteTokenToDefault(clientRole);
       setStatusData(res);
       setQueueSnapshot(res.queue);
+      onStatusUpdated?.(res);
       setTokenInput('');
       setTokenLabelInput('');
       onNotifyToast({
@@ -531,7 +554,10 @@ export function FonnteSettingsPanel({
     }
   };
 
-  const tokenConfigured = Boolean(statusData?.configured);
+  const connectionSummary = useMemo(
+    () => computeFonnteConnectionSummary(statusData, checkingStatus),
+    [statusData, checkingStatus]
+  );
   const tokenMeta = statusData?.tokenMeta;
   const configuredEnvSlots = useMemo(
     () => (tokenMeta?.availableEnvSlots || []).filter((s) => s.configured),
@@ -572,18 +598,24 @@ export function FonnteSettingsPanel({
             <span
               data-testid="fonnte-token-status-badge"
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border whitespace-nowrap shrink-0 self-start sm:self-auto ${
-                tokenConfigured
+                connectionSummary.tone === 'emerald'
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                  : connectionSummary.tone === 'amber'
+                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-slate-100 text-slate-600 border-slate-200'
               }`}
             >
               <span
                 className={`h-2 w-2 rounded-full ${
-                  tokenConfigured ? 'bg-emerald-500' : 'bg-amber-500'
+                  connectionSummary.tone === 'emerald'
+                    ? 'bg-emerald-500'
+                    : connectionSummary.tone === 'amber'
+                      ? 'bg-amber-500'
+                      : 'bg-slate-400'
                 }`}
                 aria-hidden="true"
               />
-              {tokenConfigured ? 'Token Server Aktif' : 'Menunggu Secret Server'}
+              {connectionSummary.badgeText}
             </span>
           </div>
           <p className="text-xs text-slate-500 leading-relaxed">
@@ -637,7 +669,7 @@ export function FonnteSettingsPanel({
           <button
             type="button"
             disabled={checkingStatus}
-            onClick={() => void loadStatus(true)}
+            onClick={() => void loadStatus({ checkDevice: true, force: true, showToast: true })}
             data-testid="btn-check-fonnte-device"
             className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors shrink-0 whitespace-nowrap"
           >

@@ -97,6 +97,8 @@ export interface FonnteTokenMeta {
 
 export interface FonnteStatusResponse {
   configured: boolean;
+  primaryConfigured?: boolean;
+  autoConnected?: boolean;
   serverMode?: 'persistent' | 'serverless';
   tokenMeta?: FonnteTokenMeta;
   deviceStatus?: {

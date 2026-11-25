@@ -310,6 +310,15 @@ class BrowserServerlessFonnteRunner {
 let detectedServerMode: 'persistent' | 'serverless' | null = null;
 const serverlessRunner = new BrowserServerlessFonnteRunner();
 
+export function hasSavedFonnteConfigPreference(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return Boolean(window.localStorage.getItem(FONNTE_CONFIG_KEY));
+  } catch {
+    return false;
+  }
+}
+
 export function loadFonnteConfig(): FonnteConfig {
   if (typeof window === 'undefined') return { ...DEFAULT_FONNTE_CONFIG };
   try {
@@ -424,9 +433,14 @@ export function saveLastFonnteScheduleRunKey(runKey: string): void {
 
 export async function fetchFonnteStatus(
   role: FonnteClientRole,
-  checkDevice = false
+  checkDevice = false,
+  force = false
 ): Promise<FonnteStatusResponse> {
-  const query = checkDevice ? '?checkDevice=1' : '';
+  const params = new URLSearchParams();
+  if (checkDevice) params.set('checkDevice', '1');
+  if (force) params.set('force', '1');
+  const qs = params.toString();
+  const query = qs ? `?${qs}` : '';
   const res = await fetch(`/api/fonnte/status${query}`, {
     method: 'GET',
     credentials: 'same-origin',

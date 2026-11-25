@@ -76,7 +76,7 @@ import {
   buildFirebaseAuthorizedDomainsUrl,
   type FirebaseAuthErrorDetail,
 } from '../utils/firebaseAuthErrors';
-import type { FonnteConfig } from '../utils/fonntePacing';
+import type { FonnteConfig, FonnteStatusResponse } from '../utils/fonntePacing';
 import type { FonnteClientRole } from '../utils/fonnteClient';
 import { FonnteSettingsPanel } from './FonnteSettingsPanel';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -131,6 +131,8 @@ interface SettingsViewProps {
   onResetDemo: () => void;
   fonnte?: {
     config: FonnteConfig;
+    initialStatus?: FonnteStatusResponse | null;
+    onStatusUpdated?: (status: FonnteStatusResponse) => void;
     students: Student[];
     todayRecords: AttendanceRecord[];
     todayDate: string;
@@ -2249,6 +2251,8 @@ export function SettingsView({
           {activeSubMenu === 'fonnte' && fonnte && (
             <FonnteSettingsPanel
               config={fonnte.config}
+              initialStatus={fonnte.initialStatus}
+              onStatusUpdated={fonnte.onStatusUpdated}
               settings={settings}
               students={fonnte.students}
               todayRecords={fonnte.todayRecords}

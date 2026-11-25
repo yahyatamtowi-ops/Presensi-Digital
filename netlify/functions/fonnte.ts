@@ -15,6 +15,12 @@ import {
   type FonnteQueueSnapshot,
   type FonnteTokenMeta,
 } from '../../src/utils/fonntePacing';
+import {
+  BACKUP_2_FONNTE_ENV_KEYS,
+  BACKUP_3_FONNTE_ENV_KEYS,
+  PRIMARY_FONNTE_ENV_KEYS,
+  readServerFonnteEnvToken,
+} from '../../src/utils/fonnteAutoConnect';
 
 // Hardcoded official Fonnte API endpoints (never user-supplied)
 const FONNTE_SEND_URL = 'https://api.fonnte.com/send';
@@ -52,11 +58,29 @@ interface StoredTokenOverride {
   label: string;
 }
 
+function getNetlifyEnvGetter(): ((key: string) => string | undefined) | undefined {
+  const g = globalThis as { Netlify?: { env?: { get?: (key: string) => string | undefined } } };
+  return typeof g.Netlify?.env?.get === 'function' ? g.Netlify.env.get.bind(g.Netlify.env) : undefined;
+}
+
+function readServerEnvVar(key: string): string {
+  const netlifyGet = getNetlifyEnvGetter();
+  if (netlifyGet) {
+    try {
+      const val = (netlifyGet(key) || '').trim();
+      if (val) return val;
+    } catch {
+      // Fall through to process.env
+    }
+  }
+  return (process.env[key] || '').trim();
+}
+
 function getCookieCipherKey(): Buffer {
   const seed =
-    (process.env.FONNTE_SESSION_SECRET || '').trim() ||
-    (process.env.SITE_ID || '').trim() ||
-    (process.env.FONNTE_TOKEN || '').trim();
+    readServerEnvVar('FONNTE_SESSION_SECRET') ||
+    readServerEnvVar('SITE_ID') ||
+    getEnvSlotValue('primary');
   if (!seed) return EPHEMERAL_FALLBACK_KEY;
   return crypto.createHash('sha256').update(`presensi-fonnte-v1:${seed}`).digest();
 }
@@ -141,9 +165,17 @@ function jsonResponse(body: unknown, status = 200, extraHeaders?: Record<string,
 }
 
 function getEnvSlotValue(slot: 'primary' | 'backup_2' | 'backup_3'): string {
-  if (slot === 'backup_2') return (process.env.FONNTE_TOKEN_2 || '').trim();
-  if (slot === 'backup_3') return (process.env.FONNTE_TOKEN_3 || '').trim();
-  return (process.env.FONNTE_TOKEN || '').trim();
+  const reader = {
+    processEnv: process.env,
+    netlifyEnvGet: getNetlifyEnvGetter(),
+  };
+  if (slot === 'backup_2') {
+    return readServerFonnteEnvToken(BACKUP_2_FONNTE_ENV_KEYS, reader);
+  }
+  if (slot === 'backup_3') {
+    return readServerFonnteEnvToken(BACKUP_3_FONNTE_ENV_KEYS, reader);
+  }
+  return readServerFonnteEnvToken(PRIMARY_FONNTE_ENV_KEYS, reader);
 }
 
 function getAvailableEnvSlots(): FonnteEnvSlotInfo[] {
@@ -304,14 +336,35 @@ async function sendSingleFonnteRequest(
   }
 }
 
-async function checkFonnteDeviceStatus(token: string): Promise<{
+interface FonnteDeviceCheckResult {
   checked: boolean;
   connected: boolean;
   device?: string;
   name?: string;
   quota?: string | number;
   message?: string;
-}> {
+}
+
+const DEVICE_STATUS_CACHE_TTL_MS = 45_000;
+const deviceStatusCache = new Map<string, { expiresAt: number; result: FonnteDeviceCheckResult }>();
+
+function hashTokenForCache(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+async function checkFonnteDeviceStatus(
+  token: string,
+  options?: { force?: boolean }
+): Promise<FonnteDeviceCheckResult> {
+  const cacheKey = hashTokenForCache(token);
+  const now = Date.now();
+  if (!options?.force) {
+    const cached = deviceStatusCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.result;
+    }
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
@@ -334,7 +387,7 @@ async function checkFonnteDeviceStatus(token: string): Promise<{
       response.ok &&
       payload.status !== false &&
       String(payload.device_status || '').toLowerCase() !== 'disconnect';
-    return {
+    const result: FonnteDeviceCheckResult = {
       checked: true,
       connected: isConnected,
       device: payload.device,
@@ -342,6 +395,11 @@ async function checkFonnteDeviceStatus(token: string): Promise<{
       quota: payload.quota,
       message: payload.reason || payload.device_status || (isConnected ? 'Terhubung' : 'Terputus'),
     };
+    deviceStatusCache.set(cacheKey, {
+      expiresAt: Date.now() + DEVICE_STATUS_CACHE_TTL_MS,
+      result,
+    });
+    return result;
   } catch (err) {
     return {
       checked: true,
@@ -385,6 +443,7 @@ export function resetServerlessStateForTest(): void {
   runtimeTokenLabel = 'Nomor WA Kustom (Aktif)';
   recentJobs = [];
   dedupeRegistry.clear();
+  deviceStatusCache.clear();
   lastPacing = { ...DEFAULT_FONNTE_PACING };
 }
 
@@ -407,15 +466,19 @@ export async function handleFonnteServerlessRequest(request: Request): Promise<R
     try {
       const token = getActiveToken(cookieOverride);
       const configured = token.length > 0;
+      const primaryConfigured = getEnvSlotValue('primary').length > 0;
       const shouldCheckDevice = url.searchParams.get('checkDevice') === '1';
+      const forceCheck = url.searchParams.get('force') === '1';
       let deviceStatus = undefined;
 
       if (configured && shouldCheckDevice) {
-        deviceStatus = await checkFonnteDeviceStatus(token);
+        deviceStatus = await checkFonnteDeviceStatus(token, { force: forceCheck });
       }
 
       return jsonResponse({
         configured,
+        primaryConfigured,
+        autoConnected: Boolean(configured && (!deviceStatus || deviceStatus.connected)),
         serverMode: 'serverless',
         tokenMeta: getTokenMeta(cookieOverride),
         deviceStatus,
@@ -455,10 +518,13 @@ export async function handleFonnteServerlessRequest(request: Request): Promise<R
         }
         runtimeTokenOverride = null;
         activeEnvSlot = body.slot;
-        const deviceStatus = await checkFonnteDeviceStatus(getActiveToken(null));
+        const deviceStatus = await checkFonnteDeviceStatus(getActiveToken(null), { force: true });
+        const configured = getActiveToken(null).length > 0;
         return jsonResponse(
           {
-            configured: getActiveToken(null).length > 0,
+            configured,
+            primaryConfigured: getEnvSlotValue('primary').length > 0,
+            autoConnected: Boolean(configured && deviceStatus.connected),
             serverMode: 'serverless',
             tokenMeta: getTokenMeta(null),
             deviceStatus,
@@ -479,7 +545,7 @@ export async function handleFonnteServerlessRequest(request: Request): Promise<R
       }
 
       const label = typeof body.label === 'string' ? body.label.trim().slice(0, 60) : '';
-      const deviceStatus = await checkFonnteDeviceStatus(validation.sanitized);
+      const deviceStatus = await checkFonnteDeviceStatus(validation.sanitized, { force: true });
 
       const msgLower = String(deviceStatus.message || '').toLowerCase();
       if (
@@ -508,6 +574,8 @@ export async function handleFonnteServerlessRequest(request: Request): Promise<R
       return jsonResponse(
         {
           configured: true,
+          primaryConfigured: getEnvSlotValue('primary').length > 0,
+          autoConnected: Boolean(deviceStatus.connected),
           serverMode: 'serverless',
           tokenMeta: getTokenMeta(nextOverride),
           deviceStatus,
@@ -540,10 +608,14 @@ export async function handleFonnteServerlessRequest(request: Request): Promise<R
       activeEnvSlot = 'primary';
       const token = getActiveToken(null);
       const configured = token.length > 0;
-      const deviceStatus = configured ? await checkFonnteDeviceStatus(token) : undefined;
+      const deviceStatus = configured
+        ? await checkFonnteDeviceStatus(token, { force: true })
+        : undefined;
       return jsonResponse(
         {
           configured,
+          primaryConfigured: getEnvSlotValue('primary').length > 0,
+          autoConnected: Boolean(configured && (!deviceStatus || deviceStatus.connected)),
           serverMode: 'serverless',
           tokenMeta: getTokenMeta(null),
           deviceStatus,

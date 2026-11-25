@@ -23,6 +23,12 @@ import {
   type FonnteTokenMeta,
 } from './src/utils/fonntePacing.ts';
 import {
+  BACKUP_2_FONNTE_ENV_KEYS,
+  BACKUP_3_FONNTE_ENV_KEYS,
+  PRIMARY_FONNTE_ENV_KEYS,
+  readServerFonnteEnvToken,
+} from './src/utils/fonnteAutoConnect.ts';
+import {
   MAX_TTS_TEXT_LENGTH,
   buildGoogleTtsUrl,
   concatMp3Buffers,
@@ -77,9 +83,18 @@ class FonnteStaggeredQueueEngine {
   private runtimeTokenLabel = 'Nomor WA Kustom (Aktif)';
 
   private getEnvSlotValue(slot: 'primary' | 'backup_2' | 'backup_3'): string {
-    if (slot === 'backup_2') return (process.env.FONNTE_TOKEN_2 || '').trim();
-    if (slot === 'backup_3') return (process.env.FONNTE_TOKEN_3 || '').trim();
-    return (process.env.FONNTE_TOKEN || '').trim();
+    const reader = { processEnv: process.env };
+    if (slot === 'backup_2') {
+      return readServerFonnteEnvToken(BACKUP_2_FONNTE_ENV_KEYS, reader);
+    }
+    if (slot === 'backup_3') {
+      return readServerFonnteEnvToken(BACKUP_3_FONNTE_ENV_KEYS, reader);
+    }
+    return readServerFonnteEnvToken(PRIMARY_FONNTE_ENV_KEYS, reader);
+  }
+
+  isPrimaryConfigured(): boolean {
+    return this.getEnvSlotValue('primary').length > 0;
   }
 
   getAvailableEnvSlots(): FonnteEnvSlotInfo[] {
@@ -469,14 +484,34 @@ async function sendSingleFonnteRequest(
   }
 }
 
-async function checkFonnteDeviceStatus(token: string): Promise<{
+interface ServerFonnteDeviceStatus {
   checked: boolean;
   connected: boolean;
   device?: string;
   name?: string;
   quota?: string | number;
   message?: string;
-}> {
+}
+
+const SERVER_DEVICE_CACHE_TTL_MS = 45_000;
+const serverDeviceStatusCache = new Map<
+  string,
+  { expiresAt: number; result: ServerFonnteDeviceStatus }
+>();
+
+async function checkFonnteDeviceStatus(
+  token: string,
+  options?: { force?: boolean }
+): Promise<ServerFonnteDeviceStatus> {
+  const cacheKey = crypto.createHash('sha256').update(token).digest('hex');
+  const now = Date.now();
+  if (!options?.force) {
+    const cached = serverDeviceStatusCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.result;
+    }
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
@@ -499,7 +534,7 @@ async function checkFonnteDeviceStatus(token: string): Promise<{
       response.ok &&
       payload.status !== false &&
       String(payload.device_status || '').toLowerCase() !== 'disconnect';
-    return {
+    const result: ServerFonnteDeviceStatus = {
       checked: true,
       connected: isConnected,
       device: payload.device,
@@ -507,6 +542,11 @@ async function checkFonnteDeviceStatus(token: string): Promise<{
       quota: payload.quota,
       message: payload.reason || payload.device_status || (isConnected ? 'Terhubung' : 'Terputus'),
     };
+    serverDeviceStatusCache.set(cacheKey, {
+      expiresAt: Date.now() + SERVER_DEVICE_CACHE_TTL_MS,
+      result,
+    });
+    return result;
   } catch (err) {
     return {
       checked: true,
@@ -612,15 +652,19 @@ async function startServer() {
   app.get('/api/fonnte/status', requireAppClientHeaders, async (req, res) => {
     try {
       const configured = fonnteQueue.isConfigured();
+      const primaryConfigured = fonnteQueue.isPrimaryConfigured();
       const shouldCheckDevice = req.query.checkDevice === '1';
+      const forceCheck = req.query.force === '1';
       let deviceStatus = undefined;
 
       if (configured && shouldCheckDevice) {
-        deviceStatus = await checkFonnteDeviceStatus(fonnteQueue.getToken());
+        deviceStatus = await checkFonnteDeviceStatus(fonnteQueue.getToken(), { force: forceCheck });
       }
 
       res.json({
         configured,
+        primaryConfigured,
+        autoConnected: Boolean(configured && (!deviceStatus || deviceStatus.connected)),
         serverMode: 'persistent',
         tokenMeta: fonnteQueue.getTokenMeta(),
         deviceStatus,
@@ -650,9 +694,12 @@ async function startServer() {
           });
           return;
         }
-        const deviceStatus = await checkFonnteDeviceStatus(fonnteQueue.getToken());
+        const deviceStatus = await checkFonnteDeviceStatus(fonnteQueue.getToken(), { force: true });
+        const configured = fonnteQueue.isConfigured();
         res.json({
-          configured: fonnteQueue.isConfigured(),
+          configured,
+          primaryConfigured: fonnteQueue.isPrimaryConfigured(),
+          autoConnected: Boolean(configured && deviceStatus.connected),
           serverMode: 'persistent',
           tokenMeta: fonnteQueue.getTokenMeta(),
           deviceStatus,
@@ -672,7 +719,7 @@ async function startServer() {
       }
 
       const label = typeof body?.label === 'string' ? body.label.trim().slice(0, 60) : '';
-      const deviceStatus = await checkFonnteDeviceStatus(validation.sanitized);
+      const deviceStatus = await checkFonnteDeviceStatus(validation.sanitized, { force: true });
 
       // Reject explicitly invalid tokens from Fonnte so working token is preserved
       const msgLower = String(deviceStatus.message || '').toLowerCase();
@@ -694,6 +741,8 @@ async function startServer() {
 
       res.json({
         configured: true,
+        primaryConfigured: fonnteQueue.isPrimaryConfigured(),
+        autoConnected: Boolean(deviceStatus.connected),
         serverMode: 'persistent',
         tokenMeta: fonnteQueue.getTokenMeta(),
         deviceStatus,
@@ -714,10 +763,12 @@ async function startServer() {
       fonnteQueue.clearRuntimeToken();
       const configured = fonnteQueue.isConfigured();
       const deviceStatus = configured
-        ? await checkFonnteDeviceStatus(fonnteQueue.getToken())
+        ? await checkFonnteDeviceStatus(fonnteQueue.getToken(), { force: true })
         : undefined;
       res.json({
         configured,
+        primaryConfigured: fonnteQueue.isPrimaryConfigured(),
+        autoConnected: Boolean(configured && (!deviceStatus || deviceStatus.connected)),
         serverMode: 'persistent',
         tokenMeta: fonnteQueue.getTokenMeta(),
         deviceStatus,
