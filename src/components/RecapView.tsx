@@ -16,6 +16,7 @@ import {
   Clock,
   CheckCircle2,
   AlertTriangle,
+  LogOut,
 } from 'lucide-react';
 import type {
   AttendanceRecord,
@@ -48,6 +49,7 @@ import {
 } from '../utils/whatsapp';
 import { StatusBadge } from './StatusBadge';
 import { EarlyCheckoutModal } from './EarlyCheckoutModal';
+import { CollectiveCheckoutModal } from './CollectiveCheckoutModal';
 
 interface RecapViewProps {
   students: Student[];
@@ -73,6 +75,12 @@ interface RecapViewProps {
   onConfirmCheckout?: (params: {
     tanggal: string;
     student: { nis: string; nama: string; kelas: string };
+    alasanPulangCepat?: string;
+  }) => void;
+  onBulkConfirmCheckout?: (params: {
+    tanggal: string;
+    students: Array<{ nis: string; nama: string; kelas: string }>;
+    checkoutTime: string;
     alasanPulangCepat?: string;
   }) => void;
   onResetStatus?: (params: {
@@ -123,6 +131,7 @@ export function RecapView({
   masterYearControl,
   onUpdateStatus,
   onConfirmCheckout,
+  onBulkConfirmCheckout,
   onResetStatus,
   lateCorrectionRequests = [],
   onSubmitLateCorrection,
@@ -132,6 +141,9 @@ export function RecapView({
   const isMasterAdmin = currentSession?.role === 'master_admin';
   const isWaliKelas = currentSession?.role === 'wali_kelas';
   const canResetToBelumPresensi = isMasterAdmin && canModifyStatus && Boolean(onResetStatus);
+  const canCollectiveCheckout =
+    (isMasterAdmin || isWaliKelas) && canModifyStatus && Boolean(onBulkConfirmCheckout);
+  const showRowCheckboxes = canResetToBelumPresensi || canCollectiveCheckout;
   const [period, setPeriod] = useState<RecapPeriodType>('harian');
   const [selectedDate, setSelectedDate] = useState(today);
   const [selectedMonth, setSelectedMonth] = useState(today.slice(0, 7));
@@ -160,10 +172,11 @@ export function RecapView({
   const [batchWaFilter, setBatchWaFilter] = useState<'issues' | 'all'>('issues');
   const [sentNisSet, setSentNisSet] = useState<Set<string>>(new Set());
 
-  // Early Checkout Confirmation Modal
+  // Early & Collective Checkout Confirmation Modals
   const [earlyCheckoutRow, setEarlyCheckoutRow] = useState<DailyRecapRow | null>(null);
+  const [collectiveCheckoutModalOpen, setCollectiveCheckoutModalOpen] = useState(false);
 
-  // Master Admin collective reset selection & confirmation modal
+  // Collective row selection & Master Admin reset confirmation modal
   const [selectedResetNis, setSelectedResetNis] = useState<string[]>([]);
   const [confirmResetModalOpen, setConfirmResetModalOpen] = useState(false);
 
@@ -311,6 +324,22 @@ export function RecapView({
     [filteredDailyRows]
   );
 
+  const eligibleCheckoutRows = useMemo(
+    () =>
+      filteredDailyRows.filter(
+        (r) =>
+          (r.status === 'Hadir' || r.status === 'Terlambat') &&
+          r.jam_masuk !== '-' &&
+          (!r.jam_pulang || r.jam_pulang === '-')
+      ),
+    [filteredDailyRows]
+  );
+
+  const selectableDailyRows = useMemo(
+    () => (canResetToBelumPresensi ? recordedDailyRows : eligibleCheckoutRows),
+    [canResetToBelumPresensi, recordedDailyRows, eligibleCheckoutRows]
+  );
+
   const selectedResetSet = useMemo(() => new Set(selectedResetNis), [selectedResetNis]);
 
   const collectiveResetTargets = useMemo(() => {
@@ -320,9 +349,22 @@ export function RecapView({
     return recordedDailyRows;
   }, [recordedDailyRows, selectedResetNis.length, selectedResetSet]);
 
-  const allRecordedSelected =
-    recordedDailyRows.length > 0 &&
-    recordedDailyRows.every((r) => selectedResetSet.has(r.nis));
+  const collectiveCheckoutTargets = useMemo(() => {
+    if (selectedResetNis.length > 0) {
+      const selectedEligible = eligibleCheckoutRows.filter((r) => selectedResetSet.has(r.nis));
+      if (selectedEligible.length > 0) return selectedEligible;
+    }
+    return eligibleCheckoutRows;
+  }, [eligibleCheckoutRows, selectedResetNis.length, selectedResetSet]);
+
+  const selectedEligibleCheckoutCount = useMemo(
+    () => eligibleCheckoutRows.filter((r) => selectedResetSet.has(r.nis)).length,
+    [eligibleCheckoutRows, selectedResetSet]
+  );
+
+  const allSelectableSelected =
+    selectableDailyRows.length > 0 &&
+    selectableDailyRows.every((r) => selectedResetSet.has(r.nis));
 
   // Late students on selectedDate eligible for Wali Kelas late-to-on-time correction request
   const lateRowsForDate = useMemo(
@@ -384,10 +426,10 @@ export function RecapView({
   );
 
   function handleToggleSelectAllReset() {
-    if (allRecordedSelected) {
+    if (allSelectableSelected) {
       setSelectedResetNis([]);
     } else {
-      setSelectedResetNis(recordedDailyRows.map((r) => r.nis));
+      setSelectedResetNis(selectableDailyRows.map((r) => r.nis));
     }
   }
 
@@ -395,6 +437,28 @@ export function RecapView({
     setSelectedResetNis((prev) =>
       prev.includes(nis) ? prev.filter((item) => item !== nis) : [...prev, nis]
     );
+  }
+
+  function handleConfirmCollectiveCheckoutSubmit(payload: {
+    checkoutTime: string;
+    alasanPulangCepat?: string;
+  }) {
+    if (!onBulkConfirmCheckout || collectiveCheckoutTargets.length === 0) {
+      setCollectiveCheckoutModalOpen(false);
+      return;
+    }
+    onBulkConfirmCheckout({
+      tanggal: selectedDate,
+      students: collectiveCheckoutTargets.map((r) => ({
+        nis: r.nis,
+        nama: r.nama,
+        kelas: r.kelas,
+      })),
+      checkoutTime: payload.checkoutTime,
+      alasanPulangCepat: payload.alasanPulangCepat,
+    });
+    setSelectedResetNis([]);
+    setCollectiveCheckoutModalOpen(false);
   }
 
   function handleConfirmCollectiveReset() {
@@ -862,51 +926,60 @@ export function RecapView({
         </div>
 
         {/* Summary Strip & Primary Actions */}
-        <div className="pt-3 border-t border-slate-100 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-600">
+        <div className="pt-3 border-t border-slate-100 flex flex-col gap-2.5">
+          <div
+            data-testid="recap-summary-strip"
+            className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl bg-slate-50/80 border border-slate-200/70 px-3 py-2 text-xs text-slate-600"
+          >
             {isGuruMode && (
               <>
-                <span className="font-semibold text-indigo-700">
+                <span className="inline-flex items-center font-semibold text-indigo-700 whitespace-nowrap">
                   Mode Pantau Guru (Semua Kelas)
                 </span>
-                <span aria-hidden="true" className="text-slate-300">·</span>
+                <span
+                  aria-hidden="true"
+                  className="hidden sm:inline-block h-3.5 w-px bg-slate-200 shrink-0"
+                />
               </>
             )}
-            <span>
-              Ditampilkan:{' '}
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <span>Ditampilkan:</span>
               <strong className="font-mono tabular-nums text-slate-900">
                 {activeRowCount}
-              </strong>{' '}
-              siswa
+              </strong>
+              <span>siswa</span>
             </span>
-            <span aria-hidden="true" className="text-slate-300">·</span>
-            <span>
-              Hadir:{' '}
+            <span
+              aria-hidden="true"
+              className="hidden sm:inline-block h-3.5 w-px bg-slate-200 shrink-0"
+            />
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <span>Hadir:</span>
               <strong className="font-mono tabular-nums text-emerald-700">
                 {summary.Hadir}
               </strong>
             </span>
-            <span>
-              Terlambat:{' '}
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <span>Terlambat:</span>
               <strong className="font-mono tabular-nums text-amber-700">
                 {summary.Terlambat}
               </strong>
             </span>
-            <span>
-              Sakit/Izin:{' '}
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <span>Sakit/Izin:</span>
               <strong className="font-mono tabular-nums text-sky-700">
                 {summary.Sakit + summary.Izin}
               </strong>
             </span>
-            <span>
-              Alpa:{' '}
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <span>Alpa:</span>
               <strong className="font-mono tabular-nums text-rose-700">
                 {summary.Alpa}
               </strong>
             </span>
             {period === 'harian' && (
-              <span>
-                Belum Presensi:{' '}
+              <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                <span>Belum Presensi:</span>
                 <strong className="font-mono tabular-nums text-slate-700">
                   {summary['Belum Presensi']}
                 </strong>
@@ -914,7 +987,25 @@ export function RecapView({
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
+            {canCollectiveCheckout && period === 'harian' && (
+              <button
+                type="button"
+                data-testid="btn-collective-checkout"
+                onClick={() => setCollectiveCheckoutModalOpen(true)}
+                disabled={eligibleCheckoutRows.length === 0}
+                title="Konfirmasi jam pulang siswa secara kolektif (termasuk keterangan pulang cepat bila belum masuk jam pulang)"
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-xs font-semibold hover:bg-amber-100 disabled:opacity-50 transition-colors whitespace-nowrap"
+              >
+                <LogOut className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span>
+                  {selectedEligibleCheckoutCount > 0
+                    ? `Konfirmasi Pulang (${selectedEligibleCheckoutCount})`
+                    : `Konfirmasi Pulang Kolektif (${eligibleCheckoutRows.length})`}
+                </span>
+              </button>
+            )}
+
             {canResetToBelumPresensi && period === 'harian' && (
               <button
                 type="button"
@@ -1282,14 +1373,15 @@ export function RecapView({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/70 text-xs font-semibold text-slate-500">
-                  {canResetToBelumPresensi && (
+                  {showRowCheckboxes && (
                     <th className="py-3 pl-4 pr-2 w-10">
                       <input
                         type="checkbox"
-                        checked={allRecordedSelected}
-                        disabled={recordedDailyRows.length === 0}
+                        data-testid="checkbox-select-all-recap"
+                        checked={allSelectableSelected}
+                        disabled={selectableDailyRows.length === 0}
                         onChange={handleToggleSelectAllReset}
-                        aria-label="Pilih semua siswa yang sudah presensi untuk reset kolektif"
+                        aria-label="Pilih semua siswa untuk aksi kolektif"
                         className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40"
                       />
                     </th>
@@ -1308,18 +1400,26 @@ export function RecapView({
                 {filteredDailyRows.map((row) => {
                   const hasWa = Boolean(studentPhoneMap.get(row.nis.trim().toLowerCase()));
                   const isRowRecorded = row.status !== 'Belum Presensi';
+                  const isRowEligibleCheckout =
+                    (row.status === 'Hadir' || row.status === 'Terlambat') &&
+                    row.jam_masuk !== '-' &&
+                    (!row.jam_pulang || row.jam_pulang === '-');
+                  const isRowSelectable = canResetToBelumPresensi
+                    ? isRowRecorded
+                    : isRowEligibleCheckout;
                   const isRowChecked = selectedResetSet.has(row.nis);
                   const hasPendingLateReq = pendingLateNisSet.has(row.nis.trim().toLowerCase());
                   return (
                     <tr key={`${row.tanggal}_${row.nis}`} className="hover:bg-slate-50/70 transition-colors">
-                      {canResetToBelumPresensi && (
+                      {showRowCheckboxes && (
                         <td className="py-3 pl-4 pr-2">
                           <input
                             type="checkbox"
+                            data-testid={`checkbox-recap-row-${row.nis}`}
                             checked={isRowChecked}
-                            disabled={!isRowRecorded}
+                            disabled={!isRowSelectable}
                             onChange={() => handleToggleRowReset(row.nis)}
-                            aria-label={`Pilih ${row.nama} untuk reset ke Belum Presensi`}
+                            aria-label={`Pilih ${row.nama} untuk aksi kolektif`}
                             className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-30"
                           />
                         </td>
@@ -1877,6 +1977,23 @@ export function RecapView({
             });
             setEarlyCheckoutRow(null);
           }}
+        />
+      )}
+
+      {/* Collective Checkout Confirmation Modal (Master Admin & Wali Kelas) */}
+      {canCollectiveCheckout && (
+        <CollectiveCheckoutModal
+          open={collectiveCheckoutModalOpen}
+          tanggal={selectedDate}
+          targets={collectiveCheckoutTargets.map((r) => ({
+            nis: r.nis,
+            nama: r.nama,
+            kelas: r.kelas,
+            jam_masuk: r.jam_masuk,
+          }))}
+          jamPulangStandar={settings.jam_pulang_standar}
+          onCancel={() => setCollectiveCheckoutModalOpen(false)}
+          onConfirm={handleConfirmCollectiveCheckoutSubmit}
         />
       )}
     </div>

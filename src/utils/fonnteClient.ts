@@ -330,6 +330,10 @@ export function loadFonnteConfig(): FonnteConfig {
       autoSendOnTime: parsed.autoSendOnTime ?? DEFAULT_FONNTE_CONFIG.autoSendOnTime,
       autoSendLate: parsed.autoSendLate ?? DEFAULT_FONNTE_CONFIG.autoSendLate,
       autoSendAbsent: parsed.autoSendAbsent ?? DEFAULT_FONNTE_CONFIG.autoSendAbsent,
+      autoSendCheckoutOnTime:
+        parsed.autoSendCheckoutOnTime ?? DEFAULT_FONNTE_CONFIG.autoSendCheckoutOnTime,
+      autoSendCheckoutEarly:
+        parsed.autoSendCheckoutEarly ?? DEFAULT_FONNTE_CONFIG.autoSendCheckoutEarly,
       autoAbsentScheduleEnabled: Boolean(parsed.autoAbsentScheduleEnabled),
       autoAbsentScheduleTime:
         typeof parsed.autoAbsentScheduleTime === 'string' &&
@@ -351,6 +355,14 @@ export function loadFonnteConfig(): FonnteConfig {
         typeof parsed.absentTemplate === 'string' && parsed.absentTemplate.trim()
           ? parsed.absentTemplate
           : DEFAULT_FONNTE_CONFIG.absentTemplate,
+      checkoutOnTimeTemplate:
+        typeof parsed.checkoutOnTimeTemplate === 'string' && parsed.checkoutOnTimeTemplate.trim()
+          ? parsed.checkoutOnTimeTemplate
+          : DEFAULT_FONNTE_CONFIG.checkoutOnTimeTemplate,
+      checkoutEarlyTemplate:
+        typeof parsed.checkoutEarlyTemplate === 'string' && parsed.checkoutEarlyTemplate.trim()
+          ? parsed.checkoutEarlyTemplate
+          : DEFAULT_FONNTE_CONFIG.checkoutEarlyTemplate,
     };
   } catch {
     return { ...DEFAULT_FONNTE_CONFIG };

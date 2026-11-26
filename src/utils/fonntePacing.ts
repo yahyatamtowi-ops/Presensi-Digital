@@ -2,7 +2,9 @@ export type FonnteNotificationCategory =
   | 'Hadir Tepat Waktu'
   | 'Terlambat'
   | 'Alpa'
-  | 'Belum Presensi';
+  | 'Belum Presensi'
+  | 'Pulang Tepat Waktu'
+  | 'Pulang Cepat';
 
 export interface FonntePacingPolicy {
   /** Minimum randomized delay between consecutive messages (seconds, floor 15s) */
@@ -20,6 +22,8 @@ export interface FonnteConfig {
   autoSendOnTime: boolean;
   autoSendLate: boolean;
   autoSendAbsent: boolean;
+  autoSendCheckoutOnTime: boolean;
+  autoSendCheckoutEarly: boolean;
   autoAbsentScheduleEnabled: boolean;
   autoAbsentScheduleTime: string; // HH:MM e.g. '08:30'
   includeUnrecordedAsAbsent: boolean;
@@ -27,6 +31,8 @@ export interface FonnteConfig {
   onTimeTemplate: string;
   lateTemplate: string;
   absentTemplate: string;
+  checkoutOnTimeTemplate: string;
+  checkoutEarlyTemplate: string;
 }
 
 export interface FonnteQueueJobInput {
@@ -137,11 +143,19 @@ export const DEFAULT_LATE_TEMPLATE =
 export const DEFAULT_ABSENT_TEMPLATE =
   '{salam}\n\nYth. Bapak/Ibu Orang Tua/Wali dari *{nama}* (NISN: {nisn}, Kelas {kelas}).\n\nKami informasikan bahwa hingga pengecekan hari ini tanggal *{tanggal}*, ananda tercatat *{status} (Tidak Hadir)* di {sekolah}.\n\nApabila ananda sedang sakit atau ada keperluan izin, mohon menginformasikan kepada Wali Kelas. Terima kasih.';
 
+export const DEFAULT_CHECKOUT_ON_TIME_TEMPLATE =
+  '{salam}\n\nYth. Bapak/Ibu Orang Tua/Wali dari *{nama}* (NISN: {nisn}, Kelas {kelas}).\n\nKami informasikan bahwa ananda telah melakukan presensi *PULANG SESUAI WAKTU* dari {sekolah} pada tanggal *{tanggal}* pukul *{jam_pulang}* (jadwal pulang {batas_pulang}).\n\nSemoga ananda tiba di rumah dengan selamat. Terima kasih.';
+
+export const DEFAULT_CHECKOUT_EARLY_TEMPLATE =
+  '{salam}\n\nYth. Bapak/Ibu Orang Tua/Wali dari *{nama}* (NISN: {nisn}, Kelas {kelas}).\n\nKami informasikan bahwa ananda tercatat *PULANG CEPAT* dari {sekolah} pada tanggal *{tanggal}* pukul *{jam_pulang}* (jadwal pulang {batas_pulang}).\nAlasan: *{alasan_pulang}*.\n\nMohon perhatian dan pemantauan Bapak/Ibu agar ananda tiba di rumah dengan selamat. Terima kasih.';
+
 export const DEFAULT_FONNTE_CONFIG: FonnteConfig = {
   enabled: false,
   autoSendOnTime: false,
   autoSendLate: true,
   autoSendAbsent: true,
+  autoSendCheckoutOnTime: true,
+  autoSendCheckoutEarly: true,
   autoAbsentScheduleEnabled: false,
   autoAbsentScheduleTime: '08:30',
   includeUnrecordedAsAbsent: true,
@@ -149,6 +163,8 @@ export const DEFAULT_FONNTE_CONFIG: FonnteConfig = {
   onTimeTemplate: DEFAULT_ON_TIME_TEMPLATE,
   lateTemplate: DEFAULT_LATE_TEMPLATE,
   absentTemplate: DEFAULT_ABSENT_TEMPLATE,
+  checkoutOnTimeTemplate: DEFAULT_CHECKOUT_ON_TIME_TEMPLATE,
+  checkoutEarlyTemplate: DEFAULT_CHECKOUT_EARLY_TEMPLATE,
 };
 
 const NATURAL_GREETINGS = [
@@ -334,8 +350,45 @@ export function formatDurationId(totalSeconds: number): string {
 }
 
 /**
+ * Parses an HH:MM or HH:MM:SS time string into minutes since midnight.
+ */
+function parseTimeToMinutesSimple(raw?: string | null): number | null {
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(String(raw || '').trim());
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+    return null;
+  }
+  return h * 60 + m;
+}
+
+/**
+ * Classifies a student's checkout record as 'Pulang Cepat' or 'Pulang Tepat Waktu'.
+ * Returns null if the student has not checked out yet.
+ */
+export function classifyCheckoutCategory(
+  record: { jam_pulang?: string; alasan_pulang_cepat?: string } | null | undefined,
+  jamPulangStandar?: string
+): 'Pulang Cepat' | 'Pulang Tepat Waktu' | null {
+  const jamPulang = String(record?.jam_pulang || '').trim();
+  if (!jamPulang || jamPulang === '-') return null;
+  const checkoutMin = parseTimeToMinutesSimple(jamPulang);
+  if (checkoutMin === null) return null;
+
+  if (String(record?.alasan_pulang_cepat || '').trim().length > 0) {
+    return 'Pulang Cepat';
+  }
+  const standardMin = parseTimeToMinutesSimple(jamPulangStandar);
+  if (standardMin !== null && checkoutMin < standardMin) {
+    return 'Pulang Cepat';
+  }
+  return 'Pulang Tepat Waktu';
+}
+
+/**
  * Daily deduplication key ensuring the same parent does not receive duplicate automated
- * alerts for the same student + date + status.
+ * alerts for the same student + date + status while allowing both arrival & departure alerts.
  */
 export function buildFonnteDedupeKey(
   tanggal: string,
@@ -347,7 +400,11 @@ export function buildFonnteDedupeKey(
       ? 'HADIR_TEPAT_WAKTU'
       : status === 'Terlambat'
         ? 'TERLAMBAT'
-        : 'TIDAK_HADIR';
+        : status === 'Pulang Tepat Waktu'
+          ? 'PULANG_TEPAT_WAKTU'
+          : status === 'Pulang Cepat'
+            ? 'PULANG_CEPAT'
+            : 'TIDAK_HADIR';
   return `${String(tanggal || '').trim()}|${String(nis || '').trim()}|${normalizedGroup}`;
 }
 
@@ -358,6 +415,9 @@ export interface FonnteTemplateVars {
   tanggal: string;
   jam_masuk: string;
   batas_jam: string;
+  jam_pulang?: string;
+  batas_pulang?: string;
+  alasan_pulang?: string;
   status: FonnteNotificationCategory;
   sekolah: string;
 }
@@ -378,7 +438,11 @@ export function renderFonnteMessage(
       ? DEFAULT_ON_TIME_TEMPLATE
       : vars.status === 'Terlambat'
         ? DEFAULT_LATE_TEMPLATE
-        : DEFAULT_ABSENT_TEMPLATE;
+        : vars.status === 'Pulang Tepat Waktu'
+          ? DEFAULT_CHECKOUT_ON_TIME_TEMPLATE
+          : vars.status === 'Pulang Cepat'
+            ? DEFAULT_CHECKOUT_EARLY_TEMPLATE
+            : DEFAULT_ABSENT_TEMPLATE;
   const base = (template || '').trim() || fallbackTemplate;
 
   return base
@@ -390,6 +454,9 @@ export function renderFonnteMessage(
     .replace(/\{tanggal\}/gi, vars.tanggal)
     .replace(/\{jam_masuk\}/gi, vars.jam_masuk || '-')
     .replace(/\{batas_jam\}/gi, vars.batas_jam || '07:15')
+    .replace(/\{jam_pulang\}/gi, vars.jam_pulang || '-')
+    .replace(/\{batas_pulang\}/gi, vars.batas_pulang || '15:00')
+    .replace(/\{alasan_pulang\}/gi, vars.alasan_pulang?.trim() || 'Izin pulang lebih awal')
     .replace(/\{status\}/gi, vars.status)
     .replace(/\{sekolah\}/gi, vars.sekolah || 'Sekolah');
 }
@@ -402,6 +469,8 @@ export interface FonnteCandidateRecipient {
   normalizedTarget: string;
   status: FonnteNotificationCategory;
   jam_masuk: string;
+  jam_pulang?: string;
+  alasan_pulang_cepat?: string;
   dedupeKey: string;
   alreadyNotified: boolean;
   hasValidPhone: boolean;
@@ -409,29 +478,46 @@ export interface FonnteCandidateRecipient {
 }
 
 /**
- * Collects today's late and absent (Alpa / optional Belum Presensi) students ready
- * for staggered Fonnte WhatsApp delivery, marking invalid numbers and duplicates cleanly.
+ * Collects today's arrival, absent, and departure (Pulang Tepat Waktu / Pulang Cepat) students
+ * ready for staggered Fonnte WhatsApp delivery, marking invalid numbers and duplicates cleanly.
  */
 export function buildPendingFonnteRecipients(params: {
   students: Array<{ nis: string; nama: string; kelas: string; no_wa_ortu: string }>;
-  todayRecords: Array<{ nis: string; status: string; jam_masuk?: string }>;
+  todayRecords: Array<{
+    nis: string;
+    status: string;
+    jam_masuk?: string;
+    jam_pulang?: string;
+    alasan_pulang_cepat?: string;
+  }>;
   tanggal: string;
   sekolah: string;
   batasJamMasuk: string;
+  jamPulangStandar?: string;
   config: FonnteConfig;
   sentDedupeKeys: ReadonlySet<string>;
   includeOnTime?: boolean;
   includeLate?: boolean;
   includeAbsent?: boolean;
   includeUnrecorded?: boolean;
+  includeCheckoutOnTime?: boolean;
+  includeCheckoutEarly?: boolean;
 }): FonnteCandidateRecipient[] {
   const includeOnTime = params.includeOnTime ?? params.config.autoSendOnTime;
   const includeLate = params.includeLate ?? true;
   const includeAbsent = params.includeAbsent ?? true;
   const includeUnrecorded =
     params.includeUnrecorded ?? params.config.includeUnrecordedAsAbsent;
+  const includeCheckoutOnTime =
+    params.includeCheckoutOnTime ?? params.config.autoSendCheckoutOnTime;
+  const includeCheckoutEarly =
+    params.includeCheckoutEarly ?? params.config.autoSendCheckoutEarly;
+  const jamPulangStandar = params.jamPulangStandar || '15:00';
 
-  const recordByNis = new Map<string, { status: string; jam_masuk?: string }>();
+  const recordByNis = new Map<
+    string,
+    { status: string; jam_masuk?: string; jam_pulang?: string; alasan_pulang_cepat?: string }
+  >();
   for (const r of params.todayRecords) {
     recordByNis.set(r.nis, r);
   }
@@ -439,24 +525,13 @@ export function buildPendingFonnteRecipients(params: {
   const results: FonnteCandidateRecipient[] = [];
   let variationCounter = 0;
 
-  for (const student of params.students) {
-    const rec = recordByNis.get(student.nis);
-    let category: FonnteNotificationCategory | null = null;
-
-    if (rec) {
-      if (rec.status === 'Hadir' && includeOnTime) {
-        category = 'Hadir Tepat Waktu';
-      } else if (rec.status === 'Terlambat' && includeLate) {
-        category = 'Terlambat';
-      } else if (rec.status === 'Alpa' && includeAbsent) {
-        category = 'Alpa';
-      }
-    } else if (includeAbsent && includeUnrecorded) {
-      category = 'Belum Presensi';
-    }
-
-    if (!category) continue;
-
+  const pushCandidate = (
+    student: { nis: string; nama: string; kelas: string; no_wa_ortu: string },
+    rec:
+      | { status: string; jam_masuk?: string; jam_pulang?: string; alasan_pulang_cepat?: string }
+      | undefined,
+    category: FonnteNotificationCategory
+  ) => {
     const normalizedTarget = normalizeFonnteTarget(student.no_wa_ortu);
     const dedupeKey = buildFonnteDedupeKey(params.tanggal, student.nis, category);
     const alreadyNotified = params.sentDedupeKeys.has(dedupeKey);
@@ -465,7 +540,11 @@ export function buildPendingFonnteRecipients(params: {
         ? params.config.onTimeTemplate
         : category === 'Terlambat'
           ? params.config.lateTemplate
-          : params.config.absentTemplate;
+          : category === 'Pulang Tepat Waktu'
+            ? params.config.checkoutOnTimeTemplate
+            : category === 'Pulang Cepat'
+              ? params.config.checkoutEarlyTemplate
+              : params.config.absentTemplate;
 
     const message = renderFonnteMessage(
       template,
@@ -476,6 +555,9 @@ export function buildPendingFonnteRecipients(params: {
         tanggal: params.tanggal,
         jam_masuk: rec?.jam_masuk || '-',
         batas_jam: params.batasJamMasuk,
+        jam_pulang: rec?.jam_pulang || '-',
+        batas_pulang: jamPulangStandar,
+        alasan_pulang: rec?.alasan_pulang_cepat?.trim() || 'Izin pulang lebih awal',
         status: category,
         sekolah: params.sekolah,
       },
@@ -490,11 +572,43 @@ export function buildPendingFonnteRecipients(params: {
       normalizedTarget,
       status: category,
       jam_masuk: rec?.jam_masuk || '-',
+      jam_pulang: rec?.jam_pulang,
+      alasan_pulang_cepat: rec?.alasan_pulang_cepat,
       dedupeKey,
       alreadyNotified,
       hasValidPhone: Boolean(normalizedTarget),
       message,
     });
+  };
+
+  for (const student of params.students) {
+    const rec = recordByNis.get(student.nis);
+    let arrivalCategory: FonnteNotificationCategory | null = null;
+
+    if (rec) {
+      if (rec.status === 'Hadir' && includeOnTime) {
+        arrivalCategory = 'Hadir Tepat Waktu';
+      } else if (rec.status === 'Terlambat' && includeLate) {
+        arrivalCategory = 'Terlambat';
+      } else if (rec.status === 'Alpa' && includeAbsent) {
+        arrivalCategory = 'Alpa';
+      }
+    } else if (includeAbsent && includeUnrecorded) {
+      arrivalCategory = 'Belum Presensi';
+    }
+
+    if (arrivalCategory) {
+      pushCandidate(student, rec, arrivalCategory);
+    }
+
+    if (rec) {
+      const checkoutCategory = classifyCheckoutCategory(rec, jamPulangStandar);
+      if (checkoutCategory === 'Pulang Tepat Waktu' && includeCheckoutOnTime) {
+        pushCandidate(student, rec, checkoutCategory);
+      } else if (checkoutCategory === 'Pulang Cepat' && includeCheckoutEarly) {
+        pushCandidate(student, rec, checkoutCategory);
+      }
+    }
   }
 
   return results;

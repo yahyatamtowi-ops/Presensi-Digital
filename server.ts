@@ -61,6 +61,14 @@ const ALLOWED_STATUSES = new Set<FonnteNotificationCategory>([
   'Terlambat',
   'Alpa',
   'Belum Presensi',
+  'Pulang Tepat Waktu',
+  'Pulang Cepat',
+]);
+const SCAN_KIOSK_ALLOWED_STATUSES = new Set<FonnteNotificationCategory>([
+  'Hadir Tepat Waktu',
+  'Terlambat',
+  'Pulang Tepat Waktu',
+  'Pulang Cepat',
 ]);
 
 interface InternalQueueJob extends FonnteQueueJob {
@@ -805,18 +813,22 @@ async function startServer() {
       return;
     }
 
-    // Kiosk mode (pre-login Scan QR) may ONLY enqueue 1 single 'Hadir Tepat Waktu' or 'Terlambat' notification per scan
+    // Kiosk mode (pre-login Scan QR) may ONLY enqueue 1 single arrival or departure notification per scan
     if (role === 'scan_kiosk') {
       if (body.items.length !== 1) {
         res.status(403).json({
-          error: 'Mode Scan QR hanya dapat mengantrekan 1 notifikasi kehadiran/keterlambatan per pemindaian.',
+          error: 'Mode Scan QR hanya dapat mengantrekan 1 notifikasi kehadiran/kepulangan per pemindaian.',
         });
         return;
       }
       const single = body.items[0] as { status?: unknown };
-      if (single?.status !== 'Terlambat' && single?.status !== 'Hadir Tepat Waktu') {
+      if (
+        typeof single?.status !== 'string' ||
+        !SCAN_KIOSK_ALLOWED_STATUSES.has(single.status as FonnteNotificationCategory)
+      ) {
         res.status(403).json({
-          error: 'Mode Scan QR hanya mendukung notifikasi otomatis hadir tepat waktu atau terlambat.',
+          error:
+            'Mode Scan QR hanya mendukung notifikasi otomatis hadir, terlambat, pulang sesuai waktu, atau pulang cepat.',
         });
         return;
       }

@@ -24,6 +24,7 @@ import { StartupSyncModal } from './components/StartupSyncModal';
 import {
   buildFonnteDedupeKey,
   buildPendingFonnteRecipients,
+  classifyCheckoutCategory,
   evaluateScheduledFonnteRun,
   normalizeFonnteTarget,
   renderFonnteMessage,
@@ -141,6 +142,7 @@ import {
   saveUserAccounts,
 } from './utils/auth';
 import {
+  applyCollectiveCheckout,
   collectAcademicYears,
   evaluateWaliKelasLoginReminder,
   filterByAcademicYear,
@@ -156,6 +158,13 @@ import {
   resolveItemAcademicYear,
   type ScanOutcome,
 } from './utils/attendanceLogic';
+import {
+  cloneStudentsToAcademicYear,
+  getStudentYearKey,
+  mergeStudentsPreservingArchives,
+  preserveArchiveOnAcademicYearChange,
+  summarizeStudentsByAcademicYear,
+} from './utils/studentArchive';
 import {
   approveLateCorrectionRequest,
   createLateCorrectionRequest,
@@ -426,6 +435,7 @@ export default function App() {
   const studentsSaveInFlightCountRef = useRef(0);
   const autoSeededAkunForUrlRef = useRef<string | null>(null);
   const lastLocalAcademicSaveAtRef = useRef(0);
+  const academicSaveInFlightCountRef = useRef(0);
   const [lateCorrectionRequests, setLateCorrectionRequests] = useState<
     LateCorrectionRequest[]
   >(() => loadLocalLateCorrectionRequests());
@@ -496,6 +506,9 @@ export default function App() {
           fallbackStart,
           canonicalClasses
         );
+        if (next === prev) {
+          return prev;
+        }
         saveTimetableConfigs(next);
         return next;
       });
@@ -1192,10 +1205,15 @@ export default function App() {
           remote.students.length > 0;
 
         if (canApplyRemoteStudents) {
-          latestDataRef.current.students = remote.students;
-          latestFullSnapshotRef.current.students = remote.students;
-          setStudents(remote.students);
-          saveLocalStudents(remote.students);
+          const mergedStudents = mergeStudentsPreservingArchives(
+            latestDataRef.current.students,
+            remote.students,
+            latestDataRef.current.settings.tahun_ajaran
+          );
+          latestDataRef.current.students = mergedStudents;
+          latestFullSnapshotRef.current.students = mergedStudents;
+          setStudents(mergedStudents);
+          saveLocalStudents(mergedStudents);
         }
 
         const canApplyRemoteRecords =
@@ -1394,7 +1412,12 @@ export default function App() {
           }
         }
 
-        if (forcePullRemote || lastLocalAcademicSaveAtRef.current <= fetchStartedAt) {
+        if (
+          forcePullRemote ||
+          (flushResult.remaining === 0 &&
+            academicSaveInFlightCountRef.current === 0 &&
+            lastLocalAcademicSaveAtRef.current <= fetchStartedAt)
+        ) {
           if (remote.masterSubjects.length > 0) {
             latestFullSnapshotRef.current.masterSubjects = remote.masterSubjects;
             setMasterSubjects(remote.masterSubjects);
@@ -1679,6 +1702,21 @@ export default function App() {
         return false;
       }
 
+      const isAcademicAction =
+        action === 'upsertMasterMapel' ||
+        action === 'deleteMasterMapel' ||
+        action === 'upsertJadwalGuru' ||
+        action === 'deleteJadwalGuru' ||
+        action === 'upsertMapelKelas' ||
+        action === 'deleteMapelKelas' ||
+        action === 'recordPresensiMapel' ||
+        action === 'bulkRecordPresensiMapel';
+
+      if (isAcademicAction) {
+        academicSaveInFlightCountRef.current += 1;
+        lastLocalAcademicSaveAtRef.current = Date.now();
+      }
+
       setConnectionStatus('syncing');
       try {
         await postToGas(targetUrl, action, payload);
@@ -1711,6 +1749,14 @@ export default function App() {
           });
         }
         return false;
+      } finally {
+        if (isAcademicAction) {
+          lastLocalAcademicSaveAtRef.current = Date.now();
+          academicSaveInFlightCountRef.current = Math.max(
+            0,
+            academicSaveInFlightCountRef.current - 1
+          );
+        }
       }
     },
     [settings.script_url, pushToast]
@@ -2055,6 +2101,8 @@ export default function App() {
       tanggal: string;
       status: FonnteNotificationCategory;
       jamMasuk: string;
+      jamPulang?: string;
+      alasanPulangCepat?: string;
       roleOverride?: FonnteClientRole;
     }) => {
       const cfg = fonnteConfigRef.current;
@@ -2067,6 +2115,8 @@ export default function App() {
       ) {
         return;
       }
+      if (params.status === 'Pulang Tepat Waktu' && !cfg.autoSendCheckoutOnTime) return;
+      if (params.status === 'Pulang Cepat' && !cfg.autoSendCheckoutEarly) return;
 
       const target = normalizeFonnteTarget(params.student.no_wa_ortu);
       if (!target) return;
@@ -2084,7 +2134,11 @@ export default function App() {
           ? cfg.onTimeTemplate
           : params.status === 'Terlambat'
             ? cfg.lateTemplate
-            : cfg.absentTemplate;
+            : params.status === 'Pulang Tepat Waktu'
+              ? cfg.checkoutOnTimeTemplate
+              : params.status === 'Pulang Cepat'
+                ? cfg.checkoutEarlyTemplate
+                : cfg.absentTemplate;
       const message = renderFonnteMessage(
         template,
         {
@@ -2094,6 +2148,9 @@ export default function App() {
           tanggal: params.tanggal,
           jam_masuk: params.jamMasuk || '-',
           batas_jam: currentSettings.batas_jam_masuk,
+          jam_pulang: params.jamPulang || '-',
+          batas_pulang: currentSettings.jam_pulang_standar,
+          alasan_pulang: params.alasanPulangCepat?.trim() || 'Izin pulang lebih awal',
           status: params.status,
           sekolah: currentSettings.nama_sekolah,
         },
@@ -2170,12 +2227,15 @@ export default function App() {
         tanggal: today,
         sekolah: currentSettings.nama_sekolah,
         batasJamMasuk: currentSettings.batas_jam_masuk,
+        jamPulangStandar: currentSettings.jam_pulang_standar,
         config: cfg,
         sentDedupeKeys: fonnteSentKeysRef.current,
         includeOnTime: cfg.autoSendOnTime,
         includeLate: cfg.autoSendLate,
         includeAbsent: true,
         includeUnrecorded: cfg.includeUnrecordedAsAbsent,
+        includeCheckoutOnTime: cfg.autoSendCheckoutOnTime,
+        includeCheckoutEarly: cfg.autoSendCheckoutEarly,
       }).filter((c) => c.hasValidPhone && !c.alreadyNotified);
 
       if (candidates.length === 0) return;
@@ -2241,16 +2301,28 @@ export default function App() {
     [students, records, settings.tahun_ajaran]
   );
 
+  const studentYearSummaries = useMemo(
+    () => summarizeStudentsByAcademicYear(students, settings.tahun_ajaran),
+    [students, settings.tahun_ajaran]
+  );
+
+  // Strictly scoped active academic year students (never falls back to archived years)
+  const strictActiveYearStudents = useMemo(
+    () =>
+      filterByAcademicYear(students, {
+        activeAcademicYear: settings.tahun_ajaran,
+        isMasterAdmin: false,
+      }),
+    [students, settings.tahun_ajaran]
+  );
+
   // Active academic year datasets (used by Scan QR and non-Master Admin accounts)
   const activeYearStudents = useMemo(() => {
-    const filtered = filterByAcademicYear(students, {
-      activeAcademicYear: settings.tahun_ajaran,
-      isMasterAdmin: false,
-    });
-    // Safety fallback: if students exist in storage/spreadsheet but have not been migrated
-    // to the newly changed tahun_ajaran yet, still surface them instead of showing an empty list.
-    return filtered.length > 0 ? filtered : students;
-  }, [students, settings.tahun_ajaran]);
+    if (strictActiveYearStudents.length > 0) return strictActiveYearStudents;
+    // Only fall back when storage contains legacy untagged students with no tahun_ajaran set.
+    const hasUntaggedOnly = students.length > 0 && students.every((s) => !s.tahun_ajaran?.trim());
+    return hasUntaggedOnly ? students : strictActiveYearStudents;
+  }, [strictActiveYearStudents, students]);
 
   const activeYearRecords = useMemo(
     () =>
@@ -2268,7 +2340,12 @@ export default function App() {
       isMasterAdmin,
       masterYearFilter,
     });
-    if (!isMasterAdmin && filtered.length === 0 && students.length > 0) {
+    if (
+      !isMasterAdmin &&
+      filtered.length === 0 &&
+      students.length > 0 &&
+      students.every((s) => !s.tahun_ajaran?.trim())
+    ) {
       return students;
     }
     return filtered;
@@ -2309,7 +2386,8 @@ export default function App() {
       isSameClassName(s.kelas, waliClass)
     );
     if (matchedInYear.length > 0) return matchedInYear;
-    return students.filter((s) => isSameClassName(s.kelas, waliClass));
+    const hasUntaggedOnly = students.length > 0 && students.every((s) => !s.tahun_ajaran?.trim());
+    return hasUntaggedOnly ? students.filter((s) => isSameClassName(s.kelas, waliClass)) : [];
   }, [yearVisibleStudents, students, waliClass]);
 
   const scopedRecords = useMemo(() => {
@@ -2318,11 +2396,69 @@ export default function App() {
     return yearVisibleRecords.filter((r) => isSameClassName(r.kelas, waliClass));
   }, [yearVisibleRecords, waliClass]);
 
+  const handleCloneStudentsFromYear = useCallback(
+    (sourceYear: string, autoPromoteClass: boolean) => {
+      if (!canEditStudents(session?.role ?? null)) return;
+      const targetYear = latestDataRef.current.settings.tahun_ajaran;
+      const res = cloneStudentsToAcademicYear({
+        allStudents: latestDataRef.current.students,
+        sourceYear,
+        targetYear,
+        autoPromoteClass,
+      });
+
+      if (res.createdStudents.length === 0) {
+        const parts: string[] = [];
+        if (res.skippedDuplicates > 0) {
+          parts.push(`${res.skippedDuplicates} siswa sudah terdaftar di TA ${targetYear}`);
+        }
+        if (res.graduatedCount > 0) {
+          parts.push(`${res.graduatedCount} siswa tingkat akhir (lulus) tidak dinaikkan`);
+        }
+        pushToast({
+          type: 'info',
+          title: 'Tidak Ada Siswa Baru untuk Disalin',
+          description:
+            parts.length > 0
+              ? `${parts.join(' · ')}. Arsip TA ${sourceYear} tetap tersimpan utuh.`
+              : `Belum ada data siswa pada TA ${sourceYear}.`,
+        });
+        return;
+      }
+
+      const nextStudents = [...latestDataRef.current.students, ...res.createdStudents];
+      latestDataRef.current.students = nextStudents;
+      latestFullSnapshotRef.current.students = nextStudents;
+      lastLocalStudentsSaveAtRef.current = Date.now();
+      setStudents(nextStudents);
+      saveLocalStudents(nextStudents);
+      setMasterYearFilter('ACTIVE');
+
+      const extraNotes: string[] = [];
+      if (res.skippedDuplicates > 0) extraNotes.push(`${res.skippedDuplicates} sudah ada`);
+      if (res.graduatedCount > 0) extraNotes.push(`${res.graduatedCount} lulus tidak disalin`);
+
+      pushToast({
+        type: 'success',
+        title: autoPromoteClass
+          ? `${res.createdStudents.length} Siswa Dinaikkan ke TA ${targetYear}`
+          : `${res.createdStudents.length} Siswa Disalin ke TA ${targetYear}`,
+        description: `Arsip TA ${sourceYear} tetap tersimpan utuh${extraNotes.length > 0 ? ` (${extraNotes.join(', ')})` : ''}.`,
+      });
+
+      void syncStudentsMutation('bulkAddSiswa', { students: res.createdStudents });
+      runCloudWrite((uid) => bulkUpsertStudentsToCloud(uid, res.createdStudents));
+    },
+    [pushToast, runCloudWrite, session?.role, syncStudentsMutation]
+  );
+
   const masterYearControl = isMasterAdmin
     ? {
         selectedYear: masterYearFilter,
         availableYears: availableAcademicYears,
         onChangeYear: (yr: string) => setMasterYearFilter(yr),
+        yearSummaries: studentYearSummaries,
+        onCloneFromYear: handleCloneStudentsFromYear,
       }
     : undefined;
 
@@ -2629,10 +2765,23 @@ export default function App() {
         record: { ...taggedRecord },
       });
       runCloudWrite((uid) => upsertAttendanceToCloud(uid, taggedRecord));
-      if (
-        outcome.scanType !== 'pulang' &&
-        (taggedRecord.status === 'Hadir' || taggedRecord.status === 'Terlambat')
-      ) {
+      if (outcome.scanType === 'pulang') {
+        const checkoutStatus = classifyCheckoutCategory(
+          taggedRecord,
+          currentSettings.jam_pulang_standar
+        );
+        if (checkoutStatus) {
+          triggerAutoFonnteSingle({
+            student: outcome.student,
+            tanggal: taggedRecord.tanggal,
+            status: checkoutStatus,
+            jamMasuk: taggedRecord.jam_masuk,
+            jamPulang: taggedRecord.jam_pulang,
+            alasanPulangCepat: taggedRecord.alasan_pulang_cepat,
+            roleOverride: session?.role || 'scan_kiosk',
+          });
+        }
+      } else if (taggedRecord.status === 'Hadir' || taggedRecord.status === 'Terlambat') {
         triggerAutoFonnteSingle({
           student: outcome.student,
           tanggal: taggedRecord.tanggal,
@@ -2694,27 +2843,33 @@ export default function App() {
     if (!canEditStudents(session?.role ?? null)) {
       return { ok: false, error: 'Anda tidak memiliki izin menambah data siswa.' };
     }
-    const duplicate = activeYearStudents.some(
-      (s) => s.nis.trim().toLowerCase() === student.nis.trim().toLowerCase()
+    const targetYear = student.tahun_ajaran?.trim() || settings.tahun_ajaran;
+    const duplicate = students.some(
+      (s) =>
+        s.nis.trim().toLowerCase() === student.nis.trim().toLowerCase() &&
+        resolveItemAcademicYear(s.tahun_ajaran, settings.tahun_ajaran) ===
+          resolveItemAcademicYear(targetYear, settings.tahun_ajaran)
     );
     if (duplicate) {
       return {
         ok: false,
-        error: `NISN ${student.nis} sudah terdaftar pada Tahun Ajaran ${settings.tahun_ajaran}.`,
+        error: `NISN ${student.nis} sudah terdaftar pada Tahun Ajaran ${targetYear}.`,
       };
     }
     const taggedStudent: Student = {
       ...student,
-      tahun_ajaran: settings.tahun_ajaran,
+      tahun_ajaran: targetYear,
     };
     const nextStudents = [...students, taggedStudent];
+    latestDataRef.current.students = nextStudents;
+    latestFullSnapshotRef.current.students = nextStudents;
     lastLocalStudentsSaveAtRef.current = Date.now();
     setStudents(nextStudents);
     saveLocalStudents(nextStudents);
     pushToast({
       type: 'success',
       title: 'Siswa Ditambahkan',
-      description: `${taggedStudent.nama} (${taggedStudent.kelas}) berhasil disimpan.`,
+      description: `${taggedStudent.nama} (${taggedStudent.kelas}) berhasil disimpan ke TA ${targetYear}.`,
     });
     void syncStudentsMutation('addSiswa', { ...taggedStudent });
     runCloudWrite((uid) => upsertStudentToCloud(uid, taggedStudent));
@@ -2724,11 +2879,19 @@ export default function App() {
   function handleBulkImportStudents(newStudents: Student[]) {
     if (!canEditStudents(session?.role ?? null)) return;
     if (newStudents.length === 0) return;
-    const tagged = newStudents.map((s) => ({
-      ...s,
-      tahun_ajaran: settings.tahun_ajaran,
-    }));
+    const existingActiveNis = new Set(
+      strictActiveYearStudents.map((s) => s.nis.trim().toLowerCase())
+    );
+    const tagged = newStudents
+      .filter((s) => !existingActiveNis.has(s.nis.trim().toLowerCase()))
+      .map((s) => ({
+        ...s,
+        tahun_ajaran: settings.tahun_ajaran,
+      }));
+    if (tagged.length === 0) return;
     const nextStudents = [...students, ...tagged];
+    latestDataRef.current.students = nextStudents;
+    latestFullSnapshotRef.current.students = nextStudents;
     lastLocalStudentsSaveAtRef.current = Date.now();
     setStudents(nextStudents);
     saveLocalStudents(nextStudents);
@@ -2743,54 +2906,84 @@ export default function App() {
 
   function handleUpdateStudent(
     originalNis: string,
-    updated: Student
+    updated: Student,
+    originalTahunAjaran?: string
   ): { ok: boolean; error?: string } {
     if (!canEditStudents(session?.role ?? null)) {
       return { ok: false, error: 'Anda tidak memiliki izin mengubah data siswa.' };
     }
-    const conflict = scopedStudents.some(
+    const targetYear = resolveItemAcademicYear(
+      originalTahunAjaran || updated.tahun_ajaran,
+      settings.tahun_ajaran
+    );
+    const origNisNorm = originalNis.trim().toLowerCase();
+    const nextNisNorm = updated.nis.trim().toLowerCase();
+
+    const conflict = students.some(
       (s) =>
-        s.nis.trim().toLowerCase() === updated.nis.trim().toLowerCase() &&
-        s.nis.trim().toLowerCase() !== originalNis.trim().toLowerCase()
+        resolveItemAcademicYear(s.tahun_ajaran, settings.tahun_ajaran) === targetYear &&
+        s.nis.trim().toLowerCase() === nextNisNorm &&
+        s.nis.trim().toLowerCase() !== origNisNorm
     );
     if (conflict) {
-      return { ok: false, error: `NISN ${updated.nis} sudah digunakan siswa lain.` };
+      return {
+        ok: false,
+        error: `NISN ${updated.nis} sudah digunakan siswa lain pada TA ${targetYear}.`,
+      };
     }
 
     const nextStudents = students.map((s) =>
-      s.nis === originalNis
-        ? { ...updated, tahun_ajaran: s.tahun_ajaran || settings.tahun_ajaran }
+      s.nis.trim().toLowerCase() === origNisNorm &&
+      resolveItemAcademicYear(s.tahun_ajaran, settings.tahun_ajaran) === targetYear
+        ? { ...updated, tahun_ajaran: targetYear }
         : s
     );
+    latestDataRef.current.students = nextStudents;
+    latestFullSnapshotRef.current.students = nextStudents;
     lastLocalStudentsSaveAtRef.current = Date.now();
     setStudents(nextStudents);
     saveLocalStudents(nextStudents);
 
     const nextRecords = records.map((r) =>
-      r.nis === originalNis
+      r.nis.trim().toLowerCase() === origNisNorm &&
+      resolveItemAcademicYear(r.tahun_ajaran, settings.tahun_ajaran) === targetYear
         ? { ...r, nis: updated.nis, nama: updated.nama, kelas: updated.kelas }
         : r
     );
+    latestDataRef.current.records = nextRecords;
+    latestFullSnapshotRef.current.records = nextRecords;
     lastLocalRecordsSaveAtRef.current = Date.now();
     setRecords(nextRecords);
     saveLocalRecords(nextRecords);
 
-    const savedStudent = nextStudents.find((s) => s.nis === updated.nis) ?? {
+    const savedStudent = nextStudents.find(
+      (s) =>
+        s.nis.trim().toLowerCase() === nextNisNorm &&
+        resolveItemAcademicYear(s.tahun_ajaran, settings.tahun_ajaran) === targetYear
+    ) ?? {
       ...updated,
-      tahun_ajaran: settings.tahun_ajaran,
+      tahun_ajaran: targetYear,
     };
-    const affectedRecords = nextRecords.filter((r) => r.nis === updated.nis);
+    const affectedRecords = nextRecords.filter(
+      (r) =>
+        r.nis.trim().toLowerCase() === nextNisNorm &&
+        resolveItemAcademicYear(r.tahun_ajaran, settings.tahun_ajaran) === targetYear
+    );
     pushToast({
       type: 'success',
       title: 'Data Siswa Diperbarui',
-      description: `${updated.nama} berhasil diperbarui.`,
+      description: `${updated.nama} (TA ${targetYear}) berhasil diperbarui.`,
     });
-    void syncStudentsMutation('updateSiswa', { originalNis, ...updated });
+    void syncStudentsMutation('updateSiswa', {
+      originalNis,
+      originalTahunAjaran: targetYear,
+      ...savedStudent,
+    });
     runCloudWrite(async (uid) => {
-      if (originalNis.trim().toLowerCase() !== updated.nis.trim().toLowerCase()) {
+      if (origNisNorm !== nextNisNorm) {
         await deleteStudentFromCloud(uid, {
           nis: originalNis,
-          tahun_ajaran: savedStudent.tahun_ajaran,
+          tahun_ajaran: targetYear,
         });
       }
       await upsertStudentToCloud(uid, savedStudent);
@@ -2801,7 +2994,7 @@ export default function App() {
     return { ok: true };
   }
 
-  function handleDeleteStudent(nis: string) {
+  function handleDeleteStudent(nis: string, tahunAjaran?: string) {
     if (!canDeleteStudents(session?.role ?? null)) {
       pushToast({
         type: 'warning',
@@ -2810,32 +3003,44 @@ export default function App() {
       });
       return;
     }
-    const target = scopedStudents.find((s) => s.nis === nis);
-    const targetYear = target
-      ? resolveItemAcademicYear(target.tahun_ajaran)
-      : settings.tahun_ajaran;
+    const target = tahunAjaran
+      ? students.find(
+          (s) =>
+            s.nis.trim().toLowerCase() === nis.trim().toLowerCase() &&
+            resolveItemAcademicYear(s.tahun_ajaran, settings.tahun_ajaran) ===
+              resolveItemAcademicYear(tahunAjaran, settings.tahun_ajaran)
+        )
+      : scopedStudents.find((s) => s.nis.trim().toLowerCase() === nis.trim().toLowerCase());
+    const targetYear = resolveItemAcademicYear(
+      tahunAjaran || target?.tahun_ajaran,
+      settings.tahun_ajaran
+    );
     const nextStudents = students.filter(
       (s) =>
         !(
-          s.nis === nis &&
-          resolveItemAcademicYear(s.tahun_ajaran) === targetYear
+          s.nis.trim().toLowerCase() === nis.trim().toLowerCase() &&
+          resolveItemAcademicYear(s.tahun_ajaran, settings.tahun_ajaran) === targetYear
         )
     );
+    latestDataRef.current.students = nextStudents;
+    latestFullSnapshotRef.current.students = nextStudents;
     lastLocalStudentsSaveAtRef.current = Date.now();
     setStudents(nextStudents);
     saveLocalStudents(nextStudents);
     pushToast({
       type: 'info',
       title: 'Siswa Dihapus',
-      description: target ? `${target.nama} dihapus dari daftar siswa.` : undefined,
+      description: target
+        ? `${target.nama} (TA ${targetYear}) dihapus dari daftar siswa.`
+        : undefined,
     });
-    void syncStudentsMutation('deleteSiswa', { nis });
+    void syncStudentsMutation('deleteSiswa', { nis, tahun_ajaran: targetYear });
     runCloudWrite((uid) =>
       deleteStudentFromCloud(uid, { nis, tahun_ajaran: targetYear })
     );
   }
 
-  function handleBulkDeleteStudents(nisList: string[]) {
+  function handleBulkDeleteStudents(targets: Array<{ nis: string; tahun_ajaran?: string }>) {
     if (!canDeleteStudents(session?.role ?? null)) {
       pushToast({
         type: 'warning',
@@ -2844,34 +3049,35 @@ export default function App() {
       });
       return;
     }
-    if (nisList.length === 0) return;
-    const delSet = new Set(nisList);
-    const allowedYears = new Set(
-      scopedStudents
-        .filter((s) => delSet.has(s.nis))
-        .map((s) => resolveItemAcademicYear(s.tahun_ajaran))
+    if (targets.length === 0) return;
+    const delKeySet = new Set(
+      targets.map((t) => getStudentYearKey(t, settings.tahun_ajaran))
     );
+    const deletedTargets = students.filter((s) =>
+      delKeySet.has(getStudentYearKey(s, settings.tahun_ajaran))
+    );
+    if (deletedTargets.length === 0) return;
+
     const nextStudents = students.filter(
-      (s) =>
-        !(
-          delSet.has(s.nis) &&
-          allowedYears.has(resolveItemAcademicYear(s.tahun_ajaran))
-        )
+      (s) => !delKeySet.has(getStudentYearKey(s, settings.tahun_ajaran))
     );
+    latestDataRef.current.students = nextStudents;
+    latestFullSnapshotRef.current.students = nextStudents;
     lastLocalStudentsSaveAtRef.current = Date.now();
     setStudents(nextStudents);
     saveLocalStudents(nextStudents);
     pushToast({
       type: 'info',
-      title: `${nisList.length} Siswa Dihapus`,
-      description: 'Data siswa terpilih telah dihapus dari daftar.',
+      title: `${deletedTargets.length} Siswa Dihapus`,
+      description: 'Data siswa terpilih telah dihapus tanpa memengaruhi arsip tahun ajaran lain.',
     });
-    const deletedTargets = students.filter(
-      (s) =>
-        delSet.has(s.nis) &&
-        allowedYears.has(resolveItemAcademicYear(s.tahun_ajaran))
-    );
-    void syncStudentsMutation('bulkDeleteSiswa', { nisList });
+    void syncStudentsMutation('bulkDeleteSiswa', {
+      nisList: deletedTargets.map((s) => s.nis),
+      targets: deletedTargets.map((s) => ({
+        nis: s.nis,
+        tahun_ajaran: resolveItemAcademicYear(s.tahun_ajaran, settings.tahun_ajaran),
+      })),
+    });
     runCloudWrite(async (uid) => {
       for (const s of deletedTargets) {
         await deleteStudentFromCloud(uid, s);
@@ -3173,9 +3379,190 @@ export default function App() {
       record: { ...updatedRecord },
     });
     runCloudWrite((uid) => upsertAttendanceToCloud(uid, updatedRecord));
+
+    const matchedStudent = latestDataRef.current.students.find(
+      (s) => s.nis.trim().toLowerCase() === targetNisNorm
+    );
+    const checkoutStatus = classifyCheckoutCategory(
+      updatedRecord,
+      latestDataRef.current.settings.jam_pulang_standar
+    );
+    if (matchedStudent && checkoutStatus) {
+      triggerAutoFonnteSingle({
+        student: matchedStudent,
+        tanggal: updatedRecord.tanggal,
+        status: checkoutStatus,
+        jamMasuk: updatedRecord.jam_masuk,
+        jamPulang: updatedRecord.jam_pulang,
+        alasanPulangCepat: updatedRecord.alasan_pulang_cepat,
+        roleOverride: session?.role || 'wali_kelas',
+      });
+    }
+  }
+
+  function handleBulkConfirmCheckout(params: {
+    tanggal: string;
+    students: Array<{ nis: string; nama: string; kelas: string }>;
+    checkoutTime: string;
+    alasanPulangCepat?: string;
+  }) {
+    if (!session || (session.role !== 'master_admin' && session.role !== 'wali_kelas')) {
+      return;
+    }
+    const { tanggal, students: requestedStudents, checkoutTime, alasanPulangCepat } = params;
+    const allowedStudents =
+      session.role === 'wali_kelas' && waliClass
+        ? requestedStudents.filter((s) => isSameClassName(s.kelas, waliClass))
+        : requestedStudents;
+    if (allowedStudents.length === 0) return;
+
+    const currentRecords = latestDataRef.current.records;
+    const { nextRecords, updatedRecords } = applyCollectiveCheckout({
+      records: currentRecords,
+      tanggal,
+      targetNisList: allowedStudents.map((s) => s.nis),
+      checkoutTime,
+      alasanPulangCepat,
+    });
+
+    if (updatedRecords.length === 0) {
+      pushToast({
+        type: 'info',
+        title: 'Tidak Ada Siswa yang Dapat Dikonfirmasi',
+        description:
+          'Siswa terpilih belum melakukan presensi masuk atau sudah tercatat pulang.',
+      });
+      return;
+    }
+
+    latestDataRef.current.records = nextRecords;
+    latestFullSnapshotRef.current.records = nextRecords;
+    lastLocalRecordsSaveAtRef.current = Date.now();
+    setRecords(nextRecords);
+    saveLocalRecords(nextRecords);
+    speakCheckoutSuccessNotification();
+
+    const trimmedReason = (alasanPulangCepat || '').trim();
+    const displayTime = updatedRecords[0].jam_pulang;
+    pushToast({
+      type: trimmedReason ? 'warning' : 'success',
+      title: trimmedReason
+        ? `${updatedRecords.length} Siswa — Pulang Cepat Kolektif Dicatat`
+        : `${updatedRecords.length} Siswa — Jam Pulang Kolektif Dicatat`,
+      description: trimmedReason
+        ? `Jam pulang ${displayTime} (${tanggal}) dikonfirmasi · Keterangan: ${trimmedReason}`
+        : `Jam pulang ${displayTime} pada ${tanggal} berhasil dikonfirmasi untuk ${updatedRecords.length} siswa.`,
+    });
+
+    // Sync each updated record to Google Sheets and batch-upsert to Cloud Firestore
+    for (const rec of updatedRecords) {
+      void syncRecordsMutation('recordPresensi', {
+        ...rec,
+        record: { ...rec },
+      });
+    }
+    runCloudWrite((uid) => bulkUpsertAttendanceToCloud(uid, updatedRecords));
+
+    // Automatically enqueue deduplicated Fonnte WhatsApp checkout notifications
+    const cfg = fonnteConfigRef.current;
+    if (cfg.enabled) {
+      const currentSettings = latestDataRef.current.settings;
+      const studentMap = new Map<string, Student>();
+      for (const s of latestDataRef.current.students) {
+        const key = s.nis.trim().toLowerCase();
+        if (!studentMap.has(key) || resolveItemAcademicYear(s.tahun_ajaran) === resolveItemAcademicYear(currentSettings.tahun_ajaran)) {
+          studentMap.set(key, s);
+        }
+      }
+
+      const itemsToQueue: Array<{
+        dedupeKey: string;
+        nis: string;
+        studentName: string;
+        kelas: string;
+        target: string;
+        status: FonnteNotificationCategory;
+        tanggal: string;
+        message: string;
+      }> = [];
+
+      let variantIdx = fonnteSentKeysRef.current.size;
+      for (const rec of updatedRecords) {
+        const checkoutStatus = classifyCheckoutCategory(rec, currentSettings.jam_pulang_standar);
+        if (!checkoutStatus) continue;
+        const autoAllowed =
+          (checkoutStatus === 'Pulang Cepat' && cfg.autoSendCheckoutEarly) ||
+          (checkoutStatus === 'Pulang Tepat Waktu' && cfg.autoSendCheckoutOnTime);
+        if (!autoAllowed) continue;
+
+        const studentObj = studentMap.get(rec.nis.trim().toLowerCase());
+        if (!studentObj) continue;
+        const target = normalizeFonnteTarget(studentObj.no_wa_ortu);
+        if (!target) continue;
+
+        const dedupeKey = buildFonnteDedupeKey(rec.tanggal, studentObj.nis, checkoutStatus);
+        if (fonnteSentKeysRef.current.has(dedupeKey)) continue;
+
+        const template =
+          checkoutStatus === 'Pulang Cepat'
+            ? cfg.checkoutEarlyTemplate
+            : cfg.checkoutOnTimeTemplate;
+        const message = renderFonnteMessage(
+          template,
+          {
+            nama: studentObj.nama,
+            nisn: studentObj.nis,
+            kelas: studentObj.kelas,
+            tanggal: rec.tanggal,
+            jam_masuk: rec.jam_masuk || '-',
+            batas_jam: currentSettings.batas_jam_masuk,
+            jam_pulang: rec.jam_pulang || '-',
+            batas_pulang: currentSettings.jam_pulang_standar,
+            alasan_pulang: rec.alasan_pulang_cepat?.trim() || 'Izin pulang lebih awal',
+            status: checkoutStatus,
+            sekolah: currentSettings.nama_sekolah,
+          },
+          variantIdx++
+        );
+
+        itemsToQueue.push({
+          dedupeKey,
+          nis: studentObj.nis,
+          studentName: studentObj.nama,
+          kelas: studentObj.kelas,
+          target,
+          status: checkoutStatus,
+          tanggal: rec.tanggal,
+          message,
+        });
+      }
+
+      if (itemsToQueue.length > 0) {
+        void enqueueFonnteNotifications({
+          role: session.role,
+          pacing: cfg.pacing,
+          items: itemsToQueue.map(({ dedupeKey: _dk, ...rest }) => rest),
+        })
+          .then((res) => {
+            if (res.enqueued > 0) {
+              handleMarkFonnteSentKeys(itemsToQueue.map((item) => item.dedupeKey));
+              setFonnteQueueSyncNonce((n) => n + 1);
+              pushToast({
+                type: 'info',
+                title: 'Antrean WhatsApp Pulang Kolektif Dijadwalkan',
+                description: `${res.enqueued} notifikasi kepulangan orang tua masuk antrean bertahap Fonnte.`,
+              });
+            }
+          })
+          .catch(() => {
+            // Non-blocking: checkout records are already persisted locally & in cloud
+          });
+      }
+    }
   }
 
   async function handleSaveSettings(newSettings: SchoolSettings) {
+    const previousYear = latestFullSnapshotRef.current.settings.tahun_ajaran;
     const previousUrl = latestFullSnapshotRef.current.settings.script_url.trim();
     const nextUrl = newSettings.script_url.trim();
     const isConnectingNewSpreadsheet = Boolean(nextUrl) && nextUrl !== previousUrl;
@@ -3209,6 +3596,32 @@ export default function App() {
     settingsSaveInFlightRef.current = true;
     lastLocalSettingsSaveAtRef.current = Date.now();
     try {
+      // Preserve previous academic year student & attendance archive BEFORE switching Tahun Ajaran
+      const archiveRes = preserveArchiveOnAcademicYearChange({
+        students: latestDataRef.current.students,
+        records: latestDataRef.current.records,
+        previousYear,
+        nextYear: newSettings.tahun_ajaran,
+      });
+
+      if (archiveRes.stampedStudents.length > 0) {
+        latestDataRef.current.students = archiveRes.students;
+        latestFullSnapshotRef.current.students = archiveRes.students;
+        lastLocalStudentsSaveAtRef.current = Date.now();
+        setStudents(archiveRes.students);
+        saveLocalStudents(archiveRes.students);
+      }
+      if (archiveRes.stampedRecords.length > 0) {
+        latestDataRef.current.records = archiveRes.records;
+        latestFullSnapshotRef.current.records = archiveRes.records;
+        lastLocalRecordsSaveAtRef.current = Date.now();
+        setRecords(archiveRes.records);
+        saveLocalRecords(archiveRes.records);
+      }
+      if (archiveRes.yearChanged) {
+        setMasterYearFilter('ACTIVE');
+      }
+
       setPreviewTheme(null);
       latestDataRef.current.settings = newSettings;
       latestFullSnapshotRef.current.settings = newSettings;
@@ -3222,6 +3635,11 @@ export default function App() {
         newSettings.mode_presensi === 'masuk_pulang'
           ? `Masuk ${newSettings.batas_jam_masuk} · Pulang ${newSettings.jam_pulang_standar}`
           : `Masuk Saja · Batas ${newSettings.batas_jam_masuk}`;
+      const prevYearStudentCount = archiveRes.yearChanged
+        ? archiveRes.students.filter(
+            (s) => resolveItemAcademicYear(s.tahun_ajaran, previousYear) === previousYear
+          ).length
+        : 0;
       if (!localSaveRes.ok) {
         pushToast({
           type: 'error',
@@ -3233,14 +3651,29 @@ export default function App() {
       } else {
         pushToast({
           type: 'success',
-          title: 'Pengaturan Disimpan',
-          description: `${newSettings.nama_sekolah} · TA ${newSettings.tahun_ajaran} (Smt ${formatSemesterLabel(
-            newSettings.semester
-          )}) · ${modeLabel}`,
+          title: archiveRes.yearChanged
+            ? `Tahun Ajaran Beralih ke ${newSettings.tahun_ajaran}`
+            : 'Pengaturan Disimpan',
+          description: archiveRes.yearChanged
+            ? `${prevYearStudentCount} data siswa TA ${previousYear} tetap tersimpan aman di Arsip Tahun Ajaran.`
+            : `${newSettings.nama_sekolah} · TA ${newSettings.tahun_ajaran} (Smt ${formatSemesterLabel(
+                newSettings.semester
+              )}) · ${modeLabel}`,
         });
       }
 
       const workspaceId = resolveActiveCloudWorkspaceId(firebaseUser?.uid);
+      const studentsToArchiveInCloud = archiveRes.yearChanged
+        ? archiveRes.students.filter(
+            (s) => resolveItemAcademicYear(s.tahun_ajaran, previousYear) === previousYear
+          )
+        : archiveRes.stampedStudents;
+      if (studentsToArchiveInCloud.length > 0) {
+        runCloudWrite((uid) => bulkUpsertStudentsToCloud(uid, studentsToArchiveInCloud));
+      }
+      if (archiveRes.stampedRecords.length > 0) {
+        runCloudWrite((uid) => bulkUpsertAttendanceToCloud(uid, archiveRes.stampedRecords));
+      }
       try {
         await saveSchoolSettingsToCloud(workspaceId, newSettings);
         setCloudConnected(true);
@@ -4864,6 +5297,11 @@ export default function App() {
             masterYearControl={masterYearControl}
             onUpdateStatus={handleUpdateRecapStatus}
             onConfirmCheckout={handleConfirmCheckout}
+            onBulkConfirmCheckout={
+              session?.role === 'master_admin' || session?.role === 'wali_kelas'
+                ? handleBulkConfirmCheckout
+                : undefined
+            }
             onResetStatus={
               session?.role === 'master_admin' ? handleResetRecapStatus : undefined
             }
@@ -5038,6 +5476,13 @@ export default function App() {
             initialSubMenu={settingsInitialSubMenu}
             initialSubMenuNonce={settingsSubMenuNonce}
             academicYearAttendanceStats={academicYearAttendanceStats}
+            studentYearSummaries={studentYearSummaries}
+            onViewStudentsByYear={(yr) => {
+              setMasterYearFilter(yr === settings.tahun_ajaran ? 'ACTIVE' : yr);
+              setActiveTab('siswa');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            onCloneStudentsFromYear={handleCloneStudentsFromYear}
             externalStorage={externalStorageSnapshot}
             onRefreshStorageEstimate={handleRefreshStorageEstimate}
             onClearStorage={handleClearStorage}

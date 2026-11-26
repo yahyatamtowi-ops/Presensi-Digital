@@ -375,5 +375,133 @@ test('Netlify Serverless Function (/api/fonnte/*)', async (t) => {
       resetServerlessStateForTest();
     }
   });
+
+  await t.test('allows scan_kiosk single checkout notifications (Pulang Tepat Waktu & Pulang Cepat) while blocking Alpa and multi-item payloads', async () => {
+    resetServerlessStateForTest();
+    const prevEnvToken = process.env.FONNTE_TOKEN;
+    const prevFetch = globalThis.fetch;
+    process.env.FONNTE_TOKEN = 'PrimaryServerToken_123456';
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://api.fonnte.com/send') {
+        return new Response(JSON.stringify({ status: true, detail: 'sent' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ status: false }), { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      const onTimeCheckoutRes = await handleFonnteServerlessRequest(
+        new Request(`${BASE_URL}/api/fonnte/enqueue`, {
+          method: 'POST',
+          headers: makeHeaders('scan_kiosk'),
+          body: JSON.stringify({
+            items: [
+              {
+                nis: '0081234567',
+                studentName: 'Ahmad Fauzi',
+                kelas: 'X IPA 1',
+                target: '081234567890',
+                status: 'Pulang Tepat Waktu',
+                tanggal: '2026-11-25',
+                message: 'Ananda pulang sesuai waktu pukul 15:05:00.',
+              },
+            ],
+          }),
+        })
+      );
+      assert.equal(onTimeCheckoutRes.status, 200);
+      const onTimeJson = (await onTimeCheckoutRes.json()) as { enqueued: number };
+      assert.equal(onTimeJson.enqueued, 1);
+
+      const earlyCheckoutRes = await handleFonnteServerlessRequest(
+        new Request(`${BASE_URL}/api/fonnte/enqueue`, {
+          method: 'POST',
+          headers: makeHeaders('scan_kiosk'),
+          body: JSON.stringify({
+            items: [
+              {
+                nis: '0081234568',
+                studentName: 'Budi Santoso',
+                kelas: 'X IPA 1',
+                target: '081298765432',
+                status: 'Pulang Cepat',
+                tanggal: '2026-11-25',
+                message: 'Ananda pulang cepat pukul 11:30:00 (Alasan: Sakit).',
+              },
+            ],
+          }),
+        })
+      );
+      assert.equal(earlyCheckoutRes.status, 200);
+      const earlyJson = (await earlyCheckoutRes.json()) as { enqueued: number };
+      assert.equal(earlyJson.enqueued, 1);
+
+      // scan_kiosk must still be blocked from sending Alpa
+      const alpaBlockedRes = await handleFonnteServerlessRequest(
+        new Request(`${BASE_URL}/api/fonnte/enqueue`, {
+          method: 'POST',
+          headers: makeHeaders('scan_kiosk'),
+          body: JSON.stringify({
+            items: [
+              {
+                nis: '0081234569',
+                studentName: 'Citra',
+                kelas: 'X IPA 1',
+                target: '081277778888',
+                status: 'Alpa',
+                tanggal: '2026-11-25',
+                message: 'Alpa',
+              },
+            ],
+          }),
+        })
+      );
+      assert.equal(alpaBlockedRes.status, 403);
+
+      // scan_kiosk must still be blocked from multi-item bulk enqueue
+      const multiBlockedRes = await handleFonnteServerlessRequest(
+        new Request(`${BASE_URL}/api/fonnte/enqueue`, {
+          method: 'POST',
+          headers: makeHeaders('scan_kiosk'),
+          body: JSON.stringify({
+            items: [
+              {
+                nis: '0081234570',
+                studentName: 'Dina',
+                kelas: 'X IPA 1',
+                target: '081211112222',
+                status: 'Pulang Tepat Waktu',
+                tanggal: '2026-11-25',
+                message: 'Pulang 1',
+              },
+              {
+                nis: '0081234571',
+                studentName: 'Eka',
+                kelas: 'X IPA 1',
+                target: '081233334444',
+                status: 'Pulang Cepat',
+                tanggal: '2026-11-25',
+                message: 'Pulang 2',
+              },
+            ],
+          }),
+        })
+      );
+      assert.equal(multiBlockedRes.status, 403);
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevEnvToken === undefined) {
+        delete process.env.FONNTE_TOKEN;
+      } else {
+        process.env.FONNTE_TOKEN = prevEnvToken;
+      }
+      resetServerlessStateForTest();
+    }
+  });
 });
+
 

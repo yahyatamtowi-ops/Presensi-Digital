@@ -37,6 +37,8 @@ import {
   ExternalLink,
   Info,
   MessageSquare,
+  Archive,
+  CopyPlus,
 } from 'lucide-react';
 import type {
   AppThemeId,
@@ -78,6 +80,7 @@ import {
 } from '../utils/firebaseAuthErrors';
 import type { FonnteConfig, FonnteStatusResponse } from '../utils/fonntePacing';
 import type { FonnteClientRole } from '../utils/fonnteClient';
+import type { StudentAcademicYearSummary } from '../utils/studentArchive';
 import { FonnteSettingsPanel } from './FonnteSettingsPanel';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -112,6 +115,9 @@ interface SettingsViewProps {
   initialSubMenu?: SettingsSubMenuId;
   initialSubMenuNonce?: number;
   academicYearAttendanceStats?: AcademicYearAttendanceStat[];
+  studentYearSummaries?: StudentAcademicYearSummary[];
+  onViewStudentsByYear?: (tahunAjaran: string) => void;
+  onCloneStudentsFromYear?: (sourceYear: string, autoPromoteClass: boolean) => void;
   externalStorage?: ExternalStorageSnapshot;
   onRefreshStorageEstimate?: () => void;
   onClearStorage?: (scope: ClearStorageScope) => Promise<void> | void;
@@ -477,6 +483,9 @@ export function SettingsView({
   initialSubMenu,
   initialSubMenuNonce,
   academicYearAttendanceStats = [],
+  studentYearSummaries = [],
+  onViewStudentsByYear,
+  onCloneStudentsFromYear,
   externalStorage,
   onRefreshStorageEstimate,
   onClearStorage,
@@ -1644,8 +1653,102 @@ export function SettingsView({
           </div>
 
           <p className="text-[11px] text-slate-500 -mt-1.5 leading-relaxed">
-            Mengubah Tahun Ajaran akan menyembunyikan data tahun sebelumnya dari Wali Kelas, Guru, dan Pemindai QR (tetap dapat diakses Master Admin).
+            Mengubah Tahun Ajaran akan mengunci dan menyimpan seluruh data siswa tahun ajaran sebelumnya di arsip, sehingga tidak akan hilang saat Tahun Ajaran Baru berganti.
           </p>
+
+          {/* Arsip Data Siswa per Tahun Ajaran */}
+          {studentYearSummaries.length > 0 && (
+            <div
+              data-testid="settings-student-year-archive"
+              className="rounded-xl border border-indigo-200/80 bg-indigo-50/40 p-3.5 space-y-2.5"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Archive className="h-4 w-4 text-indigo-600 shrink-0" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <h4 className="text-xs font-semibold text-slate-900">
+                      Arsip Data Siswa per Tahun Ajaran
+                    </h4>
+                    <p className="text-[11px] text-slate-600 leading-relaxed">
+                      Data siswa tahun ajaran sebelumnya otomatis dikunci &amp; tetap tersimpan meski Tahun Ajaran Aktif berganti.
+                    </p>
+                  </div>
+                </div>
+                <span className="inline-flex items-center rounded-md bg-white border border-indigo-200 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 shrink-0">
+                  {studentYearSummaries.length} Tahun Ajaran
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {studentYearSummaries.map((summary) => (
+                  <div
+                    key={summary.tahun_ajaran}
+                    data-testid={`settings-year-row-${summary.tahun_ajaran}`}
+                    className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border px-3 py-2.5 ${
+                      summary.isActive
+                        ? 'border-indigo-200 bg-white'
+                        : 'border-slate-200/90 bg-white/80'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2 min-w-0">
+                      <span className="font-mono text-xs font-bold text-slate-900">
+                        TA {summary.tahun_ajaran}
+                      </span>
+                      <span
+                        className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                          summary.isActive
+                            ? 'bg-indigo-100 text-indigo-700'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {summary.isActive ? 'Aktif' : 'Arsip Tersimpan'}
+                      </span>
+                      <span className="text-xs text-slate-600">
+                        {summary.studentCount} siswa · {summary.classCount} kelas
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {onViewStudentsByYear && (
+                        <button
+                          type="button"
+                          onClick={() => onViewStudentsByYear(summary.tahun_ajaran)}
+                          data-testid={`btn-settings-view-year-${summary.tahun_ajaran}`}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                        >
+                          <Eye className="h-3 w-3 text-indigo-600" aria-hidden="true" />
+                          <span>Lihat Data</span>
+                        </button>
+                      )}
+                      {!summary.isActive && summary.studentCount > 0 && onCloneStudentsFromYear && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => onCloneStudentsFromYear(summary.tahun_ajaran, true)}
+                            data-testid={`btn-settings-promote-year-${summary.tahun_ajaran}`}
+                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 transition-colors"
+                            title={`Salin siswa TA ${summary.tahun_ajaran} ke TA ${settings.tahun_ajaran} dengan naik 1 tingkat kelas (arsip lama tetap utuh)`}
+                          >
+                            <CopyPlus className="h-3 w-3" aria-hidden="true" />
+                            <span>Naik Kelas ke {settings.tahun_ajaran}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onCloneStudentsFromYear(summary.tahun_ajaran, false)}
+                            data-testid={`btn-settings-copy-year-${summary.tahun_ajaran}`}
+                            className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 transition-colors"
+                            title={`Salin siswa TA ${summary.tahun_ajaran} ke TA ${settings.tahun_ajaran} tanpa ubah kelas (arsip lama tetap utuh)`}
+                          >
+                            <span>Salin Kelas Sama</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Pengesahan E-Card: Nama & NIP Kepala Sekolah, TTD PNG & Cap Sekolah PNG */}
           <div className="pt-3.5 border-t border-slate-100 space-y-3.5">

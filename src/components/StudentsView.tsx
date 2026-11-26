@@ -15,6 +15,8 @@ import {
   CheckSquare,
   Square,
   Layers,
+  Archive,
+  CopyPlus,
 } from 'lucide-react';
 import type { Gender, SchoolSettings, Student } from '../types';
 import {
@@ -23,7 +25,11 @@ import {
   type ParsedStudentImportResult,
 } from '../utils/importExport';
 import { generateECardsPdf, getECardNameFontSizeClass } from '../utils/ecardPdf';
-import { isSameClassName } from '../utils/attendanceLogic';
+import { isSameClassName, resolveItemAcademicYear } from '../utils/attendanceLogic';
+import {
+  getStudentYearKey,
+  type StudentAcademicYearSummary,
+} from '../utils/studentArchive';
 import { DEFAULT_SCHOOL_LOGO } from '../utils/seedData';
 import { PdfPreviewModal } from './PdfPreviewModal';
 
@@ -38,12 +44,20 @@ interface StudentsViewProps {
     selectedYear: string;
     availableYears: string[];
     onChangeYear: (year: string) => void;
+    yearSummaries?: StudentAcademicYearSummary[];
+    onCloneFromYear?: (sourceYear: string, autoPromoteClass: boolean) => void;
   };
   onAddStudent: (student: Student) => { ok: boolean; error?: string };
   onBulkImportStudents: (newStudents: Student[]) => void;
-  onUpdateStudent: (originalNis: string, updated: Student) => { ok: boolean; error?: string };
-  onDeleteStudent: (nis: string) => void;
-  onBulkDeleteStudents: (nisList: string[]) => void;
+  onUpdateStudent: (
+    originalNis: string,
+    updated: Student,
+    originalTahunAjaran?: string
+  ) => { ok: boolean; error?: string };
+  onDeleteStudent: (nis: string, tahunAjaran?: string) => void;
+  onBulkDeleteStudents: (
+    targets: Array<{ nis: string; tahun_ajaran?: string }>
+  ) => void;
 }
 
 const EMPTY_FORM: Student = {
@@ -75,12 +89,13 @@ export function StudentsView({
   const [searchQuery, setSearchQuery] = useState('');
   const [classFilter, setClassFilter] = useState('ALL');
 
-  // Selection ("Bilah Tandai Data")
-  const [selectedNis, setSelectedNis] = useState<string[]>([]);
+  // Selection ("Bilah Tandai Data") — uses composite (tahun_ajaran|nis) keys to stay safe across years
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
 
   // CRUD Modal
   const [formModalOpen, setFormModalOpen] = useState(false);
   const [editingOriginalNis, setEditingOriginalNis] = useState<string | null>(null);
+  const [editingOriginalYear, setEditingOriginalYear] = useState<string | undefined>(undefined);
   const [formData, setFormData] = useState<Student>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -151,16 +166,34 @@ export function StudentsView({
       .sort((a, b) => a.kelas.localeCompare(b.kelas) || a.nama.localeCompare(b.nama));
   }, [students, searchQuery, effectiveClassFilter]);
 
-  const selectedSet = useMemo(() => new Set(selectedNis), [selectedNis]);
+  const selectedYearValue = masterYearControl?.selectedYear || 'ACTIVE';
+  const isViewingArchiveYear =
+    Boolean(masterYearControl) &&
+    selectedYearValue !== 'ACTIVE' &&
+    selectedYearValue !== 'ALL' &&
+    selectedYearValue !== settings.tahun_ajaran;
+  const showYearColumn =
+    Boolean(masterYearControl) && (selectedYearValue === 'ALL' || isViewingArchiveYear);
+
+  const archivedYearSummaries = useMemo(
+    () => (masterYearControl?.yearSummaries || []).filter((y) => !y.isActive && y.studentCount > 0),
+    [masterYearControl?.yearSummaries]
+  );
+
+  const rowKeyOf = (s: Student) => getStudentYearKey(s, settings.tahun_ajaran);
+
+  const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
   const allFilteredSelected =
     filteredStudents.length > 0 &&
-    filteredStudents.every((s) => selectedSet.has(s.nis));
+    filteredStudents.every((s) => selectedSet.has(rowKeyOf(s)));
 
   useEffect(() => {
-    // Drop stale NIS selections if students were deleted
-    const existingSet = new Set(students.map((s) => s.nis));
-    setSelectedNis((prev) => prev.filter((nis) => existingSet.has(nis)));
-  }, [students]);
+    // Drop stale selections if students were deleted or year filter changed
+    const existingSet = new Set(students.map((s) => getStudentYearKey(s, settings.tahun_ajaran)));
+    setSelectedKeys((prev) =>
+      prev.every((k) => existingSet.has(k)) ? prev : prev.filter((k) => existingSet.has(k))
+    );
+  }, [students, settings.tahun_ajaran]);
 
   useEffect(() => {
     let cancelled = false;
@@ -192,25 +225,26 @@ export function StudentsView({
     };
   }, [pdfPreview.blobUrl]);
 
-  function toggleSelectOne(nis: string) {
-    setSelectedNis((prev) =>
-      prev.includes(nis) ? prev.filter((item) => item !== nis) : [...prev, nis]
+  function toggleSelectOne(key: string) {
+    setSelectedKeys((prev) =>
+      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]
     );
   }
 
   function toggleSelectAllFiltered() {
     if (allFilteredSelected) {
-      const filteredSet = new Set(filteredStudents.map((s) => s.nis));
-      setSelectedNis((prev) => prev.filter((nis) => !filteredSet.has(nis)));
+      const filteredSet = new Set(filteredStudents.map((s) => rowKeyOf(s)));
+      setSelectedKeys((prev) => prev.filter((k) => !filteredSet.has(k)));
     } else {
-      const merged = new Set(selectedNis);
-      for (const s of filteredStudents) merged.add(s.nis);
-      setSelectedNis(Array.from(merged));
+      const merged = new Set(selectedKeys);
+      for (const s of filteredStudents) merged.add(rowKeyOf(s));
+      setSelectedKeys(Array.from(merged));
     }
   }
 
   function openAddModal() {
     setEditingOriginalNis(null);
+    setEditingOriginalYear(undefined);
     setFormData({ ...EMPTY_FORM, kelas: assignedClass || '' });
     setFormError(null);
     setFormModalOpen(true);
@@ -218,6 +252,7 @@ export function StudentsView({
 
   function openEditModal(student: Student) {
     setEditingOriginalNis(student.nis);
+    setEditingOriginalYear(resolveItemAcademicYear(student.tahun_ajaran, settings.tahun_ajaran));
     setFormData({ ...student, kelas: assignedClass || student.kelas });
     setFormError(null);
     setFormModalOpen(true);
@@ -231,6 +266,7 @@ export function StudentsView({
       kelas: (assignedClass || formData.kelas).trim(),
       gender: formData.gender,
       no_wa_ortu: formData.no_wa_ortu.trim(),
+      ...(editingOriginalYear ? { tahun_ajaran: editingOriginalYear } : {}),
     };
 
     if (!cleaned.nis || !cleaned.nama || !cleaned.kelas) {
@@ -239,7 +275,7 @@ export function StudentsView({
     }
 
     const res = editingOriginalNis
-      ? onUpdateStudent(editingOriginalNis, cleaned)
+      ? onUpdateStudent(editingOriginalNis, cleaned, editingOriginalYear)
       : onAddStudent(cleaned);
 
     if (!res.ok) {
@@ -257,7 +293,13 @@ export function StudentsView({
     setImportError(null);
     setImportFileName(file.name);
     try {
-      const parsed = await parseStudentsFile(file, students);
+      // Only check duplicate NISNs within the active academic year so returning students from archived years can be imported cleanly
+      const activeYearOnly = students.filter(
+        (s) =>
+          resolveItemAcademicYear(s.tahun_ajaran, settings.tahun_ajaran) ===
+          resolveItemAcademicYear(settings.tahun_ajaran)
+      );
+      const parsed = await parseStudentsFile(file, activeYearOnly);
       setImportResult(parsed);
     } catch (err) {
       setImportResult(null);
@@ -317,7 +359,7 @@ export function StudentsView({
       label = `Kelas_${batchClass.replace(/\s+/g, '_')}`;
       title = `Pratinjau PDF E-Card — Kelas ${batchClass}`;
     } else if (batchScope === 'selected') {
-      targets = students.filter((s) => selectedSet.has(s.nis));
+      targets = students.filter((s) => selectedSet.has(rowKeyOf(s)));
       label = 'Siswa_Terpilih';
       title = `Pratinjau PDF E-Card — ${targets.length} Siswa Terpilih`;
     } else {
@@ -346,7 +388,7 @@ export function StudentsView({
     batchScope === 'class'
       ? students.filter((s) => s.kelas === batchClass).length
       : batchScope === 'selected'
-        ? selectedNis.length
+        ? selectedKeys.length
         : students.length;
 
   return (
@@ -431,7 +473,7 @@ export function StudentsView({
               <button
                 type="button"
                 onClick={() => {
-                  setBatchScope(selectedNis.length > 0 ? 'selected' : 'class');
+                  setBatchScope(selectedKeys.length > 0 ? 'selected' : 'class');
                   setBatchModalOpen(true);
                 }}
                 disabled={students.length === 0}
@@ -456,6 +498,46 @@ export function StudentsView({
         )}
       </section>
 
+      {/* Archived Academic Year Notice Banner */}
+      {isViewingArchiveYear && masterYearControl && (
+        <section
+          data-testid="students-archive-banner"
+          className="rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+        >
+          <div className="flex items-start gap-2.5 min-w-0">
+            <Archive className="h-4.5 w-4.5 text-amber-700 shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="min-w-0 text-xs text-amber-900">
+              <p className="font-semibold">
+                Arsip Data Siswa Tahun Ajaran {selectedYearValue} ({students.length} siswa)
+              </p>
+              <p className="text-amber-800/90 mt-0.5">
+                Data siswa tahun ajaran ini tetap tersimpan aman dan terpisah dari TA Aktif ({settings.tahun_ajaran}).
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {masterYearControl.onCloneFromYear && students.length > 0 && (
+              <button
+                type="button"
+                data-testid="btn-promote-archive-to-active"
+                onClick={() => masterYearControl.onCloneFromYear?.(selectedYearValue, true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors whitespace-nowrap"
+              >
+                <CopyPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Naik Kelas ke TA {settings.tahun_ajaran}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => masterYearControl.onChangeYear('ACTIVE')}
+              className="px-3 py-1.5 rounded-lg border border-amber-300 bg-white text-xs font-semibold text-amber-900 hover:bg-amber-100/60 transition-colors whitespace-nowrap"
+            >
+              Kembali ke TA Aktif
+            </button>
+          </div>
+        </section>
+      )}
+
       {/* Bilah Tandai Data (Selection Bar) */}
       {showSelectionTools && (
         <section
@@ -478,18 +560,18 @@ export function StudentsView({
             </button>
 
             <span className="text-xs text-slate-600 font-mono tabular-nums">
-              <strong className="text-slate-900">{selectedNis.length}</strong> data ditandai
+              <strong className="text-slate-900">{selectedKeys.length}</strong> data ditandai
             </span>
           </div>
 
-          {selectedNis.length > 0 && (
+          {selectedKeys.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
               {canViewECard && (
                 <button
                   type="button"
                   disabled={generatingPdf}
                   onClick={() => {
-                    const targets = students.filter((s) => selectedSet.has(s.nis));
+                    const targets = students.filter((s) => selectedSet.has(rowKeyOf(s)));
                     void openPdfPreviewForStudents(
                       targets,
                       `Pratinjau PDF E-Card — ${targets.length} Siswa Terpilih`,
@@ -510,13 +592,13 @@ export function StudentsView({
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 transition-colors"
                 >
                   <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Hapus Terpilih ({selectedNis.length})</span>
+                  <span>Hapus Terpilih ({selectedKeys.length})</span>
                 </button>
               )}
 
               <button
                 type="button"
-                onClick={() => setSelectedNis([])}
+                onClick={() => setSelectedKeys([])}
                 className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
               >
                 Reset
@@ -529,20 +611,61 @@ export function StudentsView({
       {/* Student Table */}
       <section className="bg-white rounded-2xl border border-slate-200/80 shadow-[0_1px_3px_rgba(15,23,42,0.04)] overflow-hidden">
         {filteredStudents.length === 0 ? (
-          <div className="py-14 px-6 text-center">
-            <Users className="h-10 w-10 text-slate-300 mx-auto mb-3" aria-hidden="true" />
-            <p className="text-sm font-semibold text-slate-800">
-              {students.length === 0
-                ? 'Belum ada data siswa'
-                : 'Tidak ada siswa yang sesuai pencarian'}
-            </p>
-            <p className="text-xs text-slate-500 mt-1">
-              {students.length === 0
-                ? canEdit
-                  ? 'Tambahkan siswa baru atau import dari Excel/CSV untuk membuat QR Code kartu.'
-                  : 'Belum ada data siswa yang terdaftar pada Tahun Ajaran aktif.'
-                : 'Coba ubah kata kunci pencarian atau pilih filter semua kelas.'}
-            </p>
+          <div className="py-14 px-6 text-center space-y-3">
+            <Users className="h-10 w-10 text-slate-300 mx-auto" aria-hidden="true" />
+            <div>
+              <p className="text-sm font-semibold text-slate-800">
+                {students.length === 0
+                  ? `Belum ada data siswa pada TA ${selectedYearValue === 'ACTIVE' ? settings.tahun_ajaran : selectedYearValue}`
+                  : 'Tidak ada siswa yang sesuai pencarian'}
+              </p>
+              <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                {students.length === 0
+                  ? canEdit
+                    ? archivedYearSummaries.length > 0 && selectedYearValue === 'ACTIVE'
+                      ? `Data siswa tahun ajaran sebelumnya tetap tersimpan aman (${archivedYearSummaries.map((a) => `TA ${a.tahun_ajaran}: ${a.studentCount} siswa`).join(', ')}). Anda dapat menambahkan siswa baru, import Excel/CSV, atau salin/naik kelas dari arsip.`
+                      : 'Tambahkan siswa baru atau import dari Excel/CSV untuk membuat QR Code kartu.'
+                    : 'Belum ada data siswa yang terdaftar pada Tahun Ajaran aktif.'
+                  : 'Coba ubah kata kunci pencarian atau pilih filter semua kelas.'}
+              </p>
+            </div>
+            {students.length === 0 &&
+              selectedYearValue === 'ACTIVE' &&
+              archivedYearSummaries.length > 0 &&
+              masterYearControl && (
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      masterYearControl.onChangeYear(archivedYearSummaries[0].tahun_ajaran)
+                    }
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-xs font-semibold hover:bg-amber-100 transition-colors"
+                  >
+                    <Archive className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>
+                      Lihat Arsip TA {archivedYearSummaries[0].tahun_ajaran} (
+                      {archivedYearSummaries[0].studentCount} siswa)
+                    </span>
+                  </button>
+                  {masterYearControl.onCloneFromYear && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        masterYearControl.onCloneFromYear?.(
+                          archivedYearSummaries[0].tahun_ajaran,
+                          true
+                        )
+                      }
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors"
+                    >
+                      <CopyPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>
+                        Naik Kelas dari TA {archivedYearSummaries[0].tahun_ajaran}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              )}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -563,6 +686,7 @@ export function StudentsView({
                   <th className={`py-3 ${showSelectionTools ? 'px-4' : 'pl-5 pr-4'}`}>NISN</th>
                   <th className="py-3 px-4">Nama Siswa</th>
                   <th className="py-3 px-4">Kelas</th>
+                  {showYearColumn && <th className="py-3 px-4">Tahun Ajaran</th>}
                   <th className="py-3 px-4">L/P</th>
                   <th className="py-3 px-4">No. WA Ortu</th>
                   {showActionColumn && <th className="py-3 px-5 text-right">Aksi</th>}
@@ -570,10 +694,15 @@ export function StudentsView({
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
                 {filteredStudents.map((student) => {
-                  const isChecked = showSelectionTools && selectedSet.has(student.nis);
+                  const sKey = rowKeyOf(student);
+                  const isChecked = showSelectionTools && selectedSet.has(sKey);
+                  const studentYear = resolveItemAcademicYear(
+                    student.tahun_ajaran,
+                    settings.tahun_ajaran
+                  );
                   return (
                     <tr
-                      key={student.nis}
+                      key={sKey}
                       className={`transition-colors ${
                         isChecked ? 'bg-indigo-50/40' : 'hover:bg-slate-50/70'
                       }`}
@@ -583,7 +712,7 @@ export function StudentsView({
                           <input
                             type="checkbox"
                             checked={isChecked}
-                            onChange={() => toggleSelectOne(student.nis)}
+                            onChange={() => toggleSelectOne(sKey)}
                             aria-label={`Tandai siswa ${student.nama}`}
                             className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                           />
@@ -598,6 +727,19 @@ export function StudentsView({
                       <td className="py-3 px-4 text-slate-600 whitespace-nowrap">
                         {student.kelas}
                       </td>
+                      {showYearColumn && (
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold border ${
+                              studentYear === settings.tahun_ajaran
+                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                : 'bg-amber-50 text-amber-800 border-amber-200'
+                            }`}
+                          >
+                            {studentYear}
+                          </span>
+                        </td>
+                      )}
                       <td className="py-3 px-4 text-slate-600 whitespace-nowrap">
                         {student.gender === 'L' ? 'Laki-laki' : 'Perempuan'}
                       </td>
@@ -974,13 +1116,13 @@ export function StudentsView({
                     type="radio"
                     name="batchScope"
                     checked={batchScope === 'selected'}
-                    disabled={selectedNis.length === 0}
+                    disabled={selectedKeys.length === 0}
                     onChange={() => setBatchScope('selected')}
                     className="mt-1 text-indigo-600 focus:ring-indigo-500"
                   />
                   <div>
                     <p className="text-sm font-semibold text-slate-900">
-                      Siswa Ditandai ({selectedNis.length} siswa)
+                      Siswa Ditandai ({selectedKeys.length} siswa)
                     </p>
                     <p className="text-xs text-slate-500">
                       Gunakan kotak centang pada tabel untuk memilih beberapa siswa
@@ -1061,7 +1203,10 @@ export function StudentsView({
               <button
                 type="button"
                 onClick={() => {
-                  onDeleteStudent(deleteTarget.nis);
+                  onDeleteStudent(
+                    deleteTarget.nis,
+                    resolveItemAcademicYear(deleteTarget.tahun_ajaran, settings.tahun_ajaran)
+                  );
                   setDeleteTarget(null);
                 }}
                 className="px-4 py-2 rounded-xl bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700"
@@ -1083,10 +1228,10 @@ export function StudentsView({
         >
           <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-sm p-6 shadow-xl space-y-4">
             <h2 id="bulk-delete-title" className="text-base font-semibold text-slate-900">
-              Hapus {selectedNis.length} Siswa Terpilih?
+              Hapus {selectedKeys.length} Siswa Terpilih?
             </h2>
             <p className="text-sm text-slate-600">
-              Seluruh <span className="font-semibold text-slate-900">{selectedNis.length}</span> data siswa yang ditandai akan dihapus permanen dari daftar siswa.
+              Seluruh <span className="font-semibold text-slate-900">{selectedKeys.length}</span> data siswa yang ditandai akan dihapus permanen dari tahun ajaran terkait (data tahun ajaran lain tetap tersimpan).
             </p>
             <div className="flex items-center justify-end gap-2.5 pt-2">
               <button
@@ -1099,8 +1244,14 @@ export function StudentsView({
               <button
                 type="button"
                 onClick={() => {
-                  onBulkDeleteStudents(selectedNis);
-                  setSelectedNis([]);
+                  const targets = students
+                    .filter((s) => selectedSet.has(rowKeyOf(s)))
+                    .map((s) => ({
+                      nis: s.nis,
+                      tahun_ajaran: resolveItemAcademicYear(s.tahun_ajaran, settings.tahun_ajaran),
+                    }));
+                  onBulkDeleteStudents(targets);
+                  setSelectedKeys([]);
                   setBulkDeleteConfirmOpen(false);
                 }}
                 className="px-4 py-2 rounded-xl bg-rose-600 text-white text-sm font-semibold hover:bg-rose-700"

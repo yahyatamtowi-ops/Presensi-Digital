@@ -1742,4 +1742,90 @@ export function computeAttendanceAnalytics(params: {
   };
 }
 
+export const COLLECTIVE_EARLY_CHECKOUT_PRESETS: string[] = [
+  'Rapat Dewan Guru / Kegiatan Sekolah',
+  'Kegiatan Peringatan Hari Besar / Lomba Sekolah',
+  'Cuaca Ekstrem / Hujan Deras / Banjir',
+  'Pemulangan Lebih Awal Sesuai Instruksi Kepala Sekolah',
+  'Kegiatan Ujian / Selesai Pembelajaran Lebih Awal',
+];
+
+/**
+ * Normalizes an HH:MM or HH:MM:SS checkout input into HH:MM:SS.
+ */
+export function normalizeCheckoutTimeHHMMSS(raw?: string | null, fallback?: string): string {
+  const cleaned = String(raw || '').trim();
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/.exec(cleaned);
+  if (match) {
+    const hh = match[1].padStart(2, '0');
+    const mm = match[2];
+    const ss = match[3] || '00';
+    return `${hh}:${mm}:${ss}`;
+  }
+  return fallback || getCurrentTimeString();
+}
+
+/**
+ * Pure helper to collectively confirm check-out times (and optional collective early-checkout reason)
+ * for multiple students on a given date. Only applies to checked-in students ('Hadir' | 'Terlambat')
+ * who have not yet recorded a checkout time.
+ */
+export function applyCollectiveCheckout(params: {
+  records: AttendanceRecord[];
+  tanggal: string;
+  targetNisList: string[];
+  checkoutTime: string;
+  alasanPulangCepat?: string;
+}): {
+  nextRecords: AttendanceRecord[];
+  updatedRecords: AttendanceRecord[];
+  skippedCount: number;
+} {
+  const { records, tanggal, targetNisList, checkoutTime, alasanPulangCepat } = params;
+  const targetSet = new Set(targetNisList.map((n) => n.trim().toLowerCase()).filter(Boolean));
+  if (targetSet.size === 0) {
+    return { nextRecords: records, updatedRecords: [], skippedCount: 0 };
+  }
+
+  const normalizedTime = normalizeCheckoutTimeHHMMSS(checkoutTime);
+  const trimmedReason = String(alasanPulangCepat || '').trim();
+  const checkoutNote = trimmedReason
+    ? `Pulang cepat ${normalizedTime} (Alasan: ${trimmedReason})`
+    : `Pulang ${normalizedTime}`;
+
+  const updatedRecords: AttendanceRecord[] = [];
+  const updatedNisSet = new Set<string>();
+
+  const nextRecords = records.map((rec) => {
+    if (rec.tanggal !== tanggal) return rec;
+    const normNis = rec.nis.trim().toLowerCase();
+    if (!targetSet.has(normNis)) return rec;
+    const isCheckedIn =
+      (rec.status === 'Hadir' || rec.status === 'Terlambat') &&
+      Boolean(rec.jam_masuk) &&
+      rec.jam_masuk !== '-';
+    const alreadyCheckedOut = Boolean(rec.jam_pulang && rec.jam_pulang !== '-');
+    if (!isCheckedIn || alreadyCheckedOut) {
+      return rec;
+    }
+
+    const updated: AttendanceRecord = {
+      ...rec,
+      jam_pulang: normalizedTime,
+      ...(trimmedReason ? { alasan_pulang_cepat: trimmedReason } : {}),
+      keterangan: rec.keterangan ? `${rec.keterangan} · ${checkoutNote}` : checkoutNote,
+    };
+    updatedRecords.push(updated);
+    updatedNisSet.add(normNis);
+    return updated;
+  });
+
+  return {
+    nextRecords,
+    updatedRecords,
+    skippedCount: Math.max(0, targetSet.size - updatedNisSet.size),
+  };
+}
+
+
 

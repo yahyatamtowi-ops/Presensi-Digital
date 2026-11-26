@@ -848,7 +848,7 @@ export function LayoutShell({
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-slate-900">{toast.title}</p>
                   {toast.description && (
-                    <p className="text-xs text-slate-600 mt-0.5">{toast.description}</p>
+                    <p className="text-xs text-slate-600 mt-0.5 break-words">{toast.description}</p>
                   )}
                 </div>
                 <button

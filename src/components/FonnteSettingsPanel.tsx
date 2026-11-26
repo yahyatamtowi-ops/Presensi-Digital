@@ -21,6 +21,8 @@ import {
 import type { AttendanceRecord, SchoolSettings, Student } from '../types';
 import {
   DEFAULT_ABSENT_TEMPLATE,
+  DEFAULT_CHECKOUT_EARLY_TEMPLATE,
+  DEFAULT_CHECKOUT_ON_TIME_TEMPLATE,
   DEFAULT_LATE_TEMPLATE,
   DEFAULT_ON_TIME_TEMPLATE,
   FONNTE_PACING_BOUNDS,
@@ -146,7 +148,15 @@ export function FonnteSettingsPanel({
   const [includeUnrecordedBatch, setIncludeUnrecordedBatch] = useState(
     config.includeUnrecordedAsAbsent
   );
-  const [previewTab, setPreviewTab] = useState<'ontime' | 'late' | 'absent'>('ontime');
+  const [includeCheckoutOnTimeBatch, setIncludeCheckoutOnTimeBatch] = useState(
+    config.autoSendCheckoutOnTime
+  );
+  const [includeCheckoutEarlyBatch, setIncludeCheckoutEarlyBatch] = useState(
+    config.autoSendCheckoutEarly
+  );
+  const [previewTab, setPreviewTab] = useState<
+    'ontime' | 'late' | 'absent' | 'checkout_ontime' | 'checkout_early'
+  >('ontime');
 
   // Test message state
   const [testTarget, setTestTarget] = useState(settings.no_wa_admin || '');
@@ -270,12 +280,15 @@ export function FonnteSettingsPanel({
         tanggal: todayDate,
         sekolah: settings.nama_sekolah,
         batasJamMasuk: settings.batas_jam_masuk,
+        jamPulangStandar: settings.jam_pulang_standar,
         config,
         sentDedupeKeys: combinedSentKeys,
         includeOnTime: includeOnTimeBatch,
         includeLate: includeLateBatch,
         includeAbsent: includeAbsentBatch,
         includeUnrecorded: includeUnrecordedBatch,
+        includeCheckoutOnTime: includeCheckoutOnTimeBatch,
+        includeCheckoutEarly: includeCheckoutEarlyBatch,
       }),
     [
       students,
@@ -283,12 +296,15 @@ export function FonnteSettingsPanel({
       todayDate,
       settings.nama_sekolah,
       settings.batas_jam_masuk,
+      settings.jam_pulang_standar,
       config,
       combinedSentKeys,
       includeOnTimeBatch,
       includeLateBatch,
       includeAbsentBatch,
       includeUnrecordedBatch,
+      includeCheckoutOnTimeBatch,
+      includeCheckoutEarlyBatch,
     ]
   );
 
@@ -310,20 +326,34 @@ export function FonnteSettingsPanel({
   }, [queueSnapshot?.nextSendAt, countdownTick]);
 
   const samplePreviewMessage = useMemo(() => {
-    const statusMap: Record<'ontime' | 'late' | 'absent', FonnteNotificationCategory> = {
+    type PreviewKey = 'ontime' | 'late' | 'absent' | 'checkout_ontime' | 'checkout_early';
+    const statusMap: Record<PreviewKey, FonnteNotificationCategory> = {
       ontime: 'Hadir Tepat Waktu',
       late: 'Terlambat',
       absent: 'Alpa',
+      checkout_ontime: 'Pulang Tepat Waktu',
+      checkout_early: 'Pulang Cepat',
     };
-    const templateMap: Record<'ontime' | 'late' | 'absent', string> = {
+    const templateMap: Record<PreviewKey, string> = {
       ontime: config.onTimeTemplate,
       late: config.lateTemplate,
       absent: config.absentTemplate,
+      checkout_ontime: config.checkoutOnTimeTemplate,
+      checkout_early: config.checkoutEarlyTemplate,
     };
-    const jamMap: Record<'ontime' | 'late' | 'absent', string> = {
+    const jamMasukMap: Record<PreviewKey, string> = {
       ontime: '07:02:18',
       late: '07:28:15',
       absent: '-',
+      checkout_ontime: '07:02:18',
+      checkout_early: '07:05:10',
+    };
+    const jamPulangMap: Record<PreviewKey, string> = {
+      ontime: '-',
+      late: '-',
+      absent: '-',
+      checkout_ontime: `${settings.jam_pulang_standar || '15:00'}:12`,
+      checkout_early: '12:15:40',
     };
     return renderFonnteMessage(
       templateMap[previewTab],
@@ -332,8 +362,11 @@ export function FonnteSettingsPanel({
         nisn: '0081234567',
         kelas: 'X-IPA-1',
         tanggal: todayDate,
-        jam_masuk: jamMap[previewTab],
+        jam_masuk: jamMasukMap[previewTab],
         batas_jam: settings.batas_jam_masuk,
+        jam_pulang: jamPulangMap[previewTab],
+        batas_pulang: settings.jam_pulang_standar || '15:00',
+        alasan_pulang: 'Sakit / Kurang sehat',
         status: statusMap[previewTab],
         sekolah: settings.nama_sekolah,
       },
@@ -344,8 +377,11 @@ export function FonnteSettingsPanel({
     config.onTimeTemplate,
     config.lateTemplate,
     config.absentTemplate,
+    config.checkoutOnTimeTemplate,
+    config.checkoutEarlyTemplate,
     todayDate,
     settings.batas_jam_masuk,
+    settings.jam_pulang_standar,
     settings.nama_sekolah,
   ]);
 
@@ -619,7 +655,7 @@ export function FonnteSettingsPanel({
             </span>
           </div>
           <p className="text-xs text-slate-500 leading-relaxed">
-            Kirim pesan WhatsApp otomatis kepada orang tua siswa yang hadir tepat waktu, terlambat, maupun tidak hadir secara bertahap dengan perlindungan anti-blokir.
+            Kirim pesan WhatsApp otomatis kepada orang tua saat siswa hadir tepat waktu, terlambat, tidak hadir, maupun saat pulang sekolah (sesuai waktu &amp; pulang cepat) dengan perlindungan anti-blokir.
           </p>
         </div>
 
@@ -942,6 +978,53 @@ export function FonnteSettingsPanel({
           </label>
         </div>
 
+        {/* Trigger Otomatis Kepulangan Siswa (Pulang Sesuai Waktu & Pulang Cepat) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <label className="rounded-xl border border-sky-200/80 bg-sky-50/30 p-3 flex items-start gap-2.5 cursor-pointer hover:bg-sky-50/70 transition-colors">
+            <input
+              type="checkbox"
+              data-testid="toggle-fonnte-auto-checkout-ontime"
+              checked={config.autoSendCheckoutOnTime}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                onChangeConfig({ ...config, autoSendCheckoutOnTime: checked });
+                setIncludeCheckoutOnTimeBatch(checked);
+              }}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 shrink-0"
+            />
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-slate-900">
+                Otomatis saat Siswa Pulang Sesuai Waktu
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                Kirim kabar otomatis ke orang tua saat anak presensi pulang sesuai jadwal ({settings.jam_pulang_standar || '15:00'}).
+              </p>
+            </div>
+          </label>
+
+          <label className="rounded-xl border border-orange-200/80 bg-orange-50/30 p-3 flex items-start gap-2.5 cursor-pointer hover:bg-orange-50/70 transition-colors">
+            <input
+              type="checkbox"
+              data-testid="toggle-fonnte-auto-checkout-early"
+              checked={config.autoSendCheckoutEarly}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                onChangeConfig({ ...config, autoSendCheckoutEarly: checked });
+                setIncludeCheckoutEarlyBatch(checked);
+              }}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500 shrink-0"
+            />
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-slate-900">
+                Otomatis saat Siswa Pulang Cepat
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                Kirim kabar otomatis beserta jam &amp; alasan pulang cepat agar orang tua langsung mengetahui.
+              </p>
+            </div>
+          </label>
+        </div>
+
         {/* Jadwal Harian Otomatis */}
         <div className="rounded-xl border border-slate-200 p-3.5 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2.5">
@@ -959,7 +1042,7 @@ export function FonnteSettingsPanel({
                 className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 shrink-0"
               />
               <span className="text-xs font-semibold text-slate-900 leading-snug">
-                Jadwal Kirim Otomatis Harian (Hadir Tepat Waktu, Terlambat &amp; Tidak Hadir)
+                Jadwal Kirim Otomatis Harian (Masuk, Pulang &amp; Tidak Hadir)
               </span>
             </label>
 
@@ -1111,7 +1194,7 @@ export function FonnteSettingsPanel({
                 <strong>Variasi Salam Alami:</strong> Placeholder <code className="font-mono">{'{salam}'}</code> merotasi kalimat pembuka agar isi pesan tidak terdeteksi identik massal.
               </li>
               <li>
-                <strong>Anti-Duplikat Harian:</strong> Satu siswa hanya dikirim maksimal 1 kali per kategori (Hadir / Terlambat / Tidak Hadir) pada tanggal yang sama.
+                <strong>Anti-Duplikat Harian:</strong> Satu siswa hanya dikirim maksimal 1 kali per kategori (Hadir / Terlambat / Tidak Hadir / Pulang) pada tanggal yang sama.
               </li>
             </ul>
           </div>
@@ -1299,6 +1382,26 @@ export function FonnteSettingsPanel({
             />
             <span>Belum Presensi</span>
           </label>
+          <label className="inline-flex items-center gap-1.5 cursor-pointer text-slate-700 whitespace-nowrap">
+            <input
+              type="checkbox"
+              data-testid="filter-fonnte-batch-checkout-ontime"
+              checked={includeCheckoutOnTimeBatch}
+              onChange={(e) => setIncludeCheckoutOnTimeBatch(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-slate-300 text-sky-600"
+            />
+            <span>Pulang Sesuai Waktu</span>
+          </label>
+          <label className="inline-flex items-center gap-1.5 cursor-pointer text-slate-700 whitespace-nowrap">
+            <input
+              type="checkbox"
+              data-testid="filter-fonnte-batch-checkout-early"
+              checked={includeCheckoutEarlyBatch}
+              onChange={(e) => setIncludeCheckoutEarlyBatch(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-slate-300 text-orange-600"
+            />
+            <span>Pulang Cepat</span>
+          </label>
         </div>
 
         {/* Daftar Penerima */}
@@ -1323,6 +1426,9 @@ export function FonnteSettingsPanel({
                     </p>
                     <p className="text-[11px] font-mono text-slate-500">
                       WA Ortu: {c.hasValidPhone ? c.normalizedTarget : 'Belum diisi / tidak valid'}
+                      {c.jam_pulang && (c.status === 'Pulang Tepat Waktu' || c.status === 'Pulang Cepat')
+                        ? ` · Pulang ${c.jam_pulang}`
+                        : ''}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5 shrink-0">
@@ -1332,7 +1438,11 @@ export function FonnteSettingsPanel({
                           ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           : c.status === 'Terlambat'
                             ? 'bg-amber-50 text-amber-800 border-amber-200'
-                            : 'bg-rose-50 text-rose-700 border-rose-200'
+                            : c.status === 'Pulang Tepat Waktu'
+                              ? 'bg-sky-50 text-sky-700 border-sky-200'
+                              : c.status === 'Pulang Cepat'
+                                ? 'bg-orange-50 text-orange-800 border-orange-200'
+                                : 'bg-rose-50 text-rose-700 border-rose-200'
                       }`}
                     >
                       {c.status}
@@ -1495,6 +1605,8 @@ export function FonnteSettingsPanel({
                 onTimeTemplate: DEFAULT_ON_TIME_TEMPLATE,
                 lateTemplate: DEFAULT_LATE_TEMPLATE,
                 absentTemplate: DEFAULT_ABSENT_TEMPLATE,
+                checkoutOnTimeTemplate: DEFAULT_CHECKOUT_ON_TIME_TEMPLATE,
+                checkoutEarlyTemplate: DEFAULT_CHECKOUT_EARLY_TEMPLATE,
               })
             }
             className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 whitespace-nowrap"
@@ -1556,6 +1668,46 @@ export function FonnteSettingsPanel({
           </div>
         </div>
 
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-stretch">
+          <div className="flex flex-col space-y-1.5">
+            <label
+              htmlFor="fonnte-checkout-ontime-template"
+              className="block text-xs font-semibold text-sky-700"
+            >
+              Template Pulang Sesuai Waktu
+            </label>
+            <textarea
+              id="fonnte-checkout-ontime-template"
+              data-testid="textarea-fonnte-checkout-ontime-template"
+              rows={5}
+              value={config.checkoutOnTimeTemplate}
+              onChange={(e) =>
+                onChangeConfig({ ...config, checkoutOnTimeTemplate: e.target.value })
+              }
+              className="w-full flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+            />
+          </div>
+
+          <div className="flex flex-col space-y-1.5">
+            <label
+              htmlFor="fonnte-checkout-early-template"
+              className="block text-xs font-semibold text-orange-700"
+            >
+              Template Pulang Cepat
+            </label>
+            <textarea
+              id="fonnte-checkout-early-template"
+              data-testid="textarea-fonnte-checkout-early-template"
+              rows={5}
+              value={config.checkoutEarlyTemplate}
+              onChange={(e) =>
+                onChangeConfig({ ...config, checkoutEarlyTemplate: e.target.value })
+              }
+              className="w-full flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-orange-500/30"
+            />
+          </div>
+        </div>
+
         <div className="rounded-xl bg-emerald-50/60 border border-emerald-200/80 p-3.5 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-[11px] font-semibold text-emerald-800">
@@ -1567,6 +1719,8 @@ export function FonnteSettingsPanel({
                   { id: 'ontime', label: 'Hadir Tepat Waktu' },
                   { id: 'late', label: 'Terlambat' },
                   { id: 'absent', label: 'Tidak Hadir' },
+                  { id: 'checkout_ontime', label: 'Pulang Sesuai Waktu' },
+                  { id: 'checkout_early', label: 'Pulang Cepat' },
                 ] as const
               ).map((tab) => (
                 <button

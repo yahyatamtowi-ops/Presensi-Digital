@@ -520,8 +520,21 @@ export function sanitizeStudents(rawList: unknown): Student[] {
     const no_wa_ortu = getFieldCaseInsensitive(obj, ['no_wa_ortu', 'wa_ortu', 'no_wa']);
     const tahun_ajaran = getFieldCaseInsensitive(obj, ['tahun_ajaran', 'tahunajaran', 'ta']);
 
-    const dedupeKey = nis.toLowerCase();
-    const existingIdx = indexByNis.get(dedupeKey);
+    const nisKey = nis.toLowerCase();
+    const normalizedYear = tahun_ajaran.replace(/\s+/g, '');
+    const untaggedKey = `__NO_YEAR__|${nisKey}`;
+    const dedupeKey = `${normalizedYear || '__NO_YEAR__'}|${nisKey}`;
+
+    let existingIdx = indexByNis.get(dedupeKey);
+    if (existingIdx === undefined && normalizedYear) {
+      const untaggedIdx = indexByNis.get(untaggedKey);
+      if (untaggedIdx !== undefined) {
+        existingIdx = untaggedIdx;
+        indexByNis.delete(untaggedKey);
+        indexByNis.set(dedupeKey, untaggedIdx);
+      }
+    }
+
     if (existingIdx !== undefined) {
       const prev = out[existingIdx];
       out[existingIdx] = {
@@ -1341,9 +1354,12 @@ function doPost(e) {
       var shU = getOrCreateSheet('Siswa', HEADERS_SISWA);
       var rowsU = shU.getDataRange().getDisplayValues();
       var targetNis = data.originalNis || data.nis || '';
+      var targetYearU = String(data.originalTahunAjaran || data.tahun_ajaran || '').trim();
       var updatedRow = [String(data.nis || ''), String(data.nama || ''), String(data.kelas || ''), String(data.gender || 'L'), String(data.no_wa_ortu || ''), String(data.tahun_ajaran || '')];
       for (var i = 1; i < rowsU.length; i++) {
-        if (String(rowsU[i][0]) === String(targetNis)) {
+        var rowYearU = String(rowsU[i][5] || '').trim();
+        var yearMatchesU = !targetYearU || !rowYearU || rowYearU === targetYearU;
+        if (String(rowsU[i][0]) === String(targetNis) && yearMatchesU) {
           var rngU = shU.getRange(i + 1, 1, 1, HEADERS_SISWA.length);
           rngU.setNumberFormat('@');
           rngU.setValues([updatedRow]);
@@ -1357,8 +1373,11 @@ function doPost(e) {
     if (action === 'deleteSiswa') {
       var shD = getOrCreateSheet('Siswa', HEADERS_SISWA);
       var rowsD = shD.getDataRange().getDisplayValues();
+      var targetYearD = String(data.tahun_ajaran || '').trim();
       for (var j = rowsD.length - 1; j >= 1; j--) {
-        if (String(rowsD[j][0]) === String(data.nis || '')) {
+        var rowYearD = String(rowsD[j][5] || '').trim();
+        var yearMatchesD = !targetYearD || !rowYearD || rowYearD === targetYearD;
+        if (String(rowsD[j][0]) === String(data.nis || '') && yearMatchesD) {
           shD.deleteRow(j + 1);
           return jsonResponse({ status: 'ok' });
         }
@@ -1369,12 +1388,20 @@ function doPost(e) {
     if (action === 'bulkDeleteSiswa' && Array.isArray(data.nisList)) {
       var shBD = getOrCreateSheet('Siswa', HEADERS_SISWA);
       var rowsBD = shBD.getDataRange().getDisplayValues();
+      var targetYearsBD = Array.isArray(data.tahunAjaranList) ? data.tahunAjaranList : [];
+      var hasYearFilterBD = targetYearsBD.length > 0;
+      var yearSetBD = {};
+      for (var yx = 0; yx < targetYearsBD.length; yx++) {
+        yearSetBD[String(targetYearsBD[yx] || '').trim()] = true;
+      }
       var nisMap = {};
       for (var x = 0; x < data.nisList.length; x++) {
         nisMap[String(data.nisList[x])] = true;
       }
       for (var d = rowsBD.length - 1; d >= 1; d--) {
-        if (nisMap[String(rowsBD[d][0])]) {
+        var rowYearBD = String(rowsBD[d][5] || '').trim();
+        var yearOkBD = !hasYearFilterBD || !rowYearBD || Boolean(yearSetBD[rowYearBD]);
+        if (nisMap[String(rowsBD[d][0])] && yearOkBD) {
           shBD.deleteRow(d + 1);
         }
       }

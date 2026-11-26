@@ -96,6 +96,10 @@ export function TimetableMatrixView({
   const [filterDay, setFilterDay] = useState<DayOfWeek | 'ALL'>('ALL');
   const [newClassName, setNewClassName] = useState('');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [externalSyncPending, setExternalSyncPending] = useState(false);
+  const [breakValidationError, setBreakValidationError] = useState<string | null>(null);
+  const hasUnsavedChangesRef = useRef(false);
+  hasUnsavedChangesRef.current = hasUnsavedChanges;
   const lastSelfSyncedStampRef = useRef<string | null>(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importMode, setImportMode] = useState<'replace' | 'merge'>('replace');
@@ -158,6 +162,9 @@ export function TimetableMatrixView({
   const [draft, setDraft] = useState<TimetableConfig>(() =>
     buildDraftForKey(selectedYear, selectedSemester, timetableConfigs, schedules)
   );
+  const [jamMulaiInput, setJamMulaiInput] = useState<string>(
+    () => draft.jam_mulai_sekolah
+  );
   const [durasiInput, setDurasiInput] = useState<string>(() =>
     String(draft.durasi_jp_menit)
   );
@@ -166,16 +173,28 @@ export function TimetableMatrixView({
   );
 
   const storedConfigStamp = timetableConfigs[configKey]?.updated_at ?? '';
+  const prevConfigKeyRef = useRef(configKey);
 
-  // Reload draft whenever Tahun Ajaran / Semester changes OR when Mapel & Jadwal / Guru / Cloud updates schedules externally
+  // Reload draft whenever Tahun Ajaran / Semester changes OR when external sync updates schedules,
+  // while strictly protecting unsaved time/bell edits from being overwritten mid-edit.
   useEffect(() => {
-    if (
-      storedConfigStamp &&
-      lastSelfSyncedStampRef.current &&
-      storedConfigStamp === lastSelfSyncedStampRef.current
-    ) {
-      return;
+    const keyChanged = prevConfigKeyRef.current !== configKey;
+    prevConfigKeyRef.current = configKey;
+
+    if (!keyChanged) {
+      if (
+        storedConfigStamp &&
+        lastSelfSyncedStampRef.current &&
+        storedConfigStamp === lastSelfSyncedStampRef.current
+      ) {
+        return;
+      }
+      if (hasUnsavedChangesRef.current) {
+        setExternalSyncPending(true);
+        return;
+      }
     }
+
     const nextDraft = buildDraftForKey(
       selectedYear,
       selectedSemester,
@@ -183,9 +202,12 @@ export function TimetableMatrixView({
       schedules
     );
     setDraft(nextDraft);
+    setJamMulaiInput(nextDraft.jam_mulai_sekolah);
     setDurasiInput(String(nextDraft.durasi_jp_menit));
     setJumlahJpInput(String(nextDraft.jumlah_jp));
     setHasUnsavedChanges(false);
+    setExternalSyncPending(false);
+    setBreakValidationError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configKey, storedConfigStamp]);
 
@@ -335,11 +357,17 @@ export function TimetableMatrixView({
     );
     onSaveTimetable(normalizedConfig, syncedSchedules, targetClasses, { silent });
     setHasUnsavedChanges(false);
+    setExternalSyncPending(false);
+    setBreakValidationError(null);
   }
 
   function updateDraft(patch: Partial<TimetableConfig>) {
     const nextDraft: TimetableConfig = { ...draft, ...patch };
     setDraft(nextDraft);
+    if (hasUnsavedChangesRef.current) {
+      setHasUnsavedChanges(true);
+      return;
+    }
     persistAndSyncDraft(nextDraft, undefined, true);
   }
 
@@ -377,7 +405,12 @@ export function TimetableMatrixView({
         : lockedBase;
 
     setDraft(nextDraft);
-    setDurasiInput(String(nextDraft.durasi_jp_menit));
+    if (patch.jam_mulai_sekolah !== undefined) {
+      setJamMulaiInput(nextDraft.jam_mulai_sekolah);
+    }
+    if (patch.durasi_jp_menit !== undefined) {
+      setDurasiInput(String(nextDraft.durasi_jp_menit));
+    }
     setJumlahJpInput(String(nextDraft.jumlah_jp));
     setHasUnsavedChanges(true);
   }
@@ -408,18 +441,28 @@ export function TimetableMatrixView({
     }
   }
 
+  function isValidBreakRange(brk: TimetableBreak): boolean {
+    if (!/^\d{2}:\d{2}$/.test(brk.jam_mulai) || !/^\d{2}:\d{2}$/.test(brk.jam_selesai)) {
+      return false;
+    }
+    return brk.jam_selesai > brk.jam_mulai;
+  }
+
   function handleBreakChange(
     breakId: string,
     patch: Partial<TimetableBreak>
   ) {
-    updateBellDraft(
-      {
-        istirahat: draft.istirahat.map((b) =>
-          b.id === breakId ? { ...b, ...patch } : b
-        ),
-      },
-      true
+    const nextBreaks = draft.istirahat.map((b) =>
+      b.id === breakId ? { ...b, ...patch } : b
     );
+    const updatedBreak = nextBreaks.find((b) => b.id === breakId);
+    const isTimePatch = patch.jam_mulai !== undefined || patch.jam_selesai !== undefined;
+    const canRemap =
+      isTimePatch && updatedBreak ? isValidBreakRange(updatedBreak) : false;
+    if (nextBreaks.every((b) => isValidBreakRange(b))) {
+      setBreakValidationError(null);
+    }
+    updateBellDraft({ istirahat: nextBreaks }, canRemap);
   }
 
   function handleAddBreak() {
@@ -565,13 +608,48 @@ export function TimetableMatrixView({
       Boolean(draft.bell_locked_by_admin)
     );
     setDraft(nextDraft);
+    setJamMulaiInput(nextDraft.jam_mulai_sekolah);
     setDurasiInput(String(nextDraft.durasi_jp_menit));
     setJumlahJpInput(String(nextDraft.jumlah_jp));
     persistAndSyncDraft(nextDraft, undefined, false);
   }
 
   function handleSaveAndSync() {
-    persistAndSyncDraft(draft, undefined, false);
+    const invalidBreak = draft.istirahat.find((b) => !isValidBreakRange(b));
+    if (invalidBreak) {
+      setBreakValidationError(
+        `Waktu "${invalidBreak.label || 'Istirahat'}" belum valid. Pastikan jam mulai & jam selesai terisi dan jam selesai lebih akhir dari jam mulai.`
+      );
+      return;
+    }
+    setBreakValidationError(null);
+
+    const effectiveJamMulai = /^\d{2}:\d{2}$/.test(jamMulaiInput)
+      ? jamMulaiInput
+      : draft.jam_mulai_sekolah;
+    const parsedDurasi = Number(durasiInput);
+    const effectiveDurasi =
+      durasiInput.trim() !== '' && Number.isFinite(parsedDurasi)
+        ? Math.max(15, Math.min(180, Math.round(parsedDurasi)))
+        : draft.durasi_jp_menit;
+    const parsedJumlahJp = Number(jumlahJpInput);
+    const effectiveJumlahJp =
+      jumlahJpInput.trim() !== '' && Number.isFinite(parsedJumlahJp)
+        ? Math.max(1, Math.min(16, Math.round(parsedJumlahJp)))
+        : draft.jumlah_jp;
+
+    const finalDraft: TimetableConfig = {
+      ...draft,
+      jam_mulai_sekolah: effectiveJamMulai,
+      durasi_jp_menit: effectiveDurasi,
+      jumlah_jp: effectiveJumlahJp,
+      bell_locked_by_admin: true,
+    };
+    setDraft(finalDraft);
+    setJamMulaiInput(effectiveJamMulai);
+    setDurasiInput(String(effectiveDurasi));
+    setJumlahJpInput(String(effectiveJumlahJp));
+    persistAndSyncDraft(finalDraft, undefined, false);
   }
 
   function handleExportExcel() {
@@ -833,13 +911,21 @@ export function TimetableMatrixView({
             <input
               id="tt-jam-mulai"
               type="time"
-              value={draft.jam_mulai_sekolah}
-              onChange={(e) =>
-                updateBellDraft(
-                  { jam_mulai_sekolah: e.target.value || '07:15' },
-                  true
-                )
-              }
+              value={jamMulaiInput}
+              onChange={(e) => {
+                const val = e.target.value;
+                setJamMulaiInput(val);
+                if (/^\d{2}:\d{2}$/.test(val)) {
+                  updateBellDraft({ jam_mulai_sekolah: val }, true);
+                } else {
+                  setHasUnsavedChanges(true);
+                }
+              }}
+              onBlur={() => {
+                if (!/^\d{2}:\d{2}$/.test(jamMulaiInput)) {
+                  setJamMulaiInput(draft.jam_mulai_sekolah);
+                }
+              }}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
             />
           </div>
@@ -938,23 +1024,34 @@ export function TimetableMatrixView({
               Belum ada jam istirahat. Klik <strong>Tambah Istirahat</strong> untuk menambahkan Istirahat 1, Istirahat 2, dst.
             </p>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
               {draft.istirahat.map((brk, idx) => (
                 <div
                   key={brk.id}
                   data-testid={`break-slot-${idx + 1}`}
-                  className="flex flex-wrap sm:flex-nowrap items-center gap-2 rounded-xl border border-amber-200/80 bg-amber-50/40 px-3 py-2"
+                  className="flex flex-col gap-2 rounded-xl border border-amber-200/80 bg-amber-50/40 p-3 min-w-0"
                 >
-                  <input
-                    type="text"
-                    aria-label={`Nama istirahat ${idx + 1}`}
-                    value={brk.label}
-                    onChange={(e) =>
-                      handleBreakChange(brk.id, { label: e.target.value })
-                    }
-                    className="w-28 min-w-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none"
-                  />
-                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2 min-w-0">
+                    <input
+                      type="text"
+                      aria-label={`Nama istirahat ${idx + 1}`}
+                      value={brk.label}
+                      onChange={(e) =>
+                        handleBreakChange(brk.id, { label: e.target.value })
+                      }
+                      className="flex-1 min-w-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveBreak(brk.id)}
+                      aria-label={`Hapus ${brk.label}`}
+                      title={`Hapus ${brk.label}`}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors shrink-0"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 min-w-0">
                     <input
                       type="time"
                       aria-label={`Jam mulai ${brk.label}`}
@@ -962,9 +1059,9 @@ export function TimetableMatrixView({
                       onChange={(e) =>
                         handleBreakChange(brk.id, { jam_mulai: e.target.value })
                       }
-                      className="w-full min-w-[82px] rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-mono text-slate-900 focus:border-indigo-500 focus:outline-none"
+                      className="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono text-slate-900 focus:border-indigo-500 focus:outline-none"
                     />
-                    <span className="text-[11px] text-slate-400 shrink-0">s.d.</span>
+                    <span className="text-[11px] font-medium text-slate-500 shrink-0">s.d.</span>
                     <input
                       type="time"
                       aria-label={`Jam selesai ${brk.label}`}
@@ -972,21 +1069,20 @@ export function TimetableMatrixView({
                       onChange={(e) =>
                         handleBreakChange(brk.id, { jam_selesai: e.target.value })
                       }
-                      className="w-full min-w-[82px] rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-mono text-slate-900 focus:border-indigo-500 focus:outline-none"
+                      className="w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-mono text-slate-900 focus:border-indigo-500 focus:outline-none"
                     />
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveBreak(brk.id)}
-                    aria-label={`Hapus ${brk.label}`}
-                    title={`Hapus ${brk.label}`}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors shrink-0"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
                 </div>
               ))}
             </div>
+          )}
+          {breakValidationError && (
+            <p
+              role="alert"
+              className="text-xs font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2"
+            >
+              {breakValidationError}
+            </p>
           )}
         </div>
 
@@ -1081,9 +1177,34 @@ export function TimetableMatrixView({
             Pilih <strong>Mata Pelajaran</strong> &amp; <strong>Guru Pengampu</strong> pada setiap kolom kelas, lalu klik <strong>Simpan &amp; Sinkronkan Jadwal</strong> agar otomatis tampil di <em>Jadwal Pelajaran Guru</em> dan <em>Menu Presensi Mapel</em> masing-masing guru.
           </span>
           {hasUnsavedChanges && (
-            <span className="font-semibold text-amber-700 whitespace-nowrap">
-              Ada perubahan belum disimpan
-            </span>
+            <div className="flex items-center gap-2 whitespace-nowrap">
+              <span className="font-semibold text-amber-700">
+                Ada perubahan waktu/jadwal belum disimpan
+              </span>
+              {externalSyncPending && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const fresh = buildDraftForKey(
+                      selectedYear,
+                      selectedSemester,
+                      timetableConfigs,
+                      schedules
+                    );
+                    setDraft(fresh);
+                    setJamMulaiInput(fresh.jam_mulai_sekolah);
+                    setDurasiInput(String(fresh.durasi_jp_menit));
+                    setJumlahJpInput(String(fresh.jumlah_jp));
+                    setHasUnsavedChanges(false);
+                    setExternalSyncPending(false);
+                    setBreakValidationError(null);
+                  }}
+                  className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 underline"
+                >
+                  Muat data terbaru
+                </button>
+              )}
+            </div>
           )}
         </div>
 
@@ -1508,6 +1629,9 @@ export function TimetableMatrixView({
                       updated_at: new Date().toISOString(),
                     };
                     setDraft(nextDraft);
+                    setJamMulaiInput(nextDraft.jam_mulai_sekolah);
+                    setDurasiInput(String(nextDraft.durasi_jp_menit));
+                    setJumlahJpInput(String(nextDraft.jumlah_jp));
                     persistAndSyncDraft(nextDraft, nextClassesList, false);
                     setImportModalOpen(false);
                     setImportPreview(null);

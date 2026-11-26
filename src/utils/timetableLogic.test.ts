@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  areTimetableConfigsEqual,
   buildTeacherSchedulesFromTimetable,
   createDefaultTimetableConfig,
   detectTimetableTeacherConflicts,
@@ -925,6 +926,79 @@ describe('Bidirectional Sync: Jadwal Pelajaran Guru <-> Menu Mapel Guru', () => 
     assert.equal(cfgAfterDel.cells[makeTimetableCellKey('Senin', 3, 'X IPA 2')], undefined);
     assert.equal(cfgAfterDel.cells[makeTimetableCellKey('Selasa', 1, 'X IPA 1')]?.mata_pelajaran, 'Biologi');
     assert.notEqual(cfgAfterDel.updated_at, '');
+  });
+
+  it('does NOT bump updated_at or mutate reference on repeated background syncs with unchanged schedules', () => {
+    const schedules: TeacherSchedule[] = [
+      {
+        id: 'sch_poll_1',
+        hari: 'Senin',
+        teacher_user_id: 'usr_guru',
+        teacher_name: 'Siti Aminah, S.Pd',
+        kelas: 'X IPA 1',
+        mata_pelajaran: 'Matematika',
+        jam_mulai: '07:00',
+        jam_selesai: '08:20',
+        tahun_ajaran: '2026/2027',
+        semester: 'ganjil',
+      },
+    ];
+
+    const lockedAdminCfg = {
+      ...createDefaultTimetableConfig('2026/2027', 'ganjil', '07:00'),
+      durasi_jp_menit: 40,
+      jumlah_jp: 9,
+      bell_locked_by_admin: true,
+      istirahat: [
+        { id: 'brk_1', label: 'Istirahat 1', jam_mulai: '09:40', jam_selesai: '10:00' },
+      ],
+      updated_at: '2026-11-25T07:00:00.000Z',
+    };
+
+    // First sync hydrates cells from schedules
+    const afterFirstSync = syncTimetableConfigsFromSchedules(
+      { '2026/2027__ganjil': lockedAdminCfg },
+      schedules,
+      '07:15',
+      ['X IPA 1']
+    );
+    const firstCfg = afterFirstSync['2026/2027__ganjil'];
+    assert.equal(firstCfg.jam_mulai_sekolah, '07:00');
+    assert.equal(firstCfg.durasi_jp_menit, 40);
+    assert.equal(firstCfg.jumlah_jp, 9);
+    assert.equal(firstCfg.bell_locked_by_admin, true);
+    assert.equal(firstCfg.istirahat[0]?.jam_mulai, '09:40');
+    assert.equal(firstCfg.istirahat[0]?.jam_selesai, '10:00');
+    assert.equal(firstCfg.cells[makeTimetableCellKey('Senin', 1, 'X IPA 1')]?.mata_pelajaran, 'Matematika');
+    assert.equal(firstCfg.cells[makeTimetableCellKey('Senin', 2, 'X IPA 1')]?.mata_pelajaran, 'Matematika');
+
+    // Second sync (simulating 10-second polling with identical remote schedules) MUST be a strict no-op!
+    const afterSecondSync = syncTimetableConfigsFromSchedules(
+      afterFirstSync,
+      schedules,
+      '07:15',
+      ['X IPA 1']
+    );
+    assert.strictEqual(
+      afterSecondSync,
+      afterFirstSync,
+      'Unchanged background poll must return the exact same config map reference'
+    );
+    assert.strictEqual(
+      afterSecondSync['2026/2027__ganjil'].updated_at,
+      firstCfg.updated_at,
+      'Unchanged background poll must NOT bump updated_at'
+    );
+
+    // Semantic equality helper ignores updated_at but detects real time changes
+    assert.equal(
+      areTimetableConfigsEqual(firstCfg, { ...firstCfg, updated_at: '2026-11-25T99:00:00.000Z' }),
+      true
+    );
+    assert.equal(
+      areTimetableConfigsEqual(firstCfg, { ...firstCfg, jam_mulai_sekolah: '07:30' }),
+      false
+    );
   });
 });
 

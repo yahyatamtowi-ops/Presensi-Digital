@@ -26,6 +26,8 @@ import {
   normalizeClassNameKey,
   resetAttendanceRecordsForDate,
   resolveCanonicalClassName,
+  applyCollectiveCheckout,
+  normalizeCheckoutTimeHHMMSS,
 } from './attendanceLogic';
 import type { AttendanceRecord, Student } from '../types';
 
@@ -1096,4 +1098,95 @@ test('filterByAcademicYear keeps blank-year spreadsheet students visible and nor
   });
   assert.equal(visible2026.length, 2);
 });
+
+test('applyCollectiveCheckout confirms normal and early collective checkout with shared reason while skipping ineligible rows', () => {
+  assert.equal(normalizeCheckoutTimeHHMMSS('11:30'), '11:30:00');
+  assert.equal(normalizeCheckoutTimeHHMMSS('15:05:12'), '15:05:12');
+
+  const seedRecords: AttendanceRecord[] = [
+    {
+      id: '2026-11-25_2026001',
+      tanggal: '2026-11-25',
+      nis: '2026001',
+      nama: 'Ahmad Fauzi',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:05:00',
+      jam_pulang: '-',
+      status: 'Hadir',
+    },
+    {
+      id: '2026-11-25_2026002',
+      tanggal: '2026-11-25',
+      nis: '2026002',
+      nama: 'Siti Rahma',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:25:00',
+      jam_pulang: '-',
+      status: 'Terlambat',
+    },
+    {
+      id: '2026-11-25_2026003',
+      tanggal: '2026-11-25',
+      nis: '2026003',
+      nama: 'Budi Santoso',
+      kelas: 'XI IPS 2',
+      jam_masuk: '-',
+      jam_pulang: '-',
+      status: 'Alpa',
+    },
+    {
+      id: '2026-11-25_2026004',
+      tanggal: '2026-11-25',
+      nis: '2026004',
+      nama: 'Dewi Lestari',
+      kelas: 'X IPA 1',
+      jam_masuk: '07:01:00',
+      jam_pulang: '10:15:00',
+      status: 'Hadir',
+      alasan_pulang_cepat: 'Sakit di sekolah',
+    },
+  ];
+
+  // Collective early checkout with shared reason for school event
+  const earlyRes = applyCollectiveCheckout({
+    records: seedRecords,
+    tanggal: '2026-11-25',
+    targetNisList: ['2026001', '2026002', '2026003', '2026004'],
+    checkoutTime: '11:30',
+    alasanPulangCepat: 'Rapat Dewan Guru / Kegiatan Sekolah',
+  });
+
+  // Only 2026001 (Hadir) and 2026002 (Terlambat) are updated; 2026003 (Alpa) & 2026004 (already checked out) are skipped
+  assert.equal(earlyRes.updatedRecords.length, 2);
+  assert.equal(earlyRes.skippedCount, 2);
+
+  const ahmad = earlyRes.nextRecords.find((r) => r.nis === '2026001')!;
+  const siti = earlyRes.nextRecords.find((r) => r.nis === '2026002')!;
+  const budi = earlyRes.nextRecords.find((r) => r.nis === '2026003')!;
+  const dewi = earlyRes.nextRecords.find((r) => r.nis === '2026004')!;
+
+  assert.equal(ahmad.jam_pulang, '11:30:00');
+  assert.equal(ahmad.alasan_pulang_cepat, 'Rapat Dewan Guru / Kegiatan Sekolah');
+  assert.equal(ahmad.status, 'Hadir');
+
+  assert.equal(siti.jam_pulang, '11:30:00');
+  assert.equal(siti.alasan_pulang_cepat, 'Rapat Dewan Guru / Kegiatan Sekolah');
+  assert.equal(siti.status, 'Terlambat');
+
+  assert.equal(budi.jam_pulang, '-');
+  assert.equal(dewi.jam_pulang, '10:15:00');
+  assert.equal(dewi.alasan_pulang_cepat, 'Sakit di sekolah');
+
+  // Collective on-time checkout without early reason
+  const onTimeRes = applyCollectiveCheckout({
+    records: [seedRecords[0]],
+    tanggal: '2026-11-25',
+    targetNisList: ['2026001'],
+    checkoutTime: '15:05',
+  });
+  assert.equal(onTimeRes.updatedRecords.length, 1);
+  assert.equal(onTimeRes.updatedRecords[0].jam_pulang, '15:05:00');
+  assert.equal(onTimeRes.updatedRecords[0].alasan_pulang_cepat, undefined);
+});
+
 

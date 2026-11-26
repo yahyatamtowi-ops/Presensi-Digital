@@ -40,6 +40,14 @@ const ALLOWED_STATUSES = new Set<FonnteNotificationCategory>([
   'Terlambat',
   'Alpa',
   'Belum Presensi',
+  'Pulang Tepat Waktu',
+  'Pulang Cepat',
+]);
+const SCAN_KIOSK_ALLOWED_STATUSES = new Set<FonnteNotificationCategory>([
+  'Hadir Tepat Waktu',
+  'Terlambat',
+  'Pulang Tepat Waktu',
+  'Pulang Cepat',
 ]);
 
 // Module-level warm-instance state (persists across warm invocations; env secrets + encrypted HttpOnly cookie handle cold starts)
@@ -665,17 +673,20 @@ export async function handleFonnteServerlessRequest(request: Request): Promise<R
         return jsonResponse(
           {
             error:
-              'Mode Scan QR hanya dapat mengantrekan 1 notifikasi kehadiran/keterlambatan per pemindaian.',
+              'Mode Scan QR hanya dapat mengantrekan 1 notifikasi kehadiran/kepulangan per pemindaian.',
           },
           403
         );
       }
       const single = body.items[0] as { status?: unknown };
-      if (single?.status !== 'Terlambat' && single?.status !== 'Hadir Tepat Waktu') {
+      if (
+        typeof single?.status !== 'string' ||
+        !SCAN_KIOSK_ALLOWED_STATUSES.has(single.status as FonnteNotificationCategory)
+      ) {
         return jsonResponse(
           {
             error:
-              'Mode Scan QR hanya mendukung notifikasi otomatis hadir tepat waktu atau terlambat.',
+              'Mode Scan QR hanya mendukung notifikasi otomatis hadir, terlambat, pulang sesuai waktu, atau pulang cepat.',
           },
           403
         );

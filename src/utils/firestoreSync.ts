@@ -304,6 +304,8 @@ export function subscribeToSchoolWorkspace(
         if (!snap.metadata.fromCache) {
           recordFirestoreOps({ reads: Math.max(1, snap.docChanges().length) });
         }
+        // Never overwrite local state with a partial offline latency-compensated cache echo
+        if (snap.metadata.fromCache && snap.metadata.hasPendingWrites) return;
         if (snap.empty) return;
         const list: Student[] = snap.docs
           .map((d) => {
@@ -317,7 +319,11 @@ export function subscribeToSchoolWorkspace(
               tahun_ajaran: String(data.tahun_ajaran || ''),
             };
           })
-          .sort((a, b) => a.nis.localeCompare(b.nis, 'id'));
+          .sort(
+            (a, b) =>
+              (b.tahun_ajaran || '').localeCompare(a.tahun_ajaran || '') ||
+              a.nis.localeCompare(b.nis, 'id')
+          );
         callbacks.onStudents(list);
         callbacks.onSyncActivity();
       },
@@ -333,6 +339,8 @@ export function subscribeToSchoolWorkspace(
         if (!snap.metadata.fromCache) {
           recordFirestoreOps({ reads: Math.max(1, snap.docChanges().length) });
         }
+        // Never overwrite local attendance with a partial offline latency-compensated cache echo
+        if (snap.metadata.fromCache && snap.metadata.hasPendingWrites) return;
         const list: AttendanceRecord[] = snap.docs
           .map((d) => {
             const data = d.data();

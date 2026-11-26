@@ -1165,11 +1165,78 @@ export function hydrateTimetableCellsFromSchedules(
 }
 
 /**
+ * Checks whether two TimetableConfigs have identical semantic content
+ * (ignoring the `updated_at` timestamp) so background polling / cloud snapshots
+ * never bump `updated_at` or clobber UI state when nothing actually changed.
+ */
+export function areTimetableConfigsEqual(
+  a: TimetableConfig | undefined,
+  b: TimetableConfig | undefined
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (
+    a.tahun_ajaran !== b.tahun_ajaran ||
+    a.semester !== b.semester ||
+    a.jumlah_hari !== b.jumlah_hari ||
+    a.jam_mulai_sekolah !== b.jam_mulai_sekolah ||
+    a.durasi_jp_menit !== b.durasi_jp_menit ||
+    a.jumlah_jp !== b.jumlah_jp ||
+    Boolean(a.bell_locked_by_admin) !== Boolean(b.bell_locked_by_admin)
+  ) {
+    return false;
+  }
+
+  const breaksA = a.istirahat || [];
+  const breaksB = b.istirahat || [];
+  if (breaksA.length !== breaksB.length) return false;
+  for (let i = 0; i < breaksA.length; i++) {
+    if (
+      breaksA[i].id !== breaksB[i].id ||
+      breaksA[i].label !== breaksB[i].label ||
+      breaksA[i].jam_mulai !== breaksB[i].jam_mulai ||
+      breaksA[i].jam_selesai !== breaksB[i].jam_selesai
+    ) {
+      return false;
+    }
+  }
+
+  const customA = a.custom_classes || [];
+  const customB = b.custom_classes || [];
+  if (customA.length !== customB.length) return false;
+  for (let i = 0; i < customA.length; i++) {
+    if (customA[i] !== customB[i]) return false;
+  }
+
+  const cellsA = a.cells || {};
+  const cellsB = b.cells || {};
+  const keysA = Object.keys(cellsA);
+  const keysB = Object.keys(cellsB);
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    const valA = cellsA[key];
+    const valB = cellsB[key];
+    if (!valB) return false;
+    if (
+      valA.mata_pelajaran !== valB.mata_pelajaran ||
+      (valA.teacher_user_id || '') !== (valB.teacher_user_id || '') ||
+      (valA.teacher_name || '') !== (valB.teacher_name || '')
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * Synchronizes all TimetableConfigs from the authoritative TeacherSchedule list.
  * Preserves each (tahun_ajaran, semester) config's bell schedule (jam mulai, durasi JP,
  * jumlah JP, manual istirahat, custom classes) while rebuilding teacher-assigned cells
  * so changes made in Mapel & Jadwal, Presensi Mapel Guru, or Cloud/Sheets appear
  * automatically in Pengaturan Jadwal.
+ * Returns the original `configs` reference unchanged when every period is semantically identical,
+ * avoiding spurious `updated_at` bumps during periodic background syncs.
  */
 export function syncTimetableConfigsFromSchedules(
   configs: Record<string, TimetableConfig>,
@@ -1177,12 +1244,14 @@ export function syncTimetableConfigsFromSchedules(
   fallbackStartTime = '07:15',
   canonicalClasses: string[] = []
 ): Record<string, TimetableConfig> {
+  const safeConfigs = configs || {};
   const next: Record<string, TimetableConfig> = {};
+  let changedAny = false;
 
   // Gather all (tahun_ajaran, semester) keys present in configs or schedules
   const keyMeta = new Map<string, { tahun_ajaran: string; semester: SemesterKind }>();
 
-  for (const [k, cfg] of Object.entries(configs || {})) {
+  for (const [k, cfg] of Object.entries(safeConfigs)) {
     const tahunAjaran = resolveItemAcademicYear(cfg.tahun_ajaran);
     const semester = normalizeSemester(cfg.semester, 'ganjil');
     const normalizedKey = getTimetableConfigKey(tahunAjaran, semester) || k;
@@ -1198,8 +1267,12 @@ export function syncTimetableConfigsFromSchedules(
     }
   }
 
+  if (Object.keys(safeConfigs).length !== keyMeta.size) {
+    changedAny = true;
+  }
+
   for (const [key, meta] of keyMeta.entries()) {
-    const existing = configs[key];
+    const existing = safeConfigs[key];
     const base: TimetableConfig = existing
       ? {
           ...existing,
@@ -1259,6 +1332,18 @@ export function syncTimetableConfigsFromSchedules(
       }
     }
 
+    const candidate: TimetableConfig = {
+      ...hydrated,
+      cells: mergedCells,
+      updated_at: existing?.updated_at,
+    };
+
+    if (existing && areTimetableConfigsEqual(existing, candidate)) {
+      next[key] = existing;
+      continue;
+    }
+
+    changedAny = true;
     const nowIso = new Date().toISOString();
     const nextStamp =
       existing?.updated_at && existing.updated_at === nowIso
@@ -1266,13 +1351,12 @@ export function syncTimetableConfigsFromSchedules(
         : nowIso;
 
     next[key] = {
-      ...hydrated,
-      cells: mergedCells,
+      ...candidate,
       updated_at: nextStamp,
     };
   }
 
-  return next;
+  return changedAny ? next : safeConfigs;
 }
 
 /**

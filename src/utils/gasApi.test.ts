@@ -41,4 +41,31 @@ test('gasApi sanitizeStudents data integrity', async (t) => {
     assert.equal(cleaned[1].gender, 'P');
     assert.equal(cleaned[1].no_wa_ortu, '081355556666');
   });
+
+  await t.test('preserves same NISN across different academic years without overwriting archive', () => {
+    const cleaned = sanitizeStudents([
+      {
+        nis: '0081234567',
+        nama: 'Ahmad Fauzi',
+        kelas: 'X IPA 1',
+        gender: 'L',
+        no_wa_ortu: '081234567890',
+        tahun_ajaran: '2026/2027',
+      },
+      {
+        nis: '0081234567',
+        nama: 'Ahmad Fauzi',
+        kelas: 'XI IPA 1',
+        gender: 'L',
+        no_wa_ortu: '081234567890',
+        tahun_ajaran: '2027/2028',
+      },
+    ]);
+
+    assert.equal(cleaned.length, 2);
+    assert.equal(cleaned[0].tahun_ajaran, '2026/2027');
+    assert.equal(cleaned[0].kelas, 'X IPA 1');
+    assert.equal(cleaned[1].tahun_ajaran, '2027/2028');
+    assert.equal(cleaned[1].kelas, 'XI IPA 1');
+  });
 });
